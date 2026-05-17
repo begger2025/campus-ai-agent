@@ -21,3 +21,5 @@ Thumbs.db
 data/output/
 data/temp/
 data/cache/
+data/*.db
+data/cookies/

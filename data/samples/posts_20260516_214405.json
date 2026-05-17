@@ -1,0 +1,263 @@
+{
+  "meta": {
+    "crawl_time": "2026-05-16T13:44:05.959815",
+    "keyword": "校园",
+    "total": 25,
+    "sources": [
+      "weibo",
+      "tieba"
+    ]
+  },
+  "items": [
+    {
+      "id": "weibo_demo_1",
+      "platform": "weibo",
+      "title": "图书馆自习座位紧张",
+      "content": "期末周图书馆一座难求，建议提前预约。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_1",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_2",
+      "platform": "weibo",
+      "title": "校运会报名启动",
+      "content": "各学院可在本周五前完成运动员报名。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_2",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_1",
+      "platform": "tieba",
+      "title": "食堂新窗口味道如何",
+      "content": "二楼轻食窗口排队情况讨论。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_1",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_2",
+      "platform": "tieba",
+      "title": "选修课抢课攻略",
+      "content": "分享本学期通识课选课经验。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_2",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_1_4",
+      "platform": "weibo",
+      "title": "图书馆自习座位紧张 (4)",
+      "content": "期末周图书馆一座难求，建议提前预约。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_1#4",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_2_5",
+      "platform": "weibo",
+      "title": "校运会报名启动 (5)",
+      "content": "各学院可在本周五前完成运动员报名。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_2#5",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_1_6",
+      "platform": "tieba",
+      "title": "食堂新窗口味道如何 (6)",
+      "content": "二楼轻食窗口排队情况讨论。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_1#6",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_2_7",
+      "platform": "tieba",
+      "title": "选修课抢课攻略 (7)",
+      "content": "分享本学期通识课选课经验。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_2#7",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_1_8",
+      "platform": "weibo",
+      "title": "图书馆自习座位紧张 (8)",
+      "content": "期末周图书馆一座难求，建议提前预约。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_1#8",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_2_9",
+      "platform": "weibo",
+      "title": "校运会报名启动 (9)",
+      "content": "各学院可在本周五前完成运动员报名。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_2#9",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_1_10",
+      "platform": "tieba",
+      "title": "食堂新窗口味道如何 (10)",
+      "content": "二楼轻食窗口排队情况讨论。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_1#10",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_2_11",
+      "platform": "tieba",
+      "title": "选修课抢课攻略 (11)",
+      "content": "分享本学期通识课选课经验。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_2#11",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_1_12",
+      "platform": "weibo",
+      "title": "图书馆自习座位紧张 (12)",
+      "content": "期末周图书馆一座难求，建议提前预约。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_1#12",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_2_13",
+      "platform": "weibo",
+      "title": "校运会报名启动 (13)",
+      "content": "各学院可在本周五前完成运动员报名。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_2#13",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_1_14",
+      "platform": "tieba",
+      "title": "食堂新窗口味道如何 (14)",
+      "content": "二楼轻食窗口排队情况讨论。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_1#14",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_2_15",
+      "platform": "tieba",
+      "title": "选修课抢课攻略 (15)",
+      "content": "分享本学期通识课选课经验。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_2#15",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_1_16",
+      "platform": "weibo",
+      "title": "图书馆自习座位紧张 (16)",
+      "content": "期末周图书馆一座难求，建议提前预约。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_1#16",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_2_17",
+      "platform": "weibo",
+      "title": "校运会报名启动 (17)",
+      "content": "各学院可在本周五前完成运动员报名。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_2#17",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_1_18",
+      "platform": "tieba",
+      "title": "食堂新窗口味道如何 (18)",
+      "content": "二楼轻食窗口排队情况讨论。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_1#18",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_2_19",
+      "platform": "tieba",
+      "title": "选修课抢课攻略 (19)",
+      "content": "分享本学期通识课选课经验。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_2#19",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_1_20",
+      "platform": "weibo",
+      "title": "图书馆自习座位紧张 (20)",
+      "content": "期末周图书馆一座难求，建议提前预约。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_1#20",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_2_21",
+      "platform": "weibo",
+      "title": "校运会报名启动 (21)",
+      "content": "各学院可在本周五前完成运动员报名。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_2#21",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_1_22",
+      "platform": "tieba",
+      "title": "食堂新窗口味道如何 (22)",
+      "content": "二楼轻食窗口排队情况讨论。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_1#22",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "tieba_demo_2_23",
+      "platform": "tieba",
+      "title": "选修课抢课攻略 (23)",
+      "content": "分享本学期通识课选课经验。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/tieba/tieba_demo_2#23",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    },
+    {
+      "id": "weibo_demo_1_24",
+      "platform": "weibo",
+      "title": "图书馆自习座位紧张 (24)",
+      "content": "期末周图书馆一座难求，建议提前预约。",
+      "author": "demo_user",
+      "publish_time": "2026-05-16T13:44:05.959815",
+      "url": "https://example.com/weibo/weibo_demo_1#24",
+      "crawl_time": "2026-05-16T13:44:05.959815"
+    }
+  ]
+}
