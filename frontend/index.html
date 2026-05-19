@@ -1,43 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Campus AI Agent</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: system-ui, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .card {
-      background: #1e293b;
-      border-radius: 12px;
-      padding: 2rem;
-      max-width: 480px;
-      text-align: center;
-    }
-    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-    p { color: #94a3b8; margin-bottom: 1.5rem; line-height: 1.6; }
-    .status { font-size: 0.9rem; color: #4ade80; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Campus AI Agent</h1>
-    <p>校园 AI 助手项目已启动。后续可在此接入舆情分析、日程安排等功能。</p>
-    <p class="status" id="status">正在检测服务…</p>
-  </div>
-  <script>
-    fetch('/health')
-      .then(r => r.json())
-      .then(d => { document.getElementById('status').textContent = '后端正常：' + d.status; })
-      .catch(() => { document.getElementById('status').textContent = '后端未响应'; });
-  </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Campus AI Agent — 校园智能助手</title>
+    <link rel="icon" href="/favicon.ico" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
 </html>
