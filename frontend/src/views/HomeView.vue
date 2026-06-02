@@ -11,6 +11,7 @@
         </div>
       </div>
       <div class="welcome-meta">
+        <DataSourceBadge source="mock" style="margin-right:8px" />
         <el-tag type="danger" effect="dark" v-if="stats.highRisk > 0">
           ⚠️ {{ stats.highRisk }} 条高风险预警
         </el-tag>
@@ -170,6 +171,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import StatCard from '@/components/StatCard.vue'
+import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { fetchPosts } from '@/api/posts'
 import { mockPosts, mockEvents } from '@/mock/data'
 

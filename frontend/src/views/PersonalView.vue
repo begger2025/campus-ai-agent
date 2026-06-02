@@ -9,6 +9,54 @@
       <StatCard title="推荐活动" :value="activities.length" icon="✨" color="teal" />
     </div>
 
+    <!-- 事件影响评估（从事件详情页联动跳转） -->
+    <div v-if="impactEvent" class="section-card impact-card">
+      <div class="section-header">
+        <span class="section-title">⚠️ 事件影响评估</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <DataSourceBadge source="mock" />
+          <el-button text size="small" @click="impactEvent = null">关闭</el-button>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="impact-head">
+          <div class="impact-event-title">
+            <span class="impact-label">关联事件</span>
+            <strong>{{ impactEvent.title }}</strong>
+            <span :class="['risk-tag', `risk-tag--${impactEvent.riskLevel ?? impactEvent.risk_level}`]">{{ impactRiskLabel }}</span>
+          </div>
+        </div>
+
+        <div class="impact-grid">
+          <div class="impact-level" :class="`impact--${impactData.impact_level}`">
+            <div class="impact-level-label">影响等级</div>
+            <div class="impact-level-value">{{ impactLevelLabel }}</div>
+          </div>
+          <div class="impact-reason">
+            <div class="impact-section-label">📋 影响分析</div>
+            <p>{{ impactData.reason }}</p>
+          </div>
+        </div>
+
+        <div class="impact-actions-section">
+          <div class="impact-section-label">💡 建议措施</div>
+          <ul>
+            <li v-for="(action, i) in impactData.recommended_actions" :key="i">{{ action }}</li>
+          </ul>
+        </div>
+
+        <div class="impact-reminder">
+          <span class="reminder-icon">🔔</span>
+          <span>{{ impactData.reminder_text }}</span>
+        </div>
+
+        <div class="impact-footer">
+          <el-button size="small" @click="router.push(`/events/${impactEvent.id}`)">查看事件详情</el-button>
+          <el-button size="small" type="primary" @click="impactEvent = null">已知晓</el-button>
+        </div>
+      </div>
+    </div>
+
     <!-- 今日日程 + AI 建议 -->
     <div class="top-grid">
       <!-- 今日日程 -->
@@ -146,9 +194,87 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import StatCard from '@/components/StatCard.vue'
+import DataSourceBadge from '@/components/DataSourceBadge.vue'
+import { fetchPublishedEvents } from '@/api/events'
+
+const route = useRoute()
+const router = useRouter()
+
+// —— 事件影响评估（从事件详情页联动跳转，通过 ?event_id=xxx 传参） ——
+const impactEvent = ref(null)
+
+// mock 影响数据（对应 POST /agent/personal/impact 返回值）
+const mockImpactData = {
+  high: {
+    impact_level: 'high',
+    reason: '该事件影响等级较高。你所在宿舍楼可能受到停电影响，且近期课业安排中涉及晚间线上作业提交，停电可能导致无法按时完成任务。',
+    recommended_actions: [
+      '提前将重要作业保存到云端或本地备份',
+      '关注后勤部门发布的供电恢复通知',
+      '如有晚间实验课，建议提前与老师沟通备用方案',
+    ],
+    reminder_text: '⚠️ 请留意今晚供电情况，建议在 21:00 前完成线上提交类作业。',
+    requires_user_confirmation: false,
+  },
+  medium: {
+    impact_level: 'medium',
+    reason: '该事件与你的校园生活有一定关联。食堂菜价调整可能影响你的日常用餐预算，但短期内不会造成重大影响。',
+    recommended_actions: [
+      '关注食堂管理部门的价格公示',
+      '可尝试其他食堂或窗口作为备选',
+      '如有意见可通过学生代表渠道反馈',
+    ],
+    reminder_text: '📌 建议留意食堂最新价格调整通知。',
+    requires_user_confirmation: false,
+  },
+  low: {
+    impact_level: 'low',
+    reason: '该事件对你的直接影响较小，但建议保持关注以防情况变化。',
+    recommended_actions: [
+      '留意相关通知更新',
+    ],
+    reminder_text: '✅ 该事件对你影响较小，无需特殊应对。',
+    requires_user_confirmation: false,
+  },
+}
+
+const impactRiskLabel = computed(() => {
+  const r = impactEvent.value?.riskLevel ?? impactEvent.value?.risk_level
+  return r === 'high' ? '高风险' : r === 'medium' ? '中风险' : '低风险'
+})
+
+const impactData = computed(() => {
+  if (!impactEvent.value) return null
+  const r = impactEvent.value.riskLevel ?? impactEvent.value.risk_level ?? 'medium'
+  return mockImpactData[r] || mockImpactData.medium
+})
+
+const impactLevelLabel = computed(() => {
+  const map = { high: '高', medium: '中', low: '低' }
+  return map[impactData.value?.impact_level] || '—'
+})
+
+// 监听路由参数，加载事件影响数据
+watch(
+  () => route.query.event_id,
+  async (eventId) => {
+    if (!eventId) {
+      impactEvent.value = null
+      return
+    }
+    try {
+      const all = await fetchPublishedEvents()
+      impactEvent.value = all.find(e => e.id === eventId) || null
+    } catch {
+      impactEvent.value = null
+    }
+  },
+  { immediate: true },
+)
 
 // ——— 课程数据 ———
 const allCourses = [
@@ -485,4 +611,118 @@ function priorityBadge(p) {
 }
 
 .reminder-title { color: var(--color-text); }
+
+/* ——— 事件影响评估 ——— */
+.impact-card { border-left: 3px solid #f59e0b; }
+
+.impact-head { margin-bottom: 14px; }
+
+.impact-event-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.impact-label {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.impact-event-title strong {
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.risk-tag {
+  display: inline-block;
+  padding: 0 8px;
+  height: 20px;
+  line-height: 20px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.risk-tag--high { color: #dc2626; background: #fef2f2; border: 1px solid #fecaca; }
+.risk-tag--medium { color: #d97706; background: #fffbeb; border: 1px solid #fde68a; }
+.risk-tag--low { color: #16a34a; background: #f0fdf4; border: 1px solid #bbf7d0; }
+
+.impact-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.impact-level {
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.impact--high { background: #fef2f2; border: 1px solid #fecaca; }
+.impact--medium { background: #fffbeb; border: 1px solid #fde68a; }
+.impact--low { background: #f0fdf4; border: 1px solid #bbf7d0; }
+
+.impact-level-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+}
+
+.impact-level-value {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.impact--high .impact-level-value { color: #dc2626; }
+.impact--medium .impact-level-value { color: #d97706; }
+.impact--low .impact-level-value { color: #16a34a; }
+
+.impact-reason p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.impact-section-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+
+.impact-actions-section { margin-bottom: 12px; }
+
+.impact-actions-section ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.8;
+}
+
+.impact-reminder {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+}
+
+.reminder-icon { flex-shrink: 0; }
+
+.impact-footer {
+  display: flex;
+  gap: 10px;
+}
 </style>

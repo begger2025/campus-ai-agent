@@ -1,26 +1,80 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getCurrentRole, isAuthenticated } from '@/auth/session'
+
+import MainLayout from '@/layouts/MainLayout.vue'
 import HomeView from '@/views/HomeView.vue'
 import SentimentView from '@/views/SentimentView.vue'
 import PersonalView from '@/views/PersonalView.vue'
+import EventListView from '@/views/EventListView.vue'
+import EventDetailView from '@/views/EventDetailView.vue'
+import OpinionView from '@/views/OpinionView.vue'
+import LoginView from '@/views/LoginView.vue'
+import ForbiddenView from '@/views/ForbiddenView.vue'
+import NotFoundView from '@/views/NotFoundView.vue'
 
 const routes = [
+  // 登录页 — 独立布局，无侧边栏
+  {
+    path: '/login',
+    name: 'Login',
+    component: LoginView,
+    meta: { title: '登录', guest: true },
+  },
+
+  // 主布局 — 所有需认证页面
   {
     path: '/',
-    name: 'Home',
-    component: HomeView,
-    meta: { title: '首页' },
-  },
-  {
-    path: '/sentiment',
-    name: 'Sentiment',
-    component: SentimentView,
-    meta: { title: '舆情分析' },
-  },
-  {
-    path: '/personal',
-    name: 'Personal',
-    component: PersonalView,
-    meta: { title: '个人事项' },
+    component: MainLayout,
+    children: [
+      {
+        path: '',
+        name: 'Home',
+        component: HomeView,
+        meta: { title: '首页', subtitle: '校园舆情仪表盘' },
+      },
+      {
+        path: 'sentiment',
+        name: 'Sentiment',
+        component: SentimentView,
+        meta: { title: '舆情分析', subtitle: '公共舆情数据分析' },
+      },
+      {
+        path: 'events',
+        name: 'EventList',
+        component: EventListView,
+        meta: { title: '事件列表', subtitle: '公开舆情事件浏览' },
+      },
+      {
+        path: 'events/:id',
+        name: 'EventDetail',
+        component: EventDetailView,
+        meta: { title: '事件详情' },
+      },
+      {
+        path: 'opinion',
+        name: 'Opinion',
+        component: OpinionView,
+        meta: { title: '舆情工作台', subtitle: 'Agent 辅助分析', roles: ['user', 'admin'] },
+      },
+      {
+        path: 'personal',
+        name: 'Personal',
+        component: PersonalView,
+        meta: { title: '个人事项', subtitle: '日程与待办管理', roles: ['user', 'admin'] },
+      },
+      {
+        path: 'forbidden',
+        name: 'Forbidden',
+        component: ForbiddenView,
+        meta: { title: '无权限访问', subtitle: '403 Forbidden' },
+      },
+      {
+        path: ':pathMatch(.*)*',
+        name: 'NotFound',
+        component: NotFoundView,
+        meta: { title: '页面未找到', subtitle: '404 Not Found' },
+      },
+    ],
   },
 ]
 
@@ -33,6 +87,27 @@ router.afterEach((to) => {
   document.title = to.meta.title
     ? `${to.meta.title} — Campus AI Agent`
     : 'Campus AI Agent'
+})
+
+router.beforeEach((to, from, next) => {
+  // 登录页始终可访问
+  if (to.meta.guest) return next()
+
+  // 未登录 → 跳转登录页
+  if (!isAuthenticated()) {
+    return next({ name: 'Login', query: { redirect: to.fullPath } })
+  }
+
+  // 角色权限检查
+  const requiredRoles = to.meta.roles
+  if (requiredRoles && requiredRoles.length) {
+    const role = getCurrentRole()
+    if (!requiredRoles.includes(role)) {
+      return next({ name: 'Forbidden' })
+    }
+  }
+
+  next()
 })
 
 export default router

@@ -16,6 +16,14 @@ export default defineConfig({
         target: 'http://127.0.0.1:9000',
         changeOrigin: true,
       },
+      '/posts': {
+        target: 'http://127.0.0.1:9000',
+        changeOrigin: true,
+      },
+      '/events': {
+        target: 'http://127.0.0.1:9000',
+        changeOrigin: true,
+      },
       '/health': {
         target: 'http://127.0.0.1:9000',
         changeOrigin: true,

@@ -10,6 +10,7 @@
 
     <!-- 搜索 + 筛选 -->
     <div class="filter-bar">
+      <DataSourceBadge source="mock" style="margin-right:8px" />
       <el-input
         v-model="keyword"
         placeholder="搜索标题、平台、作者…"
@@ -143,6 +144,7 @@
 import { ref, computed } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import StatCard from '@/components/StatCard.vue'
+import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { fetchPosts } from '@/api/posts'
 import { mockPosts, mockEvents } from '@/mock/data'
 
