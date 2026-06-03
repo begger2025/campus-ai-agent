@@ -1,0 +1,21 @@
+{
+  "crawl_time": "2026-05-17T06:08:19.020662",
+  "output": "posts_20260517_140819.json",
+  "mode": "live+demo_fallback",
+  "total": 20,
+  "issues": [
+    {
+      "code": "E01",
+      "message": "微博采集 0 条，可能 432 或 Playwright 失败"
+    },
+    {
+      "code": "E03",
+      "message": "贴吧采集 0 条，可能超时或反爬"
+    },
+    {
+      "code": "E06",
+      "message": "真实 0 条，已 demo 补足至 20"
+    }
+  ],
+  "see_also": "docs/crawl-issues.md"
+}

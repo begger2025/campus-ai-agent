@@ -1,0 +1,318 @@
+{
+  "meta": {
+    "crawl_time": "2026-05-27T14:06:11.093647",
+    "keyword": "校园",
+    "total": 30,
+    "sources": [
+      "weibo",
+      "tieba"
+    ],
+    "mode": "demo",
+    "stats": {
+      "weibo": 0,
+      "tieba": 0
+    }
+  },
+  "items": [
+    {
+      "id": "weibo_demo_1",
+      "platform": "weibo",
+      "title": "图书馆期末占座",
+      "content": "期末周图书馆晚七点后人满为患，建议早点占座。",
+      "author": "user_1",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_1",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_2",
+      "platform": "weibo",
+      "title": "校运会报名通知",
+      "content": "各学院本周五前完成运动员报名，项目含接力、跳远。",
+      "author": "user_2",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_2",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_3",
+      "platform": "weibo",
+      "title": "警惕刷单兼职",
+      "content": "近期有刷单私信，已有同学被骗，请勿轻信。",
+      "author": "user_3",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_3",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_4",
+      "platform": "weibo",
+      "title": "课间时间调整讨论",
+      "content": "课间缩短至5分钟后跨楼上课更紧张。",
+      "author": "user_4",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_4",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_5",
+      "platform": "weibo",
+      "title": "校园网夜间限速",
+      "content": "宿舍区23点后网速下降，影响提交作业。",
+      "author": "user_5",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_5",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_6",
+      "platform": "tieba",
+      "title": "食堂新窗口测评",
+      "content": "二楼轻食窗口排队约20分钟，价格偏高。",
+      "author": "user_1",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_6",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_7",
+      "platform": "tieba",
+      "title": "选修课抢课经验",
+      "content": "通识课建议优先选容量大的班，避免候补。",
+      "author": "user_2",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_7",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_8",
+      "platform": "tieba",
+      "title": "自习室空调温度",
+      "content": "A栋自习室下午偏冷，可自带外套。",
+      "author": "user_3",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_8",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_9",
+      "platform": "tieba",
+      "title": "共享单车停放",
+      "content": "教学楼门口乱停放现象增多，影响通行。",
+      "author": "user_4",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_9",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_10",
+      "platform": "tieba",
+      "title": "考研自习占座纠纷",
+      "content": "部分座位长期用书本占座引发讨论。",
+      "author": "user_5",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_10",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_11",
+      "platform": "weibo",
+      "title": "图书馆期末占座",
+      "content": "期末周图书馆晚七点后人满为患，建议早点占座。",
+      "author": "user_1",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_11",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_12",
+      "platform": "weibo",
+      "title": "校运会报名通知",
+      "content": "各学院本周五前完成运动员报名，项目含接力、跳远。",
+      "author": "user_2",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_12",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_13",
+      "platform": "weibo",
+      "title": "警惕刷单兼职",
+      "content": "近期有刷单私信，已有同学被骗，请勿轻信。",
+      "author": "user_3",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_13",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_14",
+      "platform": "weibo",
+      "title": "课间时间调整讨论",
+      "content": "课间缩短至5分钟后跨楼上课更紧张。",
+      "author": "user_4",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_14",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_15",
+      "platform": "weibo",
+      "title": "校园网夜间限速",
+      "content": "宿舍区23点后网速下降，影响提交作业。",
+      "author": "user_5",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_15",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_16",
+      "platform": "tieba",
+      "title": "食堂新窗口测评",
+      "content": "二楼轻食窗口排队约20分钟，价格偏高。",
+      "author": "user_1",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_16",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_17",
+      "platform": "tieba",
+      "title": "选修课抢课经验",
+      "content": "通识课建议优先选容量大的班，避免候补。",
+      "author": "user_2",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_17",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_18",
+      "platform": "tieba",
+      "title": "自习室空调温度",
+      "content": "A栋自习室下午偏冷，可自带外套。",
+      "author": "user_3",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_18",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_19",
+      "platform": "tieba",
+      "title": "共享单车停放",
+      "content": "教学楼门口乱停放现象增多，影响通行。",
+      "author": "user_4",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_19",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "tieba_demo_20",
+      "platform": "tieba",
+      "title": "考研自习占座纠纷",
+      "content": "部分座位长期用书本占座引发讨论。",
+      "author": "user_5",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_20",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_21",
+      "platform": "weibo",
+      "title": "图书馆期末占座",
+      "content": "期末周图书馆晚七点后人满为患，建议早点占座。",
+      "author": "user_1",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_21",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_22",
+      "platform": "weibo",
+      "title": "校运会报名通知",
+      "content": "各学院本周五前完成运动员报名，项目含接力、跳远。",
+      "author": "user_2",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_22",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_23",
+      "platform": "weibo",
+      "title": "警惕刷单兼职",
+      "content": "近期有刷单私信，已有同学被骗，请勿轻信。",
+      "author": "user_3",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_23",
+      "crawl_time": "2026-05-27T14:06:11.091642"
+    },
+    {
+      "id": "weibo_demo_24",
+      "platform": "weibo",
+      "title": "课间时间调整讨论",
+      "content": "课间缩短至5分钟后跨楼上课更紧张。",
+      "author": "user_4",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_24",
+      "crawl_time": "2026-05-27T14:06:11.093647"
+    },
+    {
+      "id": "weibo_demo_25",
+      "platform": "weibo",
+      "title": "校园网夜间限速",
+      "content": "宿舍区23点后网速下降，影响提交作业。",
+      "author": "user_5",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/weibo/demo_25",
+      "crawl_time": "2026-05-27T14:06:11.093647"
+    },
+    {
+      "id": "tieba_demo_26",
+      "platform": "tieba",
+      "title": "食堂新窗口测评",
+      "content": "二楼轻食窗口排队约20分钟，价格偏高。",
+      "author": "user_1",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_26",
+      "crawl_time": "2026-05-27T14:06:11.093647"
+    },
+    {
+      "id": "tieba_demo_27",
+      "platform": "tieba",
+      "title": "选修课抢课经验",
+      "content": "通识课建议优先选容量大的班，避免候补。",
+      "author": "user_2",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_27",
+      "crawl_time": "2026-05-27T14:06:11.093647"
+    },
+    {
+      "id": "tieba_demo_28",
+      "platform": "tieba",
+      "title": "自习室空调温度",
+      "content": "A栋自习室下午偏冷，可自带外套。",
+      "author": "user_3",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_28",
+      "crawl_time": "2026-05-27T14:06:11.093647"
+    },
+    {
+      "id": "tieba_demo_29",
+      "platform": "tieba",
+      "title": "共享单车停放",
+      "content": "教学楼门口乱停放现象增多，影响通行。",
+      "author": "user_4",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_29",
+      "crawl_time": "2026-05-27T14:06:11.093647"
+    },
+    {
+      "id": "tieba_demo_30",
+      "platform": "tieba",
+      "title": "考研自习占座纠纷",
+      "content": "部分座位长期用书本占座引发讨论。",
+      "author": "user_5",
+      "publish_time": "2026-05-27T14:06:11.091642",
+      "url": "https://example.com/tieba/demo_30",
+      "crawl_time": "2026-05-27T14:06:11.093647"
+    }
+  ]
+}
