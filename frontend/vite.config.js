@@ -4,11 +4,6 @@ import { resolve } from 'path'
 
 const backend = 'http://127.0.0.1:9000'
 
-const apiProxy = {
-  target: backend,
-  changeOrigin: true,
-}
-
 export default defineConfig({
   plugins: [vue()],
   resolve: {
@@ -19,11 +14,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': apiProxy,
-      '/health': apiProxy,
-      '/ping': apiProxy,
-      '/posts': apiProxy,
-      '/events': apiProxy,
+      '/api': {
+        target: backend,
+        changeOrigin: true,
+      },
     },
   },
 })

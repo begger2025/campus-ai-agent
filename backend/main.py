@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Campus AI Agent", lifespan=lifespan)
-app.include_router(api_router)
+app.include_router(api_router, prefix="/api")
 
 
 @app.get("/health")

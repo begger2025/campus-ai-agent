@@ -31,4 +31,6 @@ def list_posts(
     total = query.count()
     rows = query.offset((page - 1) * page_size).limit(page_size).all()
     items = [PostItem.model_validate(row).model_dump() for row in rows]
-    return ok(PostListData(items=items, total=total).model_dump())
+    return ok(
+        PostListData(items=items, total=total, page=page, page_size=page_size).model_dump()
+    )
