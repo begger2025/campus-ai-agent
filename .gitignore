@@ -19,3 +19,12 @@ data/temp/
 data/cache/
 data/*.db
 data/cookies/
+
+# MediaCrawler local runtime files
+MediaCrawler/.env
+MediaCrawler/.venv/
+MediaCrawler/browser_data/
+MediaCrawler/output/
+MediaCrawler/**/*.db
+MediaCrawler/**/*.sqlite
+MediaCrawler/**/*.sqlite3

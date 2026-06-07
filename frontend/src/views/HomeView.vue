@@ -172,7 +172,7 @@ import { ref, computed, onMounted } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import StatCard from '@/components/StatCard.vue'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
-import { fetchPosts } from '@/api/posts'
+import { checkHealth, fetchPosts } from '@/api/posts'
 import { mockPosts, mockEvents } from '@/mock/data'
 
 // ——— 后端状态 ———
@@ -182,9 +182,8 @@ const backendStatus = computed(() => backendOk.value ? '正常' : '未连接')
 
 onMounted(async () => {
   try {
-    const res = await fetch('/health')
-    const data = await res.json()
-    backendOk.value = data.status === 'ok'
+    const data = await checkHealth()
+    backendOk.value = data.pong === true
     backendDesc.value = backendOk.value ? '后端响应正常' : '响应异常'
   } catch {
     backendDesc.value = '后端未启动，展示 mock 数据'

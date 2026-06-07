@@ -17,19 +17,34 @@ class PostItem(BaseModel):
 
     id: int
     platform: str
+    external_id: str | None = None
+    source_table: str = ""
+    source_raw_id: str = ""
+    source_keyword: str = ""
     title: str
     content: str
     author: str
     publish_time: datetime | None
     url: str
+    raw_url: str = ""
+    like_count: int = 0
+    collect_count: int = 0
+    comment_count: int = 0
+    share_count: int = 0
+    tags_json: str = ""
+    images_json: str = ""
+    raw_json: str = ""
     crawl_time: datetime | None
+    status: str = "active"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class PostListData(BaseModel):
     items: list[PostItem]
     total: int
-    page: int = 1
-    page_size: int = 20
+    page: int
+    page_size: int
 
 
 class PingData(BaseModel):

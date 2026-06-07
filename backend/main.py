@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,8 +17,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.database import SessionLocal, init_db, uses_mysql  # noqa: E402
+from backend.routers.admin import router as admin_router  # noqa: E402
+from backend.routers.admin_events import router as admin_events_router  # noqa: E402
+from backend.routers.agent_public import router as agent_public_router  # noqa: E402
 from backend.routers.api import router as api_router  # noqa: E402
+from backend.routers.auth import router as auth_router  # noqa: E402
+from backend.routers.feedback import router as feedback_router  # noqa: E402
 from backend.seed import seed_if_empty  # noqa: E402
+from backend.services.auth_service import ensure_default_admin  # noqa: E402
 
 
 def _should_seed_on_start() -> bool:
@@ -31,6 +37,12 @@ def _should_seed_on_start() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    db = SessionLocal()
+    try:
+        ensure_default_admin(db)
+        db.commit()
+    finally:
+        db.close()
     if _should_seed_on_start():
         db = SessionLocal()
         try:
@@ -41,7 +53,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Campus AI Agent", lifespan=lifespan)
+app.include_router(auth_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
+app.include_router(agent_public_router, prefix="/api")
+app.include_router(admin_events_router, prefix="/api")
+app.include_router(feedback_router, prefix="/api")
 app.include_router(api_router, prefix="/api")
+
+
+@app.api_route(
+    "/api/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+def api_not_found(path: str):
+    return JSONResponse(
+        status_code=404,
+        content={"code": 404, "message": f"API not found: /api/{path}", "data": None},
+    )
 
 
 @app.get("/health")

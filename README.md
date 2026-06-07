@@ -1,5 +1,24 @@
 # campus-ai-agent
 
+## 第二周后端 Smoke Test
+
+工作包 10 提供了一键后端 smoke test，用于复现公共舆情主链路：
+
+```text
+MediaCrawler 数据 -> raw_posts -> processed_posts -> public_events -> 管理员审核 -> 用户查看 published 事件 -> 用户反馈 -> 管理员日志
+```
+
+在主项目目录运行：
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main"
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke_backend.ps1 -Limit 200 -Port 9010
+```
+
+验收说明见 [docs/backend-smoke-test.md](docs/backend-smoke-test.md)。
+
+第二周 smoke test 不覆盖个人事项 Agent，不检查 `personal_advices`、`/api/agent/personal/impact`、`/api/users/{user_id}/advices`。
+
 > **请在本目录 `campus-ai-agent-main` 下开发。**  
 > 桌面上的 `campus-ai-agent` 为旧版（仅 HTML 占位前端），功能已合并到本仓库，请勿混用。
 
