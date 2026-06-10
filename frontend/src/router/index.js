@@ -42,13 +42,13 @@ const routes = [
         path: 'events',
         name: 'EventList',
         component: EventListView,
-        meta: { title: '事件列表', subtitle: '公开舆情事件浏览' },
+        meta: { title: '事件列表', subtitle: '公开舆情事件浏览', guest: true },
       },
       {
         path: 'events/:id',
         name: 'EventDetail',
         component: EventDetailView,
-        meta: { title: '事件详情' },
+        meta: { title: '事件详情', guest: true },
       },
       {
         path: 'opinion',
@@ -61,6 +61,31 @@ const routes = [
         name: 'Personal',
         component: PersonalView,
         meta: { title: '个人事项', subtitle: '日程与待办管理', roles: ['user', 'admin'] },
+      },
+      // 管理员后台 (roles: ['admin'])
+      {
+        path: 'admin',
+        name: 'AdminOverview',
+        component: () => import('@/views/admin/AdminOverviewView.vue'),
+        meta: { title: '后台概览', subtitle: '管理员后台', roles: ['admin'] },
+      },
+      {
+        path: 'admin/events',
+        name: 'AdminEvents',
+        component: () => import('@/views/admin/AdminEventsView.vue'),
+        meta: { title: '事件审核', subtitle: '公共舆情事件审核', roles: ['admin'] },
+      },
+      {
+        path: 'admin/raw-posts',
+        name: 'AdminRawPosts',
+        component: () => import('@/views/admin/AdminRawPostsView.vue'),
+        meta: { title: '数据管理', subtitle: '采集与清洗数据', roles: ['admin'] },
+      },
+      {
+        path: 'admin/ops',
+        name: 'AdminOps',
+        component: () => import('@/views/admin/AdminOpsView.vue'),
+        meta: { title: '运维反馈', subtitle: '反馈、任务与日志', roles: ['admin'] },
       },
       {
         path: 'forbidden',
@@ -90,7 +115,7 @@ router.afterEach((to) => {
 })
 
 router.beforeEach((to, from, next) => {
-  // 登录页始终可访问
+  // guest: true 页面始终可访问（含 /login、/events、/events/:id）
   if (to.meta.guest) return next()
 
   // 未登录 → 跳转登录页

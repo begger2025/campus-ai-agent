@@ -128,7 +128,7 @@
             <button class="text-link" type="button">忘记密码</button>
           </div>
 
-          <el-button class="login-btn" size="large" type="primary" @click="handleLogin">
+          <el-button class="login-btn" size="large" type="primary" :loading="loading" @click="handleLogin">
             <el-icon><Right /></el-icon>
             登录
           </el-button>
@@ -176,15 +176,17 @@ import {
   TrendCharts,
   User,
 } from '@element-plus/icons-vue'
-import { getDefaultPathForRole, mockLogin } from '@/auth/session'
+import { getDefaultPathForRole, saveSessionFromLoginResponse } from '@/auth/session'
+import { login } from '@/api/auth'
 
 const router = useRouter()
 const route = useRoute()
 
 const role = ref('user')
-const username = ref('user')
-const password = ref('user123')
+const username = ref('')
+const password = ref('')
 const remember = ref(false)
+const loading = ref(false)
 
 const roleOptions = [
   { label: '普通用户', value: 'user', icon: User },
@@ -221,22 +223,32 @@ const previewEvents = [
   { rank: 3, title: '二教新开轻食窗口价格偏高争议', heat: 54, source: 2, risk: '中风险', riskClass: 'risk-mid' },
 ]
 
-watch(role, (nextRole) => {
-  username.value = nextRole === 'admin' ? 'admin' : 'user'
-  password.value = nextRole === 'admin' ? 'admin123' : 'user123'
+watch(role, () => {
+  username.value = ''
+  password.value = ''
 })
 
-function handleLogin() {
+async function handleLogin() {
+  const u = username.value.trim()
+  const p = password.value
+  if (!u || !p) {
+    ElMessage.warning('请输入账号和密码')
+    return
+  }
+  loading.value = true
   try {
-    const session = mockLogin({
-      username: username.value.trim(),
-      password: password.value,
-      role: role.value,
-    })
+    const data = await login(u, p)
+    const session = saveSessionFromLoginResponse(data)
     const redirect = route.query.redirect
     router.push(typeof redirect === 'string' ? redirect : getDefaultPathForRole(session.user.role))
   } catch (error) {
-    ElMessage.error(error.message)
+    // 401 → 用户名或密码错误，其他错误直接展示 message
+    const msg = error?.response?.status === 401
+      ? '用户名或密码错误'
+      : (error.message || '登录失败，请稍后再试')
+    ElMessage.error(msg)
+  } finally {
+    loading.value = false
   }
 }
 </script>

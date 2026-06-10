@@ -13,9 +13,9 @@
         <el-form-item label="反馈类型" required>
           <el-select v-model="form.type" class="full-width">
             <el-option label="信息补充" value="supplement" />
-            <el-option label="内容纠错" value="correction" />
+            <el-option label="内容纠错" value="content_issue" />
             <el-option label="风险误判" value="risk_misjudge" />
-            <el-option label="其他反馈" value="other" />
+            <el-option label="其他反馈" value="suggestion" />
           </el-select>
         </el-form-item>
 
@@ -25,6 +25,13 @@
             type="textarea"
             :rows="4"
             placeholder="请描述您的反馈意见..."
+          />
+        </el-form-item>
+
+        <el-form-item label="联系方式（选填）">
+          <el-input
+            v-model="form.contact"
+            placeholder="邮箱或手机号，方便后续跟进"
           />
         </el-form-item>
       </el-form>
@@ -42,6 +49,8 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { submitFeedback } from '@/api/feedback'
+import { getCurrentUser } from '@/auth/session'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -56,6 +65,7 @@ const submitting = ref(false)
 const form = reactive({
   type: 'supplement',
   content: '',
+  contact: '',
 })
 
 watch(() => props.modelValue, (val) => {
@@ -63,6 +73,7 @@ watch(() => props.modelValue, (val) => {
   if (!val) {
     form.type = 'supplement'
     form.content = ''
+    form.contact = ''
   }
 })
 
@@ -73,11 +84,22 @@ async function handleSubmit() {
   }
 
   submitting.value = true
-  // 模拟提交（待后端实现 POST /feedbacks）
-  await new Promise((resolve) => setTimeout(resolve, 600))
-  submitting.value = false
-  ElMessage.success('感谢您的反馈！')
-  emit('update:modelValue', false)
+  try {
+    await submitFeedback({
+      feedback_type: form.type,
+      content: form.content.trim(),
+      contact: form.contact.trim(),
+      user_id: getCurrentUser()?.id ?? 'anonymous',
+      target_type: 'public_event',
+      target_id: props.event?.raw_id ?? props.event?.id ?? '',
+    })
+    ElMessage.success('感谢您的反馈！')
+    emit('update:modelValue', false)
+  } catch (error) {
+    ElMessage.error(error.message || '反馈提交失败，请稍后再试')
+  } finally {
+    submitting.value = false
+  }
 }
 </script>
 

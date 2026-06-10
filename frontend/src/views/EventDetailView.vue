@@ -121,7 +121,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
-import { fetchPublishedEvents } from '@/api/events'
+import { fetchPublicEventDetail } from '@/api/events'
 
 const route = useRoute()
 const router = useRouter()
@@ -130,14 +130,14 @@ const eventId = computed(() => route.params.id)
 const loading = ref(true)
 const event = ref(null)
 
-// —— 兼容两种 mock 数据字段名 ——
+// 后端返回 snake_case 字段，做统一兼容计算属性
 const riskLabel = computed(() => {
-  const r = event.value?.riskLevel ?? event.value?.risk_level
+  const r = event.value?.risk_level ?? event.value?.riskLevel
   return r === 'high' ? '高风险' : r === 'medium' ? '中风险' : '低风险'
 })
 
 const riskBadgeClass = computed(() => {
-  const r = event.value?.riskLevel ?? event.value?.risk_level
+  const r = event.value?.risk_level ?? event.value?.riskLevel
   return r === 'high' ? 'risk-high' : r === 'medium' ? 'risk-mid' : 'risk-low'
 })
 
@@ -149,11 +149,19 @@ const sentimentLabel = computed(() => {
 
 const topicLabel = computed(() => event.value?.topic ?? event.value?.category ?? '—')
 
-const sourceList = computed(() => event.value?.sourcePlatforms ?? event.value?.source_platforms ?? [])
+// 后端：source_platforms（数组）；mock：sourcePlatforms
+const sourceList = computed(() => event.value?.source_platforms ?? event.value?.sourcePlatforms ?? [])
 
-const tagList = computed(() => event.value?.tags ?? [])
+// 后端：top_tags；mock：tags
+const tagList = computed(() => event.value?.top_tags ?? event.value?.tags ?? [])
 
-const sourcePostIds = computed(() => event.value?.source_post_ids ?? [])
+// 后端：source_post_ids（来自 representative_posts 的 raw_post_id 列表）
+const sourcePostIds = computed(() => {
+  if (event.value?.source_post_ids) return event.value.source_post_ids
+  const posts = event.value?.representative_posts
+  if (Array.isArray(posts)) return posts.map(p => p.raw_post_id).filter(Boolean)
+  return []
+})
 
 const trendList = computed(() => event.value?.trend ?? [])
 
@@ -173,18 +181,20 @@ const trendLine = computed(() => trendDots.value.map(p => `${p.x},${p.y}`).join(
 
 onMounted(async () => {
   try {
-    const all = await fetchPublishedEvents()
-    event.value = all.find(e => e.id === eventId.value) || null
+    // 使用 raw_id（整数）调用详情接口
+    event.value = await fetchPublicEventDetail(eventId.value)
   } catch {
-    ElMessage.error('事件数据加载失败')
+    ElMessage.error('事件详情加载失败')
   } finally {
     loading.value = false
   }
 })
 
 function navigateToImpact() {
-  if (event.value?.id) {
-    router.push(`/personal?event_id=${event.value.id}`)
+  // 使用 raw_id 作为联动参数
+  const id = event.value?.raw_id ?? event.value?.id
+  if (id) {
+    router.push(`/personal?event_id=${id}`)
   }
 }
 

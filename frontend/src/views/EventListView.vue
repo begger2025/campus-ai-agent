@@ -317,12 +317,39 @@ onMounted(loadEvents)
 async function loadEvents() {
   loading.value = true
   try {
-    events.value = await fetchPublishedEvents()
+    // 后端返回分页结构 { items, total, page, page_size }
+    const resp = await fetchPublishedEvents({ page: 1, page_size: 100 })
+    const items = Array.isArray(resp?.items) ? resp.items : (Array.isArray(resp) ? resp : [])
+    // 统一字段名（兼容后端 snake_case 和前端 camelCase）
+    events.value = items.map(normalizeEvent)
     selectedId.value = events.value[0]?.id || ''
   } catch (error) {
     ElMessage.error(error.message || '事件列表加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 统一后端字段到前端 camelCase
+ */
+function normalizeEvent(e) {
+  return {
+    ...e,
+    id: e.id ?? `EVT-${e.raw_id}`,
+    raw_id: e.raw_id ?? e.id,
+    title: e.title ?? '',
+    summary: e.summary ?? '',
+    riskLevel: e.risk_level ?? e.riskLevel ?? 'low',
+    riskLabel: e.riskLabel ?? (e.risk_level === 'high' ? '高风险' : e.risk_level === 'medium' ? '中风险' : '低风险'),
+    heatScore: e.heat_score ?? e.heatScore ?? 0,
+    confidence: e.confidence ?? 0,
+    sourcePlatforms: e.source_platforms ?? e.sourcePlatforms ?? [],
+    representativeCount: e.source_count ?? e.representativeCount ?? 0,
+    tags: e.top_tags ?? e.tags ?? [],
+    updatedAt: e.updatedAt ?? e.created_at ?? '',
+    status: e.status ?? 'published',
+    trend: e.trend ?? [],
   }
 }
 
@@ -357,7 +384,8 @@ function selectEvent(event) {
 }
 
 function openDetail(event) {
-  router.push(`/events/${event.id}`)
+  // 后端详情接口使用整数 raw_id
+  router.push(`/events/${event.raw_id ?? event.id}`)
 }
 
 function openFeedback(event) {

@@ -171,6 +171,8 @@ import { ElMessage } from 'element-plus'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { sourceOptions } from '@/mock/events'
 import { fetchPublishedEvents } from '@/api/events'
+import { runPublicOpinionAnalysis } from '@/api/agent'
+import { getCurrentRole } from '@/auth/session'
 
 const router = useRouter()
 
@@ -206,7 +208,18 @@ onMounted(loadEvents)
 
 async function loadEvents() {
   try {
-    events.value = await fetchPublishedEvents()
+    const resp = await fetchPublishedEvents({ page: 1, page_size: 50 })
+    const items = Array.isArray(resp?.items) ? resp.items : (Array.isArray(resp) ? resp : [])
+    events.value = items.map(e => ({
+      ...e,
+      id: e.id ?? `EVT-${e.raw_id}`,
+      raw_id: e.raw_id ?? e.id,
+      riskLevel: e.risk_level ?? e.riskLevel ?? 'low',
+      riskLabel: e.riskLabel ?? (e.risk_level === 'high' ? '高风险' : e.risk_level === 'medium' ? '中风险' : '低风险'),
+      heatScore: e.heat_score ?? e.heatScore ?? 0,
+      sourcePlatforms: e.source_platforms ?? e.sourcePlatforms ?? [],
+      source_count: e.source_count ?? e.sourcePlatforms?.length ?? 0,
+    }))
     if (events.value.length) {
       selectedId.value = events.value[0].id
     }
@@ -220,27 +233,87 @@ function selectEvent(event) {
   selectedId.value = event.id
 }
 
-// —— 触发分析 ——
+// —— 触发分析 (管理员专用，调用真实 Agent 接口) ——
 async function runAnalysis() {
   if (!keyword.value.trim()) {
     ElMessage.info('请输入分析关键词')
     return
   }
+
+  // 仅管理员可触发真实分析
+  const isAdmin = getCurrentRole() === 'admin'
+
   analyzing.value = true
   agentReady.value = true
 
-  // mock: 模拟 Agent 分析延迟
-  await new Promise(r => setTimeout(r, 1200))
-
-  chatMessages.value.push(
-    { role: 'user', text: `分析关键词：「${keyword.value}」` },
-    {
-      role: 'agent',
-      text: `已对关键词「${keyword.value}」完成分析。当前平台共监测到 ${events.value.length} 条相关事件。其中高风险 ${events.value.filter(e => e.riskLevel === 'high').length} 条，中风险 ${events.value.filter(e => e.riskLevel === 'medium').length} 条，低风险 ${events.value.filter(e => e.riskLevel === 'low').length} 条。建议重点关注高风险事件并及时响应。`,
-    },
-  )
-  analyzing.value = false
+  chatMessages.value.push({ role: 'user', text: `分析关键词：「${keyword.value}」` })
   scrollChat()
+
+  if (!isAdmin) {
+    // 普通用户：只展示已有事件摘要，不调 Agent 接口
+    await new Promise(r => setTimeout(r, 400))
+    chatMessages.value.push({
+      role: 'agent',
+      text: `已从已发布事件中筛选与「${keyword.value}」相关的内容。共找到 ${events.value.length} 条已发布事件供参考。如需触发深度 Agent 分析，请联系管理员。`,
+    })
+    analyzing.value = false
+    scrollChat()
+    return
+  }
+
+  try {
+    const result = await runPublicOpinionAnalysis({
+      keyword: keyword.value.trim(),
+      limit: 50,
+      platforms: selectedSources.value.length ? selectedSources.value : [],
+      persist: true,
+      created_by: 'frontend',
+    })
+
+    const eventCount = result?.event_count ?? result?.events?.length ?? 0
+    const inputCount = result?.input_count ?? 0
+    const warnings = result?.warnings ?? []
+    const newEvents = result?.events ?? []
+
+    // 将新生成的事件合并到左侧列表
+    if (newEvents.length) {
+      const normalized = newEvents.map(e => ({
+        ...e,
+        id: e.id ? `EVT-${e.id}` : `EVT-${e.raw_id}`,
+        raw_id: e.id ?? e.raw_id,
+        riskLevel: e.risk_level ?? 'low',
+        riskLabel: e.risk_level === 'high' ? '高风险' : e.risk_level === 'medium' ? '中风险' : '低风险',
+        heatScore: e.heat_score ?? e.heatScore ?? 0,
+        sourcePlatforms: e.source_platforms ?? [],
+        source_count: e.source_count ?? 0,
+        status: e.status ?? 'draft',
+      }))
+      events.value = [...normalized, ...events.value.filter(ev => !normalized.some(n => n.id === ev.id))]
+      selectedId.value = normalized[0]?.id || selectedId.value
+    }
+
+    let replyText = `Agent 分析完成。共处理 ${inputCount} 条帖子，识别出 ${eventCount} 个事件。`
+    if (eventCount > 0) {
+      const draftCount = newEvents.filter(e => e.status === 'draft').length
+      replyText += draftCount > 0
+        ? `\n其中 ${draftCount} 个事件处于「草稿」状态，请管理员前往 /admin/events 进行审核发布。`
+        : ''
+    }
+    if (warnings.length) {
+      replyText += `\n⚠️ 分析警告：${warnings.join('；')}`
+    }
+
+    chatMessages.value.push({ role: 'agent', text: replyText })
+  } catch (error) {
+    const msg = error?.response?.status === 403
+      ? '当前账号无权限触发 Agent 分析（需要管理员角色）'
+      : (error.message || 'Agent 分析失败，请检查关键词或后端日志')
+    chatMessages.value.push({ role: 'agent', text: `❌ ${msg}` })
+    ElMessage.error(msg)
+  } finally {
+    analyzing.value = false
+    scrollChat()
+  }
 }
 
 function resetAnalysis() {

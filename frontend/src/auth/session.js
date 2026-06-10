@@ -49,6 +49,25 @@ export function getDefaultPathForRole(role = getCurrentRole()) {
   return role === 'admin' ? '/admin' : '/opinion'
 }
 
+/**
+ * 从真实登录接口响应中写入 session
+ * @param {{ access_token, user: { id, username, role, display_name, status } }} data
+ */
+export function saveSessionFromLoginResponse(data) {
+  const session = {
+    token: data.access_token,
+    user: {
+      id: data.user.id,
+      username: data.user.username,
+      displayName: data.user.display_name || data.user.username,
+      role: data.user.role,
+      status: data.user.status,
+    },
+  }
+  writeStoredSession(session)
+  return session
+}
+
 export function mockLogin({ username, password, role }) {
   const normalizedRole = role === 'admin' ? 'admin' : 'user'
   const expected = DEMO_ACCOUNTS[normalizedRole]
