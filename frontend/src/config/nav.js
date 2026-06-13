@@ -2,6 +2,7 @@ const publicOpinionItems = [
   { path: '/', label: '首页', icon: '⌂', roles: ['guest', 'user', 'admin'] },
   { path: '/opinion', label: '舆情工作台', icon: '▣', roles: ['user', 'admin'] },
   { path: '/events', label: '事件列表', icon: '☰', roles: ['guest', 'user', 'admin'] },
+  { path: '/personal', label: '个人事项', icon: '☑', roles: ['user', 'admin'] },
 ]
 
 const adminItems = [

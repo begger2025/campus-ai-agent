@@ -176,7 +176,7 @@ import {
   TrendCharts,
   User,
 } from '@element-plus/icons-vue'
-import { getDefaultPathForRole, saveSessionFromLoginResponse } from '@/auth/session'
+import { getDefaultPathForRole, logout, saveSessionFromLoginResponse } from '@/auth/session'
 import { login } from '@/api/auth'
 
 const router = useRouter()
@@ -237,6 +237,8 @@ async function handleLogin() {
   }
   loading.value = true
   try {
+    // 先清旧 session，防止上一个登录用户的角色残留
+    logout()
     const data = await login(u, p)
     const session = saveSessionFromLoginResponse(data)
     const redirect = route.query.redirect

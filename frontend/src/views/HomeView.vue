@@ -127,8 +127,8 @@
         </div>
       </div>
 
-      <!-- 我的今日事务 -->
-      <div class="section-card">
+      <!-- 我的今日事务（管理员不显示，因管理员侧边栏现已有独立个人事项入口） -->
+      <div v-if="!isAdmin" class="section-card">
         <div class="section-header">
           <span class="section-title">我的今日事务</span>
           <el-button size="small" type="primary" text @click="$router.push('/personal')">
@@ -140,6 +140,18 @@
             <span class="info-label">{{ item.label }}</span>
             <span class="info-value">{{ item.value }}</span>
           </div>
+        </div>
+      </div>
+      <!-- 管理员首页：显示快捷操作入口 -->
+      <div v-else class="section-card">
+        <div class="section-header">
+          <span class="section-title">管理员快捷入口</span>
+        </div>
+        <div class="section-body" style="display:flex;flex-direction:column;gap:10px">
+          <el-button type="primary" plain @click="$router.push('/admin/events')">✓ 前往事件审核</el-button>
+          <el-button plain @click="$router.push('/admin/raw-posts')">◎ 查看原始数据</el-button>
+          <el-button plain @click="$router.push('/admin/ops')">! 运维反馈管理</el-button>
+          <el-button plain @click="$router.push('/personal')">☑ 个人事项</el-button>
         </div>
       </div>
 
@@ -174,6 +186,9 @@ import StatCard from '@/components/StatCard.vue'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { checkHealth, fetchPosts } from '@/api/posts'
 import { mockPosts, mockEvents } from '@/mock/data'
+import { getCurrentRole } from '@/auth/session'
+
+const isAdmin = getCurrentRole() === 'admin'
 
 // ——— 后端状态 ———
 const backendOk = ref(false)

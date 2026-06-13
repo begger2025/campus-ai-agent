@@ -105,7 +105,9 @@
             </div>
 
             <div class="detail-actions">
-              <el-button type="primary" @click="navigateToImpact(selectedEvent)">查看对我的影响 →</el-button>
+              <!-- 普通用户：查看对我的影响；管理员：直接前往审核 -->
+              <el-button v-if="!isAdmin" type="primary" @click="navigateToImpact(selectedEvent)">查看对我的影响 →</el-button>
+              <el-button v-else type="primary" @click="router.push('/admin/events')">前往事件审核 →</el-button>
               <el-button @click="openDetail(selectedEvent)">查看完整详情</el-button>
             </div>
           </template>
@@ -176,6 +178,9 @@ import { getCurrentRole } from '@/auth/session'
 
 const router = useRouter()
 
+// —— 当前用户角色 ——
+const isAdmin = getCurrentRole() === 'admin'
+
 // —— 搜索 & 筛选 ——
 const keyword = ref('')
 const selectedSources = ref([])
@@ -239,9 +244,6 @@ async function runAnalysis() {
     ElMessage.info('请输入分析关键词')
     return
   }
-
-  // 仅管理员可触发真实分析
-  const isAdmin = getCurrentRole() === 'admin'
 
   analyzing.value = true
   agentReady.value = true

@@ -12,6 +12,12 @@ import LoginView from '@/views/LoginView.vue'
 import ForbiddenView from '@/views/ForbiddenView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
 
+// 管理后台视图（懒加载，仅 admin 角色可访问）
+const AdminOverviewView = () => import('@/views/admin/AdminOverviewView.vue')
+const AdminEventsView = () => import('@/views/admin/AdminEventsView.vue')
+const AdminRawPostsView = () => import('@/views/admin/AdminRawPostsView.vue')
+const AdminOpsView = () => import('@/views/admin/AdminOpsView.vue')
+
 const routes = [
   // 登录页 — 独立布局，无侧边栏
   {
@@ -42,13 +48,13 @@ const routes = [
         path: 'events',
         name: 'EventList',
         component: EventListView,
-        meta: { title: '事件列表', subtitle: '公开舆情事件浏览', guest: true },
+        meta: { title: '事件列表', subtitle: '公开舆情事件浏览' },
       },
       {
         path: 'events/:id',
         name: 'EventDetail',
         component: EventDetailView,
-        meta: { title: '事件详情', guest: true },
+        meta: { title: '事件详情' },
       },
       {
         path: 'opinion',
@@ -62,31 +68,33 @@ const routes = [
         component: PersonalView,
         meta: { title: '个人事项', subtitle: '日程与待办管理', roles: ['user', 'admin'] },
       },
-      // 管理员后台 (roles: ['admin'])
+
+      // ── 管理后台（仅 admin）──
       {
         path: 'admin',
         name: 'AdminOverview',
-        component: () => import('@/views/admin/AdminOverviewView.vue'),
-        meta: { title: '后台概览', subtitle: '管理员后台', roles: ['admin'] },
+        component: AdminOverviewView,
+        meta: { title: '后台概览', subtitle: '管理员仪表盘', roles: ['admin'] },
       },
       {
         path: 'admin/events',
         name: 'AdminEvents',
-        component: () => import('@/views/admin/AdminEventsView.vue'),
-        meta: { title: '事件审核', subtitle: '公共舆情事件审核', roles: ['admin'] },
+        component: AdminEventsView,
+        meta: { title: '事件审核', subtitle: '管理员事件管理', roles: ['admin'] },
       },
       {
         path: 'admin/raw-posts',
         name: 'AdminRawPosts',
-        component: () => import('@/views/admin/AdminRawPostsView.vue'),
-        meta: { title: '数据管理', subtitle: '采集与清洗数据', roles: ['admin'] },
+        component: AdminRawPostsView,
+        meta: { title: '原始数据', subtitle: '采集数据浏览', roles: ['admin'] },
       },
       {
         path: 'admin/ops',
         name: 'AdminOps',
-        component: () => import('@/views/admin/AdminOpsView.vue'),
-        meta: { title: '运维反馈', subtitle: '反馈、任务与日志', roles: ['admin'] },
+        component: AdminOpsView,
+        meta: { title: '运营管理', subtitle: '反馈 · 爬虫 · 日志', roles: ['admin'] },
       },
+
       {
         path: 'forbidden',
         name: 'Forbidden',
@@ -115,7 +123,7 @@ router.afterEach((to) => {
 })
 
 router.beforeEach((to, from, next) => {
-  // guest: true 页面始终可访问（含 /login、/events、/events/:id）
+  // 登录页始终可访问
   if (to.meta.guest) return next()
 
   // 未登录 → 跳转登录页

@@ -67,9 +67,11 @@ import { getNavGroups } from '@/config/nav'
 const route = useRoute()
 const router = useRouter()
 const role = ref(getCurrentRole())
+const user = ref(getCurrentUser())
 
 function syncRole() {
   role.value = getCurrentRole()
+  user.value = getCurrentUser()
 }
 
 onMounted(() => window.addEventListener('auth:changed', syncRole))
@@ -78,10 +80,9 @@ onBeforeUnmount(() => window.removeEventListener('auth:changed', syncRole))
 const navGroups = computed(() => getNavGroups(role.value))
 const currentTitle = computed(() => route.meta?.title || '首页')
 const currentSubtitle = computed(() => route.meta?.subtitle || '公共舆情分析 Agent')
-const user = computed(() => getCurrentUser())
 
 const roleLabel = computed(() => {
-  if (role.value === 'admin') return '管理员'
+  if (role.value === 'admin') return `管理员 ${user.value?.displayName ? '· ' + user.value.displayName : ''}`
   if (role.value === 'user') return user.value?.displayName || '普通用户'
   return '游客'
 })

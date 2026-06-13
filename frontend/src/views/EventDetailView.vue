@@ -99,8 +99,12 @@
 
       <!-- 操作 -->
       <div class="detail-actions-bar">
-        <el-button type="primary" size="large" @click="navigateToImpact">
+        <!-- 普通用户才显示"查看对我的影响"；管理员改为"前往审核" -->
+        <el-button v-if="!isAdmin" type="primary" size="large" @click="navigateToImpact">
           🔍 查看对我的影响
+        </el-button>
+        <el-button v-else type="primary" size="large" @click="router.push('/admin/events')">
+          ✓ 前往事件审核
         </el-button>
         <el-button size="large" @click="router.push('/opinion')">返回舆情工作台</el-button>
         <el-button size="large" @click="router.push('/events')">返回事件列表</el-button>
@@ -122,9 +126,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { fetchPublicEventDetail } from '@/api/events'
+import { getCurrentRole } from '@/auth/session'
 
 const route = useRoute()
 const router = useRouter()
+const isAdmin = getCurrentRole() === 'admin'
 const eventId = computed(() => route.params.id)
 
 const loading = ref(true)
