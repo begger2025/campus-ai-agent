@@ -86,20 +86,7 @@
       <section class="login-card" aria-label="登录账号">
         <div class="login-card-header">
           <h2>登录账号</h2>
-          <p>请选择身份后继续访问系统</p>
-        </div>
-
-        <div class="role-tabs" role="tablist" aria-label="身份选择">
-          <button
-            v-for="item in roleOptions"
-            :key="item.value"
-            type="button"
-            :class="['role-tab', { 'role-tab--active': role === item.value }]"
-            @click="role = item.value"
-          >
-            <el-icon><component :is="item.icon" /></el-icon>
-            {{ item.label }}
-          </button>
+          <p>请输入账号和密码登录系统</p>
         </div>
 
         <el-form class="login-form" label-position="top" @submit.prevent="handleLogin">
@@ -161,7 +148,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -182,16 +169,10 @@ import { login } from '@/api/auth'
 const router = useRouter()
 const route = useRoute()
 
-const role = ref('user')
 const username = ref('')
 const password = ref('')
 const remember = ref(false)
 const loading = ref(false)
-
-const roleOptions = [
-  { label: '普通用户', value: 'user', icon: User },
-  { label: '管理员', value: 'admin', icon: Lock },
-]
 
 const features = [
   {
@@ -222,11 +203,6 @@ const previewEvents = [
   { rank: 2, title: '宿舍热水供应不足问题集中反馈', heat: 58, source: 2, risk: '低风险', riskClass: 'risk-low' },
   { rank: 3, title: '二教新开轻食窗口价格偏高争议', heat: 54, source: 2, risk: '中风险', riskClass: 'risk-mid' },
 ]
-
-watch(role, () => {
-  username.value = ''
-  password.value = ''
-})
 
 async function handleLogin() {
   const u = username.value.trim()
@@ -641,44 +617,11 @@ async function handleLogin() {
   font-size: 14px;
 }
 
-.role-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  margin-top: 24px;
-  border: 1px solid #d5deea;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.role-tab {
-  height: 42px;
-  border: 0;
-  border-right: 1px solid #d5deea;
-  background: #f9fbfe;
-  color: #526173;
-  font-weight: 700;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.role-tab:last-child {
-  border-right: 0;
-}
-
-.role-tab--active {
-  color: var(--color-primary);
-  background: #fff;
-  box-shadow: inset 0 0 0 1px var(--color-primary);
-}
-
 .login-form {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  margin-top: 20px;
+  margin-top: 24px;
 }
 
 .login-form :deep(.el-form-item) {
@@ -894,12 +837,8 @@ async function handleLogin() {
     margin-top: 8px;
   }
 
-  .role-tabs {
-    margin-top: 18px;
-  }
-
   .login-form {
-    margin-top: 16px;
+    margin-top: 18px;
   }
 
   .login-form :deep(.el-form-item) {
