@@ -48,13 +48,13 @@ const routes = [
         path: 'events',
         name: 'EventList',
         component: EventListView,
-        meta: { title: '事件列表', subtitle: '公开舆情事件浏览' },
+        meta: { title: '事件列表', subtitle: '公开舆情事件浏览', guest: true },
       },
       {
         path: 'events/:id',
         name: 'EventDetail',
         component: EventDetailView,
-        meta: { title: '事件详情' },
+        meta: { title: '事件详情', guest: true },
       },
       {
         path: 'opinion',
