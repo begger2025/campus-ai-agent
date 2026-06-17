@@ -51,7 +51,7 @@
       <section class="panel-card col-mid">
         <div class="panel-header">
           <span class="panel-title">📋 事件研判详情</span>
-          <el-button v-if="selectedEvent" text size="small" @click="openDetail">查看完整详情 →</el-button>
+          <el-button v-if="selectedEvent" text size="small" @click="openDetail(selectedEvent)">查看完整详情 →</el-button>
         </div>
         <div class="panel-body scroll-body">
           <template v-if="selectedEvent">
@@ -381,7 +381,9 @@ function scrollChat() {
 
 // —— 导航 ——
 function openDetail(event) {
-  if (event?.id) router.push(`/events/${event.id}`)
+  // 后端详情接口使用整数 raw_id，而非展示用的字符串 id（如 EVT-4）
+  const rawId = event?.raw_id ?? event?.id
+  if (rawId) router.push(`/events/${rawId}`)
 }
 
 function navigateToImpact(event) {
