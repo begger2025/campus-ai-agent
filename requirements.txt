@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pydantic
+requests
+beautifulsoup4
+playwright
+pandas
+python-dotenv
+sqlalchemy
+pymysql
+openai
+# 可选：语义事件聚类（含 torch 约 500MB），不装自动退回规则聚类
+# sentence-transformers

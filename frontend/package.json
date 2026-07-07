@@ -1,0 +1,23 @@
+{
+  "name": "campus-ai-agent-frontend",
+  "version": "0.1.0",
+  "description": "Campus AI Agent 前端 —— 校园公共舆情分析平台",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "element-plus": "^2.7.3",
+    "gsap": "^3.15.0",
+    "vue": "^3.4.27",
+    "vue-router": "^4.3.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.5",
+    "vite": "^5.3.1"
+  }
+}

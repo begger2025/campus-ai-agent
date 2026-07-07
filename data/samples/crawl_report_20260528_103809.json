@@ -1,0 +1,13 @@
+{
+  "crawl_time": "2026-05-28T02:38:09.004397",
+  "output": "posts_20260528_103809.json",
+  "mode": "live",
+  "total": 30,
+  "issues": [
+    {
+      "code": "E03",
+      "message": "贴吧采集 0 条，可能超时或反爬"
+    }
+  ],
+  "see_also": "docs/crawl-issues.md"
+}

@@ -1,0 +1,141 @@
+/**
+ * admin.css — 管理后台四个页面的共享样式
+ *
+ * 全部选择器带 .admin-page 前缀，不影响前台页面各自的局部样式。
+ * 视觉规格与 EventListView/EventDetailView 中的同名类保持一致。
+ */
+
+.admin-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.admin-page .panel-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+}
+
+.admin-page .compact-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.admin-page .table-shell {
+  overflow-x: auto;
+}
+
+.admin-page .compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.admin-page .compact-table th,
+.admin-page .compact-table td {
+  padding: 0 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-light);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-page .compact-table th {
+  height: 38px;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  background: var(--color-surface-2);
+}
+
+.admin-page .compact-table tbody tr {
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.admin-page .compact-table tbody tr:hover {
+  background: var(--color-surface-2);
+}
+
+.admin-page .compact-table td {
+  height: 46px;
+}
+
+.admin-page .filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-page .filter-bar .filter-search {
+  width: 240px;
+}
+
+.admin-page .filter-bar .filter-select {
+  width: 160px;
+}
+
+.admin-page .table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.admin-page .empty-hint {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 18px 0;
+}
+
+/* 状态小标签（事件/反馈/任务通用） */
+.admin-page .status-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.admin-page .status-draft,
+.admin-page .status-pending,
+.admin-page .status-running {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.admin-page .status-published,
+.admin-page .status-resolved,
+.admin-page .status-handled,
+.admin-page .status-success,
+.admin-page .status-finished,
+.admin-page .status-active {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.admin-page .status-rejected,
+.admin-page .status-failed,
+.admin-page .status-error,
+.admin-page .status-disabled {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
+
+.admin-page .status-archived,
+.admin-page .status-ignored {
+  background: #eef1f7;
+  color: var(--color-text-muted);
+}
+
+.admin-page .status-handling {
+  background: var(--brand-50);
+  color: var(--brand-700);
+}

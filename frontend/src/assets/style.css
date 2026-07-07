@@ -1,0 +1,286 @@
+/* ============================================================
+   校声智枢 设计令牌 v2
+   品牌气质：沉稳、可信、精密（深靛蓝 + 冷调藏青灰）
+   旧变量名全部保留（--color-* / --radius* / --shadow-card），
+   页面无需改动即可整体换装。
+   ============================================================ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  /* ---- 品牌色阶（靛蓝，oklch ≈ 0.50 0.17 268 为 600） ---- */
+  --brand-50: #f0f3fd;
+  --brand-100: #e2e8fb;
+  --brand-200: #c5d0f6;
+  --brand-300: #9dadee;
+  --brand-400: #7188e5;
+  --brand-500: #4f6ee0;
+  --brand-600: #3b5bdb;
+  --brand-700: #2f49af;
+  --brand-800: #273c8d;
+  --brand-900: #1f2f6b;
+
+  --color-primary: var(--brand-600);
+  --color-primary-hover: var(--brand-500);
+  --color-primary-active: var(--brand-700);
+  --color-primary-light: var(--brand-50);
+
+  /* ---- 语义色（降饱和一档，与主色同明度层） ---- */
+  --color-danger: #d23f45;
+  --color-danger-bg: #fdeeef;
+  --color-danger-text: #b02a30;
+  --color-warning: #b97708;
+  --color-warning-bg: #fdf5e6;
+  --color-warning-text: #96600a;
+  --color-success: #34924b;
+  --color-success-bg: #eef8f0;
+  --color-success-text: #2a7540;
+  --color-info: #6b788f;
+
+  /* ---- 冷调藏青灰中性色 ---- */
+  --color-text: #1c2434;
+  --color-text-secondary: #4d5a72;
+  --color-text-muted: #6b788f;
+  --color-text-faint: #8a95ab;
+
+  --color-bg: #f4f6fa;
+  --color-page: #f4f6fa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f8fafd;
+  --color-border: #e2e7f0;
+  --color-border-light: #ecf0f6;
+
+  /* ---- 圆角 / 阴影（藏青色调阴影，非纯黑） ---- */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  --shadow-xs: 0 1px 2px rgba(23, 32, 63, 0.05);
+  --shadow-card: 0 1px 2px rgba(23, 32, 63, 0.04), 0 2px 8px rgba(23, 32, 63, 0.05);
+  --shadow-raised: 0 4px 12px rgba(23, 32, 63, 0.08), 0 12px 32px rgba(23, 32, 63, 0.1);
+
+  /* ---- 动效令牌 ---- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --dur-slow: 250ms;
+
+  /* ---- z-index 刻度 ---- */
+  --z-topbar: 80;
+  --z-sidebar: 100;
+  --z-overlay: 900;
+
+  /* ============================================
+     Element Plus 主题覆盖（全组件自动换装）
+     ============================================ */
+  --el-color-primary: #3b5bdb;
+  --el-color-primary-light-3: #768ce6;
+  --el-color-primary-light-5: #9daded;
+  --el-color-primary-light-7: #c4cef4;
+  --el-color-primary-light-8: #d8def8;
+  --el-color-primary-light-9: #ebeffb;
+  --el-color-primary-dark-2: #2f49af;
+
+  --el-color-success: #34924b;
+  --el-color-success-light-3: #71b381;
+  --el-color-success-light-5: #99c8a5;
+  --el-color-success-light-7: #c2dec9;
+  --el-color-success-light-8: #d6e9db;
+  --el-color-success-light-9: #ebf4ed;
+  --el-color-success-dark-2: #2a753c;
+
+  --el-color-warning: #c8830f;
+  --el-color-warning-light-3: #d8a857;
+  --el-color-warning-light-5: #e3c187;
+  --el-color-warning-light-7: #efdab7;
+  --el-color-warning-light-8: #f4e6cf;
+  --el-color-warning-light-9: #faf3e7;
+  --el-color-warning-dark-2: #a0690c;
+
+  --el-color-danger: #d23f45;
+  --el-color-danger-light-3: #e0797d;
+  --el-color-danger-light-5: #e99fa2;
+  --el-color-danger-light-7: #f2c5c7;
+  --el-color-danger-light-8: #f6d8d9;
+  --el-color-danger-light-9: #fbecec;
+  --el-color-danger-dark-2: #a83237;
+
+  --el-color-error: #d23f45;
+  --el-color-error-light-3: #e0797d;
+  --el-color-error-light-5: #e99fa2;
+  --el-color-error-light-7: #f2c5c7;
+  --el-color-error-light-8: #f6d8d9;
+  --el-color-error-light-9: #fbecec;
+  --el-color-error-dark-2: #a83237;
+
+  --el-color-info: #6b788f;
+  --el-color-info-light-3: #97a1b1;
+  --el-color-info-light-5: #b5bcc7;
+  --el-color-info-light-7: #d3d7de;
+  --el-color-info-light-8: #e1e4e9;
+  --el-color-info-light-9: #f0f2f4;
+  --el-color-info-dark-2: #566072;
+
+  --el-text-color-primary: #1c2434;
+  --el-text-color-regular: #4d5a72;
+  --el-text-color-secondary: #6b788f;
+  --el-text-color-placeholder: #8a95ab;
+  --el-text-color-disabled: #b3bccb;
+
+  --el-border-color: #dce2ee;
+  --el-border-color-light: #e2e7f0;
+  --el-border-color-lighter: #e8edf5;
+  --el-border-color-extra-light: #eef1f7;
+
+  --el-fill-color: #eef1f7;
+  --el-fill-color-light: #f4f6fa;
+  --el-fill-color-lighter: #f8fafd;
+  --el-fill-color-extra-light: #fbfcfe;
+  --el-fill-color-blank: #ffffff;
+
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f4f6fa;
+
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-radius-round: 999px;
+
+  --el-box-shadow-light: var(--shadow-card);
+
+  --el-font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei', 'Helvetica Neue', Arial,
+    sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'HarmonyOS Sans SC', 'MiSans', 'Microsoft YaHei', 'Helvetica Neue', Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* 数据平台：数字全部等宽对齐 */
+  font-variant-numeric: tabular-nums;
+}
+
+#app {
+  height: 100%;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+::selection {
+  background: var(--brand-100);
+  color: var(--brand-900);
+}
+
+/* 键盘可达性：统一可见 focus ring（鼠标点击不出现） */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #c4ccdc;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9aa5bd;
+}
+
+/* 全局降级：用户偏好减少动效时，一切动画立即完成 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===========================
+   通用工具类
+   =========================== */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.badge-high {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border: 1px solid #f4c2c4;
+}
+
+.badge-mid {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  border: 1px solid #ecd9ae;
+}
+
+.badge-low {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border: 1px solid #c8e5d0;
+}
+
+.tag {
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  background: #eef1f7;
+  color: var(--color-text-secondary);
+}
+
+/* 热度分级 chip：用品牌色深浅表达强度，与风险色系（红/黄/绿）刻意区分 */
+.heat-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 17px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.heat-chip--burst { background: var(--brand-700); color: #fff; }
+.heat-chip--high { background: var(--brand-500); color: #fff; }
+.heat-chip--mid { background: var(--brand-100); color: var(--brand-700); }
+.heat-chip--normal { background: #eef1f7; color: var(--color-text-muted); }

@@ -1,0 +1,88 @@
+<h2>整体视觉方向：哪一套感觉对？</h2>
+<p class="subtitle">同一块内容（KPI + 风险事件行）在三种设计语言下的样子。点击选择，也可以在终端里说"A 但是…"。</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#f5f7fa;padding:18px;">
+      <div style="background:#fff;border-radius:6px;padding:14px;box-shadow:0 2px 8px rgba(0,0,0,.06);font-family:-apple-system,'Segoe UI',sans-serif;">
+        <div style="display:flex;gap:10px;margin-bottom:12px;">
+          <div style="flex:1;background:#ecf5ff;border-radius:6px;padding:10px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#409eff;">182</div>
+            <div style="font-size:11px;color:#909399;">采集内容</div>
+          </div>
+          <div style="flex:1;background:#fef0f0;border-radius:6px;padding:10px;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#f56c6c;">3</div>
+            <div style="font-size:11px;color:#909399;">中高风险</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid #ebeef5;border-radius:6px;">
+          <span style="background:#fdf6ec;color:#e6a23c;font-size:11px;padding:2px 8px;border-radius:4px;">中风险</span>
+          <span style="font-size:13px;color:#303133;flex:1;">食堂排队与价格反馈</span>
+          <span style="font-size:12px;color:#f56c6c;">▲ 上升</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A · 明快工作台（Element 蓝改良）</h3>
+      <p>保留 Element Plus 设计语言，统一色板和留白。最稳：工作量最小、和现有管理页天然一致，但"精美感"上限一般——看起来仍像标准后台。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#fafafa;padding:18px;">
+      <div style="background:#fff;border:1px solid #ececec;border-radius:10px;padding:16px;font-family:Inter,'Segoe UI',sans-serif;">
+        <div style="display:flex;gap:18px;margin-bottom:14px;">
+          <div style="flex:1;">
+            <div style="font-size:10px;letter-spacing:.08em;color:#8a8a8e;text-transform:uppercase;">采集内容</div>
+            <div style="font-size:24px;font-weight:600;color:#18181b;letter-spacing:-.02em;">182</div>
+          </div>
+          <div style="flex:1;border-left:1px solid #f0f0f0;padding-left:18px;">
+            <div style="font-size:10px;letter-spacing:.08em;color:#8a8a8e;text-transform:uppercase;">中高风险</div>
+            <div style="font-size:24px;font-weight:600;color:#dc2626;letter-spacing:-.02em;">3</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid #f0f0f0;">
+          <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;"></span>
+          <span style="font-size:13px;color:#27272a;flex:1;">食堂排队与价格反馈</span>
+          <span style="font-size:12px;color:#dc2626;font-variant-numeric:tabular-nums;">+12.4%</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B · 极简编辑风（Linear / Notion）</h3>
+      <p>中性灰阶 + 一个克制的强调色，细描边代替阴影，小号大写标签，数字用等宽。安静、贵气、信息密度高，最衬"分析产品"的气质。工作量中等：要压住 Element 默认样式。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0b1220;padding:18px;">
+      <div style="background:#111a2e;border:1px solid #1e2a44;border-radius:8px;padding:16px;font-family:'Segoe UI',sans-serif;">
+        <div style="display:flex;gap:10px;margin-bottom:12px;">
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#22d3ee;text-shadow:0 0 12px rgba(34,211,238,.5);">182</div>
+            <div style="font-size:11px;color:#64748b;">采集内容</div>
+          </div>
+          <div style="flex:1;text-align:center;">
+            <div style="font-size:22px;font-weight:700;color:#f87171;text-shadow:0 0 12px rgba(248,113,113,.5);">3</div>
+            <div style="font-size:11px;color:#64748b;">中高风险</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;background:#0d1526;border-radius:6px;border:1px solid #1e2a44;">
+          <span style="background:rgba(245,158,11,.15);color:#fbbf24;font-size:11px;padding:2px 8px;border-radius:3px;">中风险</span>
+          <span style="font-size:13px;color:#cbd5e1;flex:1;">食堂排队与价格反馈</span>
+          <span style="font-size:12px;color:#f87171;">▲ 12.4%</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C · 深色舆情大屏</h3>
+      <p>深蓝底 + 发光数据色，舆情监控行业的经典印象，演示冲击力最强。但全站深色对管理表单不友好，通常只适合首页仪表盘单页用，全站统一的成本最高。</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="section">
+  <p class="subtitle">提示：也可以混合——比如全站走 B，首页仪表盘局部用 C 的深色数据卡。</p>
+</div>

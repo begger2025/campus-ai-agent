@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.vscode/
+.env
+node_modules/
+dist/
+build/
+.cache/
+Thumbs.db
+.DS_Store
+*.log
+data/output/
+data/temp/
+data/cache/
+data/*.db
+data/cookies/
+
+# 爬虫登录态与浏览器数据（含 cookie，绝不入库）
+browser_data/
+MediaCrawler/data/
+data/logs/

@@ -1,0 +1,8 @@
+{
+  "crawl_time": "2026-05-28T03:03:47.224602",
+  "output": "posts_20260528_110347.json",
+  "mode": "live",
+  "total": 50,
+  "issues": [],
+  "see_also": "docs/crawl-issues.md"
+}
