@@ -1,8 +1,4 @@
-# Product
-
-## Register
-
-product
+# 校声智枢 · 产品定义
 
 ## Users
 

@@ -23,7 +23,7 @@
 | `scripts/` | 登录态保存、JSON 导入、建库工具 |
 | `backend/` | FastAPI、`/health` `/ping` `/posts`，并托管 `frontend/dist` |
 | `frontend/` | Vue 3 SPA；开发时 Vite 5173 代理 API 到 9000 |
-| `agent/` | LLM 分析模块（规划中，见 `agent/README.md`） |
+| `backend/agent/` + `backend/services/` | 舆情 Agent（意图路由、ReAct、语义聚类、引用简报，由子项目同步） |
 | `data/` | 运行时数据：数据库、Cookie、爬虫 JSON（见 `data/README.md`） |
 | `docs/` | 接口、字段、爬虫、开发规范 |
 
