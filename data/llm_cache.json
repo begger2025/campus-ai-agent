@@ -112,5 +112,17 @@
   },
   "e5c61e78ddd462441c17fa1e0a14c38c2eece7cbaf5fbd1d0e49360cede4ee1e": {
     "content": "### 最近热点（按热度）\n\n| 热点事件 | 热度 | 情绪倾向 | 风险等级 | 热起来的原因 / 主要观点 | 风险依据 | 建议关注点 |\n|---|---:|---|---|---|---|---|\n| 中山大学相关讨论 | 674868.0 | 正向 | 中 | 校园舞蹈、毕业典礼、校区环境等内容传播广；“百万人看过”“毕业典礼成招生简章”等内容带动互动 | 评论讨论量、分享传播量、综合热度高；存在负面反馈词集中 | 关注校园形象传播中的评论走向，及时回应涉及公共服务的衍生讨论 |\n| 食堂排队与价格反馈 | 130677.0 | 正向 | 中 | 食堂服务、饭菜体验、反馈响应速度被讨论；既有表扬后勤响应，也有“发声/维权”等表达 | 涉及校园公共事务；评论和分享较高；负面反馈词集中 | 重点关注食堂价格、排队、菜品质量、反馈处理闭环 |\n| 宿舍热水与后勤维修反馈 | 116262.0 | 负向 | 中 | 宿舍日常、住宿环境、后勤体验相关内容热度较高，部分讨论带有不满情绪 | 涉及宿舍后勤服务；评论讨论量和传播量较高；负面反馈集中 | 关注热水、维修、宿舍设施体验，避免个别问题扩散为后勤服务质疑 |\n| 课程安排与教务反馈 | 30656.0 | 正向 | 中 | 课表、下课时间、教务安排引发学生吐槽；也包含招生、调剂等教务相关内容 | 涉及课程与教务公共事务；负面反馈词集中；互动较高 | 关注作息/课表调整说明、学生反馈渠道、问卷选项合理性 |\n| 中山大学计算机相关讨论 | 18751.5 | 正向 | 中 | 计算机学院学习竞争、考研经验、科研导师/方向选择等话题被讨论，“卷”是核心表达之一 | 评论和分享较高；综合热度较高；负面反馈词集中 | 关注学业压力、保研/考研焦虑、专业竞争叙事 |\n| 中山大学作息调整相关讨论 | 7041.0 | 负向 | 低 | 新作息时间、五六节安排等引发吐槽，有内容称反馈后“有一定效果” | 评论、分享和热度较高；负面反馈集中 | 关注作息调整后的执行效果、学生接受度和后续沟通 |\n| 中山大学校长相关讨论 | 4927.0 | 中性 | 低 | 主要围绕校长履新、毕业证签名、校际关联等轻讨论 | 分享传播量、综合热度和评论量较高 | 关注讨论是否从轻松话题转向误读或不实信息 |\n\n### 热点概括\n\n当前最主要热点仍集中在 **“中山大学”整体话题**，热度显著高于其他事件。具体议题中，**食堂服务、宿舍后勤、课程/作息安排**更容易引发学生实际体验层面的讨论，风险相对需要关注。整体来看，校园形象类内容偏正向，但公共服务类话题存在负面反馈聚集。"
+  },
+  "f64551dce272a0861048975fb4020c3606c492db5e229998c6b263574cf3e307": {
+    "content": "[\"positive\",\"negative\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\"]"
+  },
+  "6a1fb2459ff6ed31df83e39e6e86d8bd3f6473920d4c0551c3a72d407d3ed969": {
+    "content": "[\"positive\",\"negative\",\"negative\",\"controversial\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"negative\",\"neutral\",\"positive\",\"negative\",\"positive\",\"positive\",\"positive\",\"positive\",\"positive\",\"negative\",\"positive\"]"
+  },
+  "2eae430cac75e12efa627b9b421750d136f7e1b2340e52a165f0550d37c27857": {
+    "content": "[\"neutral\",\"negative\",\"neutral\",\"negative\",\"positive\",\"positive\",\"positive\",\"neutral\",\"positive\",\"neutral\",\"controversial\",\"positive\",\"positive\",\"positive\",\"negative\",\"neutral\",\"positive\",\"controversial\",\"positive\",\"positive\"]"
+  },
+  "f0abbe642f5275dd67d8a2efe239d7303b88ebe7493cc4e0502644206077539b": {
+    "content": "[\"negative\",\"positive\",\"positive\",\"neutral\",\"positive\",\"negative\",\"positive\",\"negative\",\"positive\",\"neutral\",\"negative\",\"positive\",\"negative\",\"positive\",\"positive\",\"negative\",\"negative\",\"negative\",\"controversial\",\"controversial\"]"
   }
 }

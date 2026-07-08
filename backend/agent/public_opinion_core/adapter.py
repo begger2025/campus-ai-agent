@@ -175,6 +175,17 @@ def processed_post_to_note(row: Mapping[str, Any] | Any, warnings: list[str] | N
         if key in row
     }
 
+    # 高赞评论摘录：只收字符串、去空白，最多 3 条、每条 200 字。
+    top_comments: list[str] = []
+    for comment in row.get("top_comments") or []:
+        if not isinstance(comment, str):
+            continue
+        comment_text = clean_text(comment)[:200]
+        if comment_text:
+            top_comments.append(comment_text)
+        if len(top_comments) >= 3:
+            break
+
     return OpinionNote(
         note_id=note_id,
         processed_post_id=parse_int(processed_post_id),
@@ -202,6 +213,7 @@ def processed_post_to_note(row: Mapping[str, Any] | Any, warnings: list[str] | N
         ),
         sentiment=clean_text(row.get("sentiment")) or "neutral",
         risk_level=clean_text(row.get("risk_level")) or "low",
+        top_comments=top_comments,
         extra=extra,
     )
 

@@ -28,6 +28,8 @@ def unique_strings(values: list[Any] | tuple[Any, ...] | set[Any] | Any) -> list
 
 
 def note_text(note: OpinionNote) -> str:
+    """帖子本体文本：聚类嵌入的输入口径，不含评论（阈值按此标定，勿改动语义）。"""
+
     parts = [
         note.title,
         note.content,
@@ -36,6 +38,14 @@ def note_text(note: OpinionNote) -> str:
         " ".join(note.tags),
     ]
     return clean_text(" ".join(parts))
+
+
+def analysis_text(note: OpinionNote) -> str:
+    """情绪/风险分析文本：帖子本体 + 高赞评论摘录（评论区风向参与研判）。"""
+
+    if not note.top_comments:
+        return note_text(note)
+    return clean_text(" ".join([note_text(note), " ".join(note.top_comments)]))
 
 
 SENTIMENT_LABELS = {

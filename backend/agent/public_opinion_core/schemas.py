@@ -40,6 +40,8 @@ class OpinionNote:
     risk_score: float = 0.0
     risk_reasons: list[str] = field(default_factory=list)
     concerns: list[str] = field(default_factory=list)
+    # 高赞评论摘录：进情绪/风险分析文本与简报语料，不进聚类嵌入（口径见 normalizer）。
+    top_comments: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

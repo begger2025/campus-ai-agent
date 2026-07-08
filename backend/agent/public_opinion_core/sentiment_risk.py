@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from .normalizer import normalize_note_fields, normalize_risk_level, normalize_sentiment_label, note_text
+from .normalizer import analysis_text, normalize_note_fields, normalize_risk_level, normalize_sentiment_label, note_text
 from .schemas import OpinionNote
 
 
@@ -117,7 +117,8 @@ def detect_concerns(text: str) -> list[str]:
 
 def analyze_note_sentiment_and_risk(note: OpinionNote) -> OpinionNote:
     note = normalize_note_fields(note)
-    text = note_text(note)
+    # 情绪/风险看"帖子+评论区"，聚类嵌入仍只看帖子本体（note_text）。
+    text = analysis_text(note)
 
     negative_hits = _hits(text, NEGATIVE_WORDS)
     positive_hits = _hits(text, POSITIVE_WORDS)

@@ -22,6 +22,7 @@ from backend.agent.public_opinion_core import (
 )
 from backend.database import DATA_DIR
 from backend.models import EventPostLink, ProcessedPost, PublicEvent
+from backend.services.comment_loader import fetch_top_comments
 from backend.services.embedding import get_embedder
 from backend.services.llm_config import EMBEDDING_ALIGN_THRESHOLD, EMBEDDING_CLUSTER_THRESHOLD
 from backend.services.log_service import write_event_review_log
@@ -134,7 +135,19 @@ def query_agent_rows(
         query = query.filter(ProcessedPost.platform.in_(clean_platforms))
 
     rows = query.order_by(ProcessedPost.id.desc()).limit(max(limit, 1)).all()
-    return [processed_post_to_agent_row(row) for row in rows]
+    agent_rows = [processed_post_to_agent_row(row) for row in rows]
+
+    # 附高赞评论摘录（评论区风向进情绪/风险分析与简报语料）；表缺失时为空。
+    # processed_posts.note_id 带 "xhs:" 平台前缀，原生评论表是裸 note_id——按裸 ID 关联。
+    def bare_note_id(value: str) -> str:
+        return (value or "").split(":", 1)[-1]
+
+    comments_by_note = fetch_top_comments(
+        db, [bare_note_id(row["note_id"]) for row in agent_rows if row.get("note_id")]
+    )
+    for row in agent_rows:
+        row["top_comments"] = comments_by_note.get(bare_note_id(row.get("note_id") or ""), [])
+    return agent_rows
 
 
 def load_opinion_notes_from_db(

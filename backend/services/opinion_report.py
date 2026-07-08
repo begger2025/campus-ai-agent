@@ -54,6 +54,9 @@ def compact_events_for_llm(events: list[OpinionEvent]) -> list[dict[str, Any]]:
                         "heat_score": note.heat_score,
                         "comment_count": note.comment_count,
                         "url": note.url,
+                        # 评论区风向进简报语料（LLM 可引用"评论区反映…"）
+                        **({"top_comments": [c[:100] for c in note.top_comments[:2]]}
+                           if getattr(note, "top_comments", None) else {}),
                     }
                     for note in event.representative_notes[:3]
                 ],

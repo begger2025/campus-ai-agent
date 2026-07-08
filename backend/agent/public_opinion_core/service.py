@@ -11,7 +11,7 @@ from typing import Any
 from .adapter import processed_posts_to_notes
 from .clustering import cluster_notes
 from .memory import annotate_events_with_memory, build_snapshot
-from .normalizer import clean_text, note_text
+from .normalizer import analysis_text, clean_text, note_text
 from .schemas import AgentRunLogPayload, AnalyzeRequest, AnalyzeResult, MemorySnapshot, OpinionNote
 from .scoring import score_notes
 from .semantic_clustering import cluster_notes_semantic, strip_social_noise
@@ -133,7 +133,7 @@ class PublicOpinionAgentService:
         if classifier is None:
             return None
         try:
-            labels = classifier([note_text(note) for note in notes])
+            labels = classifier([analysis_text(note) for note in notes])
             if labels is None or len(labels) != len(notes):
                 raise ValueError("classifier returned wrong label count")
         except Exception as exc:

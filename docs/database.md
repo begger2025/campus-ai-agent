@@ -505,3 +505,5 @@ processed_posts 已能作为 Agent 输入生成 public_events
 - **processed_posts 情绪/风险列**：由 `/agent/public/analyze`（persist 运行）自动回写逐帖标注，不再是占位值。
 - **陈旧草稿自动归档**：全量分析（无关键词/平台过滤且未被 limit 截断）会把本次不再出现的 draft 事件归档并写审核日志（reviewer=system）；published/rejected 永不自动改动。
 - **索引**：模型声明即索引口径；已存在的库用 `scripts/add_indexes.py` 幂等补齐。
+
+- **评论语料（2026-07-08）**：`xhs_note_comment` 的高赞评论（每帖前 3 条）经 `backend/services/comment_loader.py` 进入 Agent 分析文本与简报语料；关联口径为裸 note_id（processed_posts.note_id 需剥 `xhs:` 前缀）。评论只影响情绪/风险与简报，不进聚类嵌入。
