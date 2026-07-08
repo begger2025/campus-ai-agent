@@ -115,6 +115,7 @@ class PublicOpinionAgentService:
             warnings=list(warnings),
             snapshot=snapshot,
             visualization=visualization,
+            notes=notes,
         )
 
     def _try_llm_sentiment(

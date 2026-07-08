@@ -48,7 +48,7 @@ class CrawlTask(Base):
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str] = mapped_column(Text, default="")
     report_path: Mapped[str] = mapped_column(String(500), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
@@ -110,7 +110,7 @@ class AdminOperationLog(Base):
     detail: Mapped[str] = mapped_column(Text, default="")
     ip_address: Mapped[str] = mapped_column(String(64), default="")
     user_agent: Mapped[str] = mapped_column(String(500), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     # Compatibility with the existing shared DB columns.
     user_id: Mapped[str] = mapped_column(String(64), default="")
@@ -128,7 +128,7 @@ class SystemLog(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     detail: Mapped[str] = mapped_column(Text, default="")
     request_id: Mapped[str] = mapped_column(String(128), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class UserFeedback(Base):
@@ -142,11 +142,11 @@ class UserFeedback(Base):
     target_id: Mapped[str] = mapped_column(String(64), default="")
     feedback_type: Mapped[str] = mapped_column(String(32), default="suggestion")
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     handled_by: Mapped[str] = mapped_column(String(64), default="")
     handled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     handle_note: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
@@ -155,20 +155,5 @@ class UserFeedback(Base):
     contact: Mapped[str] = mapped_column(String(128), default="")
 
 
-class SystemConfig(Base):
-    """Optional system configuration table for crawler and risk thresholds."""
-
-    __tablename__ = "system_configs"
-    __table_args__ = (
-        UniqueConstraint("config_key", name="ux_system_configs_config_key"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    config_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    config_value: Mapped[str] = mapped_column(Text, default="")
-    description: Mapped[str] = mapped_column(Text, default="")
-    updated_by: Mapped[str] = mapped_column(String(64), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+# 已废弃：system_configs 表从未被任何代码读写（0 行）。模型已移除，
+# 共享库中的空表保留不 drop（团队库谨慎），见 docs/database.md。

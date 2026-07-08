@@ -15,7 +15,8 @@ class RawPost(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    platform: Mapped[str] = mapped_column(String(50), nullable=False)
+    # platform/publish_time 有索引：管理端按平台筛选、按发布时间排序/日期过滤
+    platform: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_table: Mapped[str] = mapped_column(String(64), default="")
     source_raw_id: Mapped[str] = mapped_column(String(255), default="")
@@ -23,7 +24,7 @@ class RawPost(Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, default="")
     author: Mapped[str] = mapped_column(String(100), default="")
-    publish_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    publish_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     url: Mapped[str] = mapped_column(String(500), default="")
     raw_url: Mapped[str] = mapped_column(String(500), default="")
     like_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -112,11 +113,12 @@ class PublicEvent(Base):
     top_tags_json: Mapped[str] = mapped_column(Text, default="")
     concerns_json: Mapped[str] = mapped_column(Text, default="")
     risk_reasons_json: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(20), default="draft")
+    # status/created_at 有索引：公开接口按 status 过滤 + created_at 排序是最高频查询
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     reviewed_by: Mapped[str] = mapped_column(String(64), default="")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     review_comment: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
@@ -154,29 +156,5 @@ class EventPostLink(Base):
     raw_post: Mapped["RawPost | None"] = relationship(back_populates="event_links")
 
 
-class UserTask(Base):
-    """Retained week-1 personal task table; not part of the week-2 core path."""
-
-    __tablename__ = "user_tasks"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(String(50), default="default")
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(20), default="pending")
-    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class UserSchedule(Base):
-    """Retained week-1 schedule table; not part of the week-2 core path."""
-
-    __tablename__ = "user_schedules"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(String(50), default="default")
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    start_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    end_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    location: Mapped[str] = mapped_column(String(200), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+# 已废弃：week-1 的 user_tasks / user_schedules 表（个人事项现走前端本地存储）。
+# 模型已移除，共享库中的空表保留不 drop（团队库谨慎），见 docs/database.md。

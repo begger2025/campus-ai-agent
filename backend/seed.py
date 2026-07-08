@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from backend.models import ProcessedPost, PublicEvent, RawPost, UserSchedule, UserTask
+from backend.models import ProcessedPost, PublicEvent, RawPost
 
 SAMPLE_POSTS = [
     {
@@ -62,24 +62,6 @@ def seed_if_empty(db: Session) -> None:
             topic="作息调整",
             heat_score=0.82,
             source_post_id=1,
-        )
-    )
-    db.add(
-        UserTask(
-            user_id="default",
-            title="确认下午公选课教室",
-            description="教学楼C区，提前10分钟出发",
-            status="pending",
-            due_at=now + timedelta(hours=3),
-        )
-    )
-    db.add(
-        UserSchedule(
-            user_id="default",
-            title="数据结构课",
-            start_at=now.replace(hour=14, minute=0, second=0, microsecond=0),
-            end_at=now.replace(hour=15, minute=40, second=0, microsecond=0),
-            location="教学楼A-301",
         )
     )
     db.commit()

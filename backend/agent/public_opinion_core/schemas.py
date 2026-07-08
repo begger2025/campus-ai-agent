@@ -195,6 +195,8 @@ class AnalyzeResult:
     warnings: list[str] = field(default_factory=list)
     snapshot: MemorySnapshot | None = None
     visualization: dict[str, Any] = field(default_factory=dict)
+    # 逐帖分析标注（含情绪/风险），供调用方把结果回写到持久层。
+    notes: list[OpinionNote] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

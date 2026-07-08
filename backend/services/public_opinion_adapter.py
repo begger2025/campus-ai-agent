@@ -24,6 +24,7 @@ from backend.database import DATA_DIR
 from backend.models import EventPostLink, ProcessedPost, PublicEvent
 from backend.services.embedding import get_embedder
 from backend.services.llm_config import EMBEDDING_ALIGN_THRESHOLD, EMBEDDING_CLUSTER_THRESHOLD
+from backend.services.log_service import write_event_review_log
 from backend.services.sentiment_llm import get_sentiment_classifier
 
 
@@ -212,6 +213,63 @@ def replace_event_post_links(
     db.flush()
 
 
+def write_back_note_analysis(db: Session, notes: list[Any]) -> int:
+    """把逐帖情绪/风险标注回写 processed_posts。
+
+    不回写的话，这些列永远停留在处理脚本写入的占位值（全库 neutral/low），
+    直接查表会得出"零负面"的错误结论。按 processed_post_id 精确更新。
+    """
+
+    updated = 0
+    for note in notes:
+        post_id = getattr(note, "processed_post_id", None)
+        if not post_id:
+            continue
+        row = db.get(ProcessedPost, int(post_id))
+        if row is None:
+            continue
+        row.sentiment = note.sentiment or "neutral"
+        row.sentiment_score = float(note.sentiment_score or 0.0)
+        row.risk_level = note.risk_level or "low"
+        row.risk_score = float(note.risk_score or 0.0)
+        row.risk_reasons_json = json.dumps(list(note.risk_reasons or []), ensure_ascii=False)
+        row.concerns_json = json.dumps(list(note.concerns or []), ensure_ascii=False)
+        updated += 1
+    db.flush()
+    return updated
+
+
+def archive_stale_draft_events(db: Session, active_event_keys: set[str]) -> int:
+    """归档本次全量分析不再出现的草稿事件（上一代聚类留下的"幽灵草稿"）。
+
+    只碰 draft：published/rejected 是管理员决定，archived 已经出局。
+    调用方负责确认本次运行"看全了"（无关键词/平台过滤、未被 limit 截断），
+    否则子集运行会把无关草稿误判为失活。归档动作写审核日志留痕。
+    """
+
+    query = db.query(PublicEvent).filter(PublicEvent.status == "draft")
+    if active_event_keys:
+        query = query.filter(~PublicEvent.event_key.in_(active_event_keys))
+    stale_events = query.all()
+
+    for event in stale_events:
+        old_status = event.status
+        event.status = "archived"
+        event.reviewed_by = "system"
+        event.reviewed_at = datetime.utcnow()
+        event.review_comment = "自动归档：本次全量分析未再出现（陈旧草稿）"
+        write_event_review_log(
+            db,
+            event_id=event.id,
+            admin_user_id="system",
+            from_status=old_status,
+            to_status="archived",
+            review_comment=event.review_comment,
+        )
+    db.flush()
+    return len(stale_events)
+
+
 def insert_agent_run_log(db: Session, payload: dict[str, Any]) -> AgentRunLog:
     row = AgentRunLog(
         agent_type=payload.get("agent_type", "public_opinion"),
@@ -329,6 +387,11 @@ def run_public_opinion_analysis(
     if persist:
         event_id_by_temp_id, event_status_by_temp_id = upsert_public_events(db, event_payloads)
         replace_event_post_links(db, link_payloads, event_id_by_temp_id)
+        write_back_note_analysis(db, result.notes)
+        # 全量运行（无过滤且未被 limit 截断=看全了帖子）才有资格判定草稿失活
+        run_is_full = not (keyword or "").strip() and not (platforms or []) and len(rows) < max(limit, 1)
+        if run_is_full:
+            archive_stale_draft_events(db, {str(p.get("event_key") or "") for p in event_payloads})
         run_log = insert_agent_run_log(db, run_log_payload)
         run_log_id = run_log.id
 

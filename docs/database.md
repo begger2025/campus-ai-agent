@@ -498,3 +498,10 @@ processed_posts 已能作为 Agent 输入生成 public_events
 用户反馈会写入 user_feedback
 系统关键步骤会写入 system_logs
 ```
+
+## 废弃表与自动维护说明（2026-07-08 数据库优化）
+
+- **废弃表**：`user_tasks`、`user_schedules`（week-1 个人事项遗产，个人页现走前端本地存储）、`system_configs`（从未被读写）。ORM 模型已移除，共享库中的空表保留不 drop；确需删除请与全组确认后手动执行。
+- **processed_posts 情绪/风险列**：由 `/agent/public/analyze`（persist 运行）自动回写逐帖标注，不再是占位值。
+- **陈旧草稿自动归档**：全量分析（无关键词/平台过滤且未被 limit 截断）会把本次不再出现的 draft 事件归档并写审核日志（reviewer=system）；published/rejected 永不自动改动。
+- **索引**：模型声明即索引口径；已存在的库用 `scripts/add_indexes.py` 幂等补齐。
