@@ -250,7 +250,7 @@ function rankClass(idx) {
 }
 
 function sentimentLabel(s) {
-  const map = { positive: '正向', negative: '负向', neutral: '中性' }
+  const map = { positive: '正向', negative: '负向', neutral: '中性', controversial: '争议' }
   return map[s] || s || '—'
 }
 </script>
@@ -473,6 +473,7 @@ function sentimentLabel(s) {
 .sentiment--negative { color: var(--color-danger-text); background: var(--color-danger-bg); }
 .sentiment--positive { color: var(--color-success-text); background: var(--color-success-bg); }
 .sentiment--neutral { color: var(--color-text-muted); background: #eef1f7; }
+.sentiment--controversial { color: var(--color-warning-text); background: var(--color-warning-bg); }
 
 .source-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .source-pid {

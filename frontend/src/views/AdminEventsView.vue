@@ -43,7 +43,7 @@
               <td>{{ event.raw_id }}</td>
               <td class="title-cell" :title="event.title">{{ event.title }}</td>
               <td><span :class="['badge', riskClass(event.riskLevel)]">{{ event.riskLabel || '低风险' }}</span></td>
-              <td>{{ event.sentiment || '—' }}</td>
+              <td>{{ sentimentLabel(event.sentiment) }}</td>
               <td>{{ Math.round(event.heatScore || 0) }}</td>
               <td>{{ event.source_count ?? '—' }}</td>
               <td><span :class="['status-tag', `status-${event.status}`]">{{ statusLabel(event.status) }}</span></td>
@@ -167,6 +167,12 @@ const reviewButtonType = computed(() => {
 
 function statusLabel(status) {
   return STATUS_LABELS[status] || status || '—'
+}
+
+const SENTIMENT_LABELS = { positive: '正向', negative: '负向', neutral: '中性', controversial: '争议' }
+
+function sentimentLabel(sentiment) {
+  return SENTIMENT_LABELS[sentiment] || sentiment || '—'
 }
 
 function statusActionLabel(target) {

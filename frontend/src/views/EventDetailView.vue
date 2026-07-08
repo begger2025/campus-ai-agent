@@ -200,7 +200,7 @@ const riskBadgeClass = computed(() => {
 
 const sentimentLabel = computed(() => {
   const s = event.value?.sentiment
-  const map = { positive: '正向', negative: '负向', neutral: '中性' }
+  const map = { positive: '正向', negative: '负向', neutral: '中性', controversial: '争议' }
   return map[s] || s || '—'
 })
 
