@@ -1,65 +1,33 @@
-"""将爬虫 JSON 导入 raw_posts 表。用法: python scripts/import_posts.py data/samples/posts_xxx.json"""
+"""将爬虫 JSON 导入 raw_posts 表。用法: python scripts/import_posts.py <json_path>
 
-import json
+历史说明：旧实现只写 8 个字段（丢 external_id/计数/关键词），且按 url 去重——
+小红书 URL 里的 xsec_token 每次爬取都变，同一帖子会重复入库。现在统一委托给
+sync_media_to_raw_posts.sync_json_to_raw_posts：字段映射完备（_map_json 兼容
+简化 JSON 和 enhanced JSON），按 (platform, external_id) 去重，与主链路口径一致，
+并自动记录 crawl_tasks 任务（后台"运维中心 → 采集任务"可见）。
+"""
+
+from __future__ import annotations
+
 import sys
-from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-
-load_dotenv(ROOT / ".env")
-
-from backend.database import SessionLocal, init_db  # noqa: E402
-from backend.models import RawPost  # noqa: E402
-
-
-def _parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", ""))
-    except ValueError:
-        return None
+from scripts.sync_media_to_raw_posts import sync_json_to_raw_posts  # noqa: E402
 
 
 def import_file(path: Path) -> int:
-    init_db()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    items = data.get("items") if isinstance(data, dict) else data
-    if not items:
-        print("no items in file")
-        return 0
-
-    db = SessionLocal()
-    inserted = skipped = 0
-    try:
-        for item in items:
-            ext_id = item.get("id", "")
-            url = item.get("url", "")
-            exists = db.query(RawPost).filter(RawPost.url == url).first() if url else None
-            if exists:
-                skipped += 1
-                continue
-            db.add(
-                RawPost(
-                    platform=item["platform"],
-                    title=item.get("title") or ext_id,
-                    content=item.get("content", ""),
-                    author=item.get("author", ""),
-                    publish_time=_parse_dt(item.get("publish_time")),
-                    url=item.get("url", ""),
-                    crawl_time=_parse_dt(item.get("crawl_time")) or datetime.utcnow(),
-                )
-            )
-            inserted += 1
-        db.commit()
-    finally:
-        db.close()
-    print(f"  inserted: {inserted}, skipped (duplicate url): {skipped}, total in file: {len(items)}")
-    return inserted
+    result = sync_json_to_raw_posts(json_path=path, platform="json", created_by="import_posts")
+    stats = result.results[0]
+    print(
+        f"  inserted: {stats.inserted}, skipped (duplicate external_id): {stats.skipped_duplicate}, "
+        f"failed: {stats.failed}, total in file: {stats.scanned}"
+    )
+    for error in stats.errors[:5]:
+        print(f"  error: {error}")
+    return stats.inserted
 
 
 def main():

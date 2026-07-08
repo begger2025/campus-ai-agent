@@ -1,10 +1,15 @@
 """
-单次采集脚本（可重复执行）。
+单次采集脚本（可重复执行）。轻量备用链路——主力采集请用 MediaCrawler
+（直接写共享库原生表，再用 scripts/sync_media_to_raw_posts.py 入 raw_posts）。
 
 用法:
   .venv\\Scripts\\python.exe crawler\\run_once.py
   .venv\\Scripts\\python.exe crawler\\run_once.py --keyword 校园 --limit 40
-  .venv\\Scripts\\python.exe crawler\\run_once.py --demo   # 网络不可用时生成演示样本
+  .venv\\Scripts\\python.exe crawler\\run_once.py --demo                  # 纯演示样本
+  .venv\\Scripts\\python.exe crawler\\run_once.py --allow-demo-fallback   # 采集不足时允许补 demo
+
+注意：真实采集不足时默认**不再**补充 demo 假数据（防止 example.com 假帖
+混入共享库），需要补充必须显式传 --allow-demo-fallback。
 """
 
 import argparse
@@ -71,7 +76,7 @@ def merge_posts(*groups: list[CrawlPost]) -> list[CrawlPost]:
     return merged
 
 
-def run(keyword: str, limit: int, demo: bool, no_demo: bool = False) -> Path:
+def run(keyword: str, limit: int, demo: bool, allow_demo_fallback: bool = False) -> Path:
     issues: list[dict] = []
     mode = "demo"
     weibo_count = tieba_count = 0
@@ -93,14 +98,18 @@ def run(keyword: str, limit: int, demo: bool, no_demo: bool = False) -> Path:
             issues.append({"code": "E03", "message": "贴吧采集 0 条，可能超时或反爬"})
         posts = merge_posts(weibo_posts, tieba_posts)
         if len(posts) < TARGET_MIN:
-            if no_demo:
-                logger.warning("真实采集仅 %s 条（--no-demo 未补充 demo）", len(posts))
-                issues.append({"code": "E06", "message": f"真实仅 {len(posts)} 条，未启用 demo 补充"})
-            else:
-                logger.warning("真实采集仅 %s 条，不足 %s，补充 demo 数据", len(posts), TARGET_MIN)
+            # 默认不补假数据：demo 帖（example.com）一旦导入会污染共享库的真实数据。
+            if allow_demo_fallback:
+                logger.warning("真实采集仅 %s 条，不足 %s，按 --allow-demo-fallback 补充 demo 数据", len(posts), TARGET_MIN)
                 mode = "live+demo_fallback"
                 issues.append({"code": "E06", "message": f"真实 {len(posts)} 条，已 demo 补足至 {TARGET_MIN}"})
                 posts = merge_posts(posts, _demo_posts(TARGET_MIN))
+            else:
+                logger.warning(
+                    "真实采集仅 %s 条（不足 %s）。未补充 demo；如需演示样本请显式使用 --allow-demo-fallback 或 --demo",
+                    len(posts), TARGET_MIN,
+                )
+                issues.append({"code": "E06", "message": f"真实仅 {len(posts)} 条，未启用 demo 补充"})
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = SAMPLES_DIR / f"posts_{stamp}.json"
@@ -144,9 +153,13 @@ def main():
     parser.add_argument("--keyword", default="校园", help="微博搜索关键词")
     parser.add_argument("--limit", type=int, default=40, help="目标条数上限")
     parser.add_argument("--demo", action="store_true", help="仅生成演示样本")
-    parser.add_argument("--no-demo", action="store_true", help="真实采集不足时不补 demo")
+    parser.add_argument(
+        "--allow-demo-fallback",
+        action="store_true",
+        help="真实采集不足时允许补充 demo 样本（默认不补，防止假数据入库）",
+    )
     args = parser.parse_args()
-    out = run(args.keyword, min(args.limit, TARGET_MAX), args.demo, args.no_demo)
+    out = run(args.keyword, min(args.limit, TARGET_MAX), args.demo, args.allow_demo_fallback)
     print(out)
 
 

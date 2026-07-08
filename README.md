@@ -47,12 +47,18 @@
 | `demo.bat` | **离线演示**：共享 MySQL 不可用时用本地 SQLite 快照跑全功能（快照先跑 `scripts\make_demo_snapshot.py` 生成） |
 | `stop.bat` | 释放 9000 端口 |
 
-采集真实数据（可选，已有历史数据入库）：
+采集真实数据（可选，共享库已有 182 条历史数据）：
 
 ```text
+# 主链路（推荐）：MediaCrawler 直接写共享库原生表，再映射进 raw_posts
+cd MediaCrawler && .venv\Scripts\python.exe main.py        # 按 config/base_config.py 的关键词采集
+cd .. && .venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --platform xhs
+# 首次或新平台建议先加 --dry-run 验证字段映射，再正式入库
+
+# 备用链路（微博/贴吧简化爬虫，输出 JSON）
 save_weibo_login.bat / save_tieba_login.bat   # 保存登录态，仅首次
-crawl.bat                                     # 采集 → data/samples/
-import_latest.bat                             # 导入数据库
+crawl.bat                                     # 采集 → data/samples/（不足时默认不补 demo 假数据）
+import_latest.bat                             # 导入 raw_posts（按 external_id 去重）
 ```
 
 ## 页面一览（14 个视图）

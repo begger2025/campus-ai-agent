@@ -30,7 +30,7 @@ cd C:\Users\pissy\Desktop\campus-ai-agent
 .\.venv\Scripts\python.exe crawler\run_once.py --no-demo
 ```
 
-`--no-demo`：真实采集不足 20 条时 **不** 自动补 demo，方便你看真实结果。
+真实采集不足时默认不再补 demo 假数据；需要演示样本请显式使用 `--demo` 或 `--allow-demo-fallback`。
 
 ### 3. 看结果
 
