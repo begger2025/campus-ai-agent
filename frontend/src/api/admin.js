@@ -62,3 +62,8 @@ export function updateUserStatus(userId, status) {
 export function fetchOperationLogs(params = {}) {
   return http.get('/admin/operation-logs', { params })
 }
+
+// —— 智能选题 ——
+export function fetchKeywordSuggestions(params = {}) {
+  return http.get('/admin/keyword-suggestions', { params })
+}

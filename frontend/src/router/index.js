@@ -15,6 +15,7 @@ import NotFoundView from '@/views/NotFoundView.vue'
 import AdminOverviewView from '@/views/AdminOverviewView.vue'
 import AdminEventsView from '@/views/AdminEventsView.vue'
 import AdminRawPostsView from '@/views/AdminRawPostsView.vue'
+import AdminKeywordsView from '@/views/AdminKeywordsView.vue'
 import AdminOpsView from '@/views/AdminOpsView.vue'
 
 const routes = [
@@ -90,6 +91,12 @@ const routes = [
         name: 'AdminRawPosts',
         component: AdminRawPostsView,
         meta: { title: '数据管理', subtitle: '采集帖子浏览与筛选', roles: ['admin'] },
+      },
+      {
+        path: 'admin/keywords',
+        name: 'AdminKeywords',
+        component: AdminKeywordsView,
+        meta: { title: '智能选题', subtitle: '客观数据驱动的爬取关键词推荐', roles: ['admin'] },
       },
       {
         path: 'admin/ops',

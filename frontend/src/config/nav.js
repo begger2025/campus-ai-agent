@@ -6,6 +6,7 @@ import {
   DocumentChecked,
   House,
   List,
+  MagicStick,
   Odometer,
   Operation,
   TrendCharts,
@@ -25,6 +26,7 @@ const adminItems = [
   { path: '/admin', label: '后台概览', icon: markRaw(Odometer), roles: ['admin'] },
   { path: '/admin/events', label: '事件审核', icon: markRaw(DocumentChecked), roles: ['admin'] },
   { path: '/admin/raw-posts', label: '数据管理', icon: markRaw(Coin), roles: ['admin'] },
+  { path: '/admin/keywords', label: '智能选题', icon: markRaw(MagicStick), roles: ['admin'] },
   { path: '/admin/ops', label: '运维反馈', icon: markRaw(Operation), roles: ['admin'] },
 ]
 
