@@ -15,6 +15,12 @@
           14 天内爬过的关键词 ×0.3 降权。
         </p>
         <el-button size="small" :loading="loading" @click="load">刷新推荐</el-button>
+        <div class="platform-row">
+          <span class="platform-label">复制命令目标平台：</span>
+          <el-radio-group v-model="platform" size="small">
+            <el-radio-button v-for="p in PLATFORM_OPTIONS" :key="p.value" :value="p.value">{{ p.label }}</el-radio-button>
+          </el-radio-group>
+        </div>
       </div>
 
       <div class="table-shell" v-loading="loading">
@@ -75,6 +81,13 @@ import { fetchKeywordSuggestions } from '@/api/admin'
 const SIGNAL_LABEL = { demand: '需求', gap: '缺口', heat: '热点', discovery: '新话题' }
 const SIGNAL_TYPE = { demand: 'primary', gap: 'danger', heat: 'warning', discovery: 'success' }
 
+const PLATFORM_OPTIONS = [
+  { value: 'xhs', label: '小红书' },
+  { value: 'wb', label: '微博' },
+  { value: 'tieba', label: '贴吧' },
+]
+const platform = ref('xhs')
+
 const suggestions = ref([])
 const meta = ref(null)
 const loading = ref(false)
@@ -97,7 +110,7 @@ function scoreWidth(score) {
 }
 
 async function copyCommand(keyword) {
-  const command = `.\\.venv\\Scripts\\python.exe main.py --keywords "${keyword}" --get_comment yes`
+  const command = `.\\.venv\\Scripts\\python.exe main.py --platform ${platform.value} --keywords "${keyword}" --get_comment yes`
   try {
     await navigator.clipboard.writeText(command)
     ElMessage.success('已复制爬取命令，请在 MediaCrawler 目录下执行')
@@ -146,6 +159,14 @@ onMounted(load)
   margin: 0;
   font-size: 12px;
   color: var(--color-text-secondary, #9ca3af);
+}
+
+.platform-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary, #6b7280);
 }
 
 .kw-cell {
