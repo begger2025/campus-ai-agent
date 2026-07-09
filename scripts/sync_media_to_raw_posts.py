@@ -90,6 +90,51 @@ def _raw_json(row: dict[str, Any]) -> str:
     return json.dumps(row, ensure_ascii=False, default=str, sort_keys=True)
 
 
+# 微博话题嵌在正文里：#话题#，可能带 [超话] 后缀；2–20 字，去重保序。
+WEIBO_TOPIC_RE = re.compile(r"#([^#\r\n]{1,32}?)#")
+WEIBO_TOPIC_MIN_LEN = 2
+WEIBO_TOPIC_MAX_LEN = 20
+_SUPERTOPIC_SUFFIX = "[超话]"
+
+
+def extract_weibo_topics(content: Any) -> list[str]:
+    if not content:
+        return []
+    topics: list[str] = []
+    for match in WEIBO_TOPIC_RE.findall(str(content)):
+        topic = match.strip()
+        if topic.endswith(_SUPERTOPIC_SUFFIX):
+            topic = topic[: -len(_SUPERTOPIC_SUFFIX)].strip()
+        if not (WEIBO_TOPIC_MIN_LEN <= len(topic) <= WEIBO_TOPIC_MAX_LEN):
+            continue
+        if topic not in topics:
+            topics.append(topic)
+    return topics
+
+
+def normalize_xhs_tag_list(tag_list: Any) -> list[str]:
+    """xhs 原生 tag_list 是字典数组 JSON（[{"name":...,"type":...}]）；统一成纯名字数组。"""
+
+    if not tag_list:
+        return []
+    if isinstance(tag_list, str):
+        try:
+            tag_list = json.loads(tag_list)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(tag_list, list):
+        return []
+    names: list[str] = []
+    for item in tag_list:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def _int_count(value: Any) -> int:
     if value is None:
         return 0
@@ -247,7 +292,7 @@ def _map_xhs(row: dict[str, Any]) -> dict[str, Any]:
         collect_count=row.get("collected_count"),
         comment_count=row.get("comment_count"),
         share_count=row.get("share_count"),
-        tags_json=row.get("tag_list"),
+        tags_json=normalize_xhs_tag_list(row.get("tag_list")) or "",
         images_json=row.get("image_list"),
         crawl_time=crawl_time,
         raw_row=row,
@@ -272,6 +317,7 @@ def _map_weibo(row: dict[str, Any]) -> dict[str, Any]:
         collect_count=0,
         comment_count=row.get("comments_count"),
         share_count=row.get("shared_count"),
+        tags_json=extract_weibo_topics(content) or "",
         crawl_time=crawl_time,
         raw_row=row,
     )
@@ -279,6 +325,7 @@ def _map_weibo(row: dict[str, Any]) -> dict[str, Any]:
 
 def _map_tieba(row: dict[str, Any]) -> dict[str, Any]:
     crawl_time = row.get("last_modify_ts") or row.get("add_ts")
+    tieba_name = str(row.get("tieba_name") or "").strip()
     return _base_payload(
         platform="tieba",
         source_table="tieba_note",
@@ -291,6 +338,7 @@ def _map_tieba(row: dict[str, Any]) -> dict[str, Any]:
         publish_time=row.get("publish_time"),
         url=row.get("note_url"),
         comment_count=row.get("total_replay_num"),
+        tags_json=[tieba_name] if tieba_name else "",
         crawl_time=crawl_time,
         raw_row=row,
     )
