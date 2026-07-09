@@ -27,7 +27,7 @@
 |---|---|---|---|
 | **A 需求热度** | 用户最近在问什么 | 本网站（对话页） | 新表 `chat_query_log`（提问时间 + 意图路由提取的话题词） |
 | **B 供给缺口** | 问了但站内没数据 | 本网站 | 同表 `hit_count` 字段（提问时检索命中的事件数） |
-| **C 热度延续** | 已爬话题在小红书上是否仍在升温 | 小红书（点赞/评论/收藏） | `processed_posts` 近 7 天按 `source_keyword` 聚合 `heat_score` |
+| **C 热度延续** | 已爬话题在小红书上是否仍在升温 | 小红书（点赞/评论/收藏） | `processed_posts` 近 14 天按 `source_keyword` 聚合互动量（点赞+评论+收藏+转发，见 §3 公式） |
 | **D 新话题发现** | 小红书上正在热、但从没爬过的话题 | 小红书（笔记标签 + 互动量） | `processed_posts.tags_json` + 四个互动量字段，近 14 天 |
 
 设计要点：
@@ -76,12 +76,12 @@ class QueryRecord:      # 一次用户提问
 
 @dataclass
 class ContentStat:      # 一个词的站内内容统计（C 用 source_keyword，D 用标签）
-    keyword: str; engagement: float; published_at: datetime
+    keyword: str; engagement: int; published_at: datetime
 
 @dataclass
 class KeywordSuggestion:
     keyword: str; score: float; signals: list[str]   # ["demand","gap","heat","discovery"]
-    ask_count_7d: int; last_asked_at: datetime | None
+    ask_count_7d: int; last_asked_at: datetime | None; last_hit_count: int | None
     last_crawled_at: datetime | None; reason: str
 
 def plan_keywords(queries: list[QueryRecord],
@@ -120,7 +120,7 @@ def plan_keywords(queries: list[QueryRecord],
 **前端**：管理端新页面「智能选题」（对齐现有 Admin 页面风格，路由与导航同其余 Admin 页）：
 
 - 推荐列表：排名、关键词、分数条、信号徽章（需求/缺口/热点/新话题）、人话理由、上次爬取时间；
-- 每行"复制爬取命令"按钮：`python main.py --keywords "<kw>" --get_comment yes`；
+- 每行"复制爬取命令"按钮：`.\.venv\Scripts\python.exe main.py --keywords "<kw>" --get_comment yes`（在 MediaCrawler 目录下执行）；
 - 顶部说明卡片讲清打分逻辑；空数据时显示引导文案。
 
 ## 5. 测试策略（零网络纪律不变）
@@ -137,6 +137,11 @@ def plan_keywords(queries: list[QueryRecord],
 2. 登录普通用户，连问 3 个库里没有的问题（如"宿舍空调怎么样"）；
 3. 切管理员刷新面板："宿舍空调"带着"被问 3 次、命中 0 条、从未爬取"的理由冲到榜首；
 4. 点"复制爬取命令"，（口头讲）爬完跑完流水线后用户再问就有数据了——需求→供给闭环完成。
+
+> ⚠️ 演示前提：第 2-3 步的"宿舍空调"精确提取依赖 LLM 意图路由（需配置 API key）。
+> 无 key 时规则兜底只能从 KNOWN_KEYWORDS 提取粗粒度词（"宿舍空调怎么样"→"宿舍"），
+> 若"宿舍"已有大量数据且近期爬过，它不会登顶。答辩演示务必配好 key，或改问一个
+> 不含已知词、库里也没有的话题。
 
 ## 7. 开发期数据自举策略（冷启动运营手册）
 
