@@ -23,6 +23,7 @@ from backend.services.admin_service import (
     user_item,
 )
 from backend.services.auth_service import require_admin
+from backend.services.keyword_suggestion_adapter import get_keyword_suggestions
 
 router = APIRouter(tags=["admin"])
 
@@ -44,6 +45,18 @@ def overview(
     current_user: User = Depends(require_admin),
 ):
     return ok(overview_data(db))
+
+
+@router.get("/admin/keyword-suggestions")
+def keyword_suggestions(
+    days: int = Query(default=30, ge=1, le=365),
+    top: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """智能选题：四信号融合的爬取关键词推荐（设计见 docs/superpowers/specs/2026-07-10）。"""
+
+    return ok(get_keyword_suggestions(db, days=days, top=top))
 
 
 @router.get("/admin/raw-posts")
