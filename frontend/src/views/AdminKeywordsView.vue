@@ -36,7 +36,7 @@
               <td>
                 <div class="score-bar">
                   <div class="score-fill" :style="{ width: scoreWidth(item.score) }" />
-                  <span class="score-text">{{ item.score }}</span>
+                  <span class="score-text">{{ Number(item.score).toFixed(1) }}</span>
                 </div>
               </td>
               <td>
@@ -47,7 +47,7 @@
                   :type="SIGNAL_TYPE[signal]"
                   class="signal-tag"
                 >
-                  {{ SIGNAL_LABEL[signal] }}
+                  {{ SIGNAL_LABEL[signal] || signal }}
                 </el-tag>
               </td>
               <td class="reason-cell" :title="item.reason">{{ item.reason }}</td>
@@ -93,15 +93,14 @@ async function load() {
 }
 
 function scoreWidth(score) {
-  const max = suggestions.value.length ? suggestions.value[0].score : 10
-  return `${Math.min(Math.round((score / (max || 1)) * 100), 100)}%`
+  return `${Math.min(Math.round((score / 10) * 100), 100)}%`
 }
 
 async function copyCommand(keyword) {
   const command = `.\\.venv\\Scripts\\python.exe main.py --keywords "${keyword}" --get_comment yes`
   try {
     await navigator.clipboard.writeText(command)
-    ElMessage.success(`已复制（在 MediaCrawler 目录下执行）：${command}`)
+    ElMessage.success('已复制爬取命令，请在 MediaCrawler 目录下执行')
   } catch {
     ElMessage.warning(`复制失败，请手动执行：${command}`)
   }
