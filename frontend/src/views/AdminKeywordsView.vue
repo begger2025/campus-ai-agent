@@ -5,7 +5,7 @@
         <p class="intro-title">下一轮优先爬什么，由四路客观信号决定：</p>
         <p class="intro-line">
           <el-tag size="small">需求</el-tag> 用户最近在问什么（3天半衰期）
-          <el-tag size="small" type="danger">缺口</el-tag> 问了但站内没数据（加权补给）
+          <el-tag size="small" type="danger">缺口</el-tag> 问了但站内没数据（×2加权）
           <el-tag size="small" type="warning">热点</el-tag> 已爬话题在小红书仍在升温
           <el-tag size="small" type="success">新话题</el-tag> 笔记标签冒头、从未爬过
         </p>
@@ -50,7 +50,7 @@
                   {{ SIGNAL_LABEL[signal] }}
                 </el-tag>
               </td>
-              <td class="reason-cell">{{ item.reason }}</td>
+              <td class="reason-cell" :title="item.reason">{{ item.reason }}</td>
               <td>
                 <el-button link type="primary" @click="copyCommand(item.keyword)">复制爬取命令</el-button>
               </td>
@@ -153,9 +153,13 @@ onMounted(load)
   font-weight: 600;
 }
 
-.reason-cell {
+/* 全局 admin.css 的 .admin-page .compact-table td（0,2,1）强制 nowrap+ellipsis，
+   这里用更高特异性的复合选择器（0,4,1）覆盖，让推荐理由可换行完整展示。 */
+.admin-page .compact-table td.reason-cell {
   color: var(--color-text-secondary, #6b7280);
   white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .signal-tag {
