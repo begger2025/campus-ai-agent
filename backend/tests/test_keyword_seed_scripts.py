@@ -65,6 +65,16 @@ class SeedQueryLogTest(unittest.TestCase):
         self.assertEqual(rows[1].keyword, "")
         self.assertEqual(rows[1].hit_count, 0)
 
+    def test_replace_clears_previous_seed_rows(self) -> None:
+        from scripts.seed_query_log import seed_questions
+
+        seed_questions(self.db, ["宿舍空调怎么样"], route=stub_route, now=NOW)
+        self.db.commit()
+        seed_questions(self.db, ["宿舍空调怎么样"], route=stub_route, now=NOW, replace=True)
+        self.db.commit()
+
+        self.assertEqual(self.db.query(ChatQueryLog).count(), 1)
+
 
 class CheckCoverageTest(unittest.TestCase):
     def setUp(self) -> None:
