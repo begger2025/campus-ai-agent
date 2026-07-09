@@ -30,7 +30,16 @@ def _parse_tags(tags_json: str) -> list[str]:
         return []
     if not isinstance(data, list):
         return []
-    return [str(tag).strip() for tag in data if str(tag).strip()]
+    names: list[str] = []
+    for tag in data:
+        # 兼容 xhs 旧数据的字典标签 [{"name":..., "type":...}]
+        if isinstance(tag, dict):
+            name = str(tag.get("name") or "").strip()
+        else:
+            name = str(tag).strip()
+        if name:
+            names.append(name)
+    return names
 
 
 def get_keyword_suggestions(
