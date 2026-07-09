@@ -1,6 +1,6 @@
 """从舆情子项目单向同步核心与服务层（子项目是唯一改动源）。
 
-- public_opinion_core/：12 个核心文件原样复制（多余文件删除）
+- public_opinion_core/：13 个核心文件原样复制（多余文件删除）
 - services 白名单文件（见 PORTED_SERVICES）：复制时自动改写导入前缀
     from app.config import ...      -> from backend.services.llm_config import ...
     from app.services.X import ...  -> from backend.services.X import ...
