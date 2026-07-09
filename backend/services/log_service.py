@@ -14,6 +14,7 @@ from backend.admin_models import (
     EventReviewLog,
     SystemLog,
 )
+from backend.models import ChatQueryLog
 
 
 def _json_text(value: Any) -> str:
@@ -150,3 +151,25 @@ def write_event_review_log(
     db.add(row)
     db.flush()
     return row
+
+
+def record_chat_query(
+    db: Session,
+    *,
+    user_id: str,
+    message: str,
+    intent: str,
+    keyword: str,
+    hit_count: int,
+) -> ChatQueryLog:
+    """记录一次舆情助手提问（智能选题的需求/缺口信号）。只 add 不 commit，由调用方控制事务。"""
+
+    log = ChatQueryLog(
+        user_id=(user_id or "")[:64],
+        message=(message or "")[:500],
+        intent=(intent or "")[:32],
+        keyword=(keyword or "")[:64],
+        hit_count=max(int(hit_count or 0), 0),
+    )
+    db.add(log)
+    return log

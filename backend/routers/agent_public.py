@@ -19,7 +19,7 @@ from backend.services.public_opinion_adapter import (
     run_public_opinion_analysis,
 )
 from backend.services.auth_service import get_current_user, require_admin
-from backend.services.log_service import write_admin_operation, write_system_log
+from backend.services.log_service import record_chat_query, write_admin_operation, write_system_log
 
 router = APIRouter(tags=["public-opinion-agent"])
 
@@ -78,6 +78,23 @@ def chat_public_opinion(
     try:
         service = OpinionChatService(db)
         data = service.chat(payload.message, user_id=str(current_user.id), reset=payload.reset)
+        # 智能选题信号：成功路径落一条提问日志；写失败绝不影响对话主流程。
+        try:
+            if data.get("intent") == "search":
+                hit_count = len(data.get("notes") or [])
+            else:
+                hit_count = len(data.get("events") or [])
+            record_chat_query(
+                db,
+                user_id=str(current_user.id),
+                message=payload.message,
+                intent=str(data.get("intent") or ""),
+                keyword=str(data.get("keyword") or ""),
+                hit_count=hit_count,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
         return ok(data)
     except Exception as exc:
         db.rollback()
