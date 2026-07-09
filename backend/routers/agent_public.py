@@ -84,12 +84,16 @@ def chat_public_opinion(
                 hit_count = len(data.get("notes") or [])
             else:
                 hit_count = len(data.get("events") or [])
+            keyword = str(data.get("keyword") or "")
+            # search 兜底会把整句回显为 keyword；整句不是话题词，置空让 planner 忽略（防污染需求信号）。
+            if keyword == payload.message:
+                keyword = ""
             record_chat_query(
                 db,
                 user_id=str(current_user.id),
                 message=payload.message,
                 intent=str(data.get("intent") or ""),
-                keyword=str(data.get("keyword") or ""),
+                keyword=keyword,
                 hit_count=hit_count,
             )
             db.commit()

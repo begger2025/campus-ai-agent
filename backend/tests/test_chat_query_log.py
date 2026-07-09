@@ -98,6 +98,26 @@ class ChatEndpointLoggingTest(unittest.TestCase):
         self.assertEqual(row.keyword, "")
         db.close()
 
+    @mock.patch("backend.routers.agent_public.OpinionChatService")
+    def test_search_fallback_echoed_message_is_not_logged_as_keyword(self, service_cls) -> None:
+        # search 兜底把整句回显为 keyword 时，不得把整句当话题词入库（会污染需求信号）
+        service_cls.return_value.chat.return_value = {
+            "intent": "search",
+            "keyword": "校医院预约难吗",
+            "answer": "已找到 0 条相关校园公开内容。",
+            "route_source": "rules",
+            "events": [],
+            "notes": [],
+        }
+
+        self.client.post("/api/agent/public/chat", json={"message": "校医院预约难吗"})
+
+        db = self.session_factory()
+        row = db.query(ChatQueryLog).one()
+        self.assertEqual(row.keyword, "")
+        self.assertEqual(row.intent, "search")
+        db.close()
+
     @mock.patch("backend.routers.agent_public.record_chat_query", side_effect=RuntimeError("log db down"))
     @mock.patch("backend.routers.agent_public.OpinionChatService")
     def test_log_failure_does_not_break_chat(self, service_cls, _record) -> None:
