@@ -66,5 +66,37 @@ class SeedQueryLogTest(unittest.TestCase):
         self.assertEqual(rows[1].hit_count, 0)
 
 
+class CheckCoverageTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.db = make_session_factory()()
+        self.addCleanup(self.db.close)
+
+    def test_coverage_report_counts_hits_and_misses(self) -> None:
+        from scripts.check_question_coverage import check_coverage
+
+        self.db.add(
+            ProcessedPost(raw_post_id=1, platform="xhs", title="宿舍空调坏了", source_keyword="宿舍", created_at=NOW, publish_time=NOW)
+        )
+        self.db.commit()
+
+        report = check_coverage(
+            self.db,
+            ["宿舍空调怎么样", "食堂饭菜如何", "# 注释"],
+            route=stub_route,
+        )
+
+        self.assertEqual(report.total, 2)
+        self.assertEqual(report.hits, 1)
+        self.assertEqual(report.misses, ["食堂饭菜如何"])
+        self.assertAlmostEqual(report.rate, 0.5)
+
+    def test_empty_question_list_rate_is_zero(self) -> None:
+        from scripts.check_question_coverage import check_coverage
+
+        report = check_coverage(self.db, [], route=stub_route)
+        self.assertEqual(report.total, 0)
+        self.assertEqual(report.rate, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
