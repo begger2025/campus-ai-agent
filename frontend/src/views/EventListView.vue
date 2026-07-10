@@ -461,6 +461,7 @@ function sourceLabel(value) {
 function sourceShort(value) {
   if (value === 'weibo') return '微'
   if (value === 'xhs') return '红'
+  if (value === 'zhihu') return '知'
   return '贴'
 }
 </script>
@@ -634,6 +635,7 @@ function sourceShort(value) {
 .source-weibo { color: #c2410c; background: #fff7ed; border: 1px solid #fed7aa; }
 .source-xhs { color: #be123c; background: #fff1f2; border: 1px solid #fecdd3; }
 .source-tieba { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
+.source-zhihu { color: #0369a1; background: #f0f9ff; border: 1px solid #bae6fd; }
 
 .published-dot { width: 6px; height: 6px; display: inline-block; margin-right: 6px; border-radius: 50%; background: var(--color-success); vertical-align: 1px; }
 .action-cell button { border: 0; background: transparent; color: var(--color-primary); font-weight: 600; font-family: inherit; cursor: pointer; padding: 0; transition: color var(--dur-fast) var(--ease-out); }
@@ -719,6 +721,7 @@ function sourceShort(value) {
 .source-icon-weibo { background: #ef4444; }
 .source-icon-xhs { background: #f43f5e; }
 .source-icon-tieba { background: #3b82f6; }
+.source-icon-zhihu { background: #0284c7; }
 
 .event-footnote { height: 34px; display: flex; align-items: center; justify-content: center; color: var(--color-text-secondary); font-size: 13px; }
 .event-footnote button { border: 0; background: transparent; color: var(--color-primary); font-weight: 600; font-family: inherit; cursor: pointer; padding: 0 2px; }

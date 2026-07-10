@@ -13,6 +13,7 @@
         <el-option label="平台：小红书" value="xhs" />
         <el-option label="平台：微博" value="weibo" />
         <el-option label="平台：贴吧" value="tieba" />
+        <el-option label="平台：知乎" value="zhihu" />
       </el-select>
       <el-date-picker
         v-model="filters.dateRange"
@@ -128,7 +129,7 @@ const pageSize = 15
 const filters = reactive({ keyword: '', platform: '', dateRange: null })
 const detail = reactive({ visible: false, post: null })
 
-const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧' }
+const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎' }
 
 function platformLabel(platform) {
   return PLATFORM_LABELS[platform] || platform || '—'
