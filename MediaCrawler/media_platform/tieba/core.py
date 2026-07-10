@@ -306,8 +306,8 @@ class TieBaCrawler(AbstractCrawler):
                                     utils.logger.info(f"[TieBaCrawler.search] 跳过已入库 {skipped_existing_count} 条")
 
                         if notes_list:
-                            await self._handle_search_notes(notes_list)
-                            run_state.add_stored(len(notes_list))  # 传入 _handle_search_notes 的条数即入库条数
+                            stored_count = await self._handle_search_notes(notes_list)
+                            run_state.add_stored(stored_count)  # 实际入库条数（评论路径=详情抓取成功数）
 
                         if (
                             window_enabled
@@ -342,15 +342,22 @@ class TieBaCrawler(AbstractCrawler):
                 run_state.finish(int(utils.get_current_timestamp()))
                 await run_history_store.save_crawler_run_history(run_state.as_row())
 
-    async def _handle_search_notes(self, notes_list: List[TiebaNote]) -> None:
+    async def _handle_search_notes(self, notes_list: List[TiebaNote]) -> int:
+        """入库搜索结果，返回真正调用 update_tieba_note 的条数（供配额/爬取历史精确计数）。
+
+        评论路径经详情抓取，失败的帖子不会入库，只计成功数——否则详情全失败时
+        items_stored 虚高，贫瘠词会漏判一轮。
+        """
         if config.ENABLE_GET_COMMENTS:
-            await self.get_specified_notes(
+            return await self.get_specified_notes(
                 note_id_list=[note_detail.note_id for note_detail in notes_list]
             )
-            return
 
+        stored_count = 0
         for note_detail in notes_list:
             await tieba_store.update_tieba_note(note_detail)
+            stored_count += 1
+        return stored_count
 
     async def get_specified_tieba_notes(self):
         """
@@ -391,14 +398,14 @@ class TieBaCrawler(AbstractCrawler):
 
     async def get_specified_notes(
         self, note_id_list: List[str] = config.TIEBA_SPECIFIED_ID_LIST
-    ):
+    ) -> int:
         """
         Get the information and comments of the specified post
         Args:
             note_id_list:
 
         Returns:
-
+            真正入库（update_tieba_note）的条数：详情抓取失败的帖子不计
         """
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
         task_list = [
@@ -412,6 +419,7 @@ class TieBaCrawler(AbstractCrawler):
                 note_details_model.append(note_detail)
                 await tieba_store.update_tieba_note(note_detail)
         await self.batch_get_note_comments(note_details_model)
+        return len(note_details_model)
 
     async def get_note_detail_async_task(
         self, note_id: str, semaphore: asyncio.Semaphore

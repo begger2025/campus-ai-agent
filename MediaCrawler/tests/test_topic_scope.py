@@ -16,6 +16,7 @@
 # 详细许可条款请参阅项目根目录下的LICENSE文件。
 # 使用本代码即表示您同意遵守上述原则和LICENSE中的所有条款。
 
+import config
 from tools.topic_scope import (
     compose_topic_keyword,
     is_broad_keyword,
@@ -90,6 +91,32 @@ class TestIsMarketingNoise:
 
     def test_none_rescue_terms_tolerated(self):
         assert is_marketing_noise(["驾校报名优惠"], NEGATIVE_TERMS, None)
+
+
+class TestNegativeFilterConfigLists:
+    """用真实配置词表验证：救回词须同时覆盖投诉类与求助类语气。"""
+
+    def test_help_seeking_content_is_rescued(self):
+        # 学生求助是真实需求信号，不是营销噪声
+        assert not is_marketing_noise(
+            ["有没有靠谱的考研机构求推荐"],
+            config.TOPIC_NEGATIVE_TERMS,
+            config.TOPIC_NEGATIVE_RESCUE_TERMS,
+        )
+
+    def test_complaint_content_is_rescued(self):
+        assert not is_marketing_noise(
+            ["曝光某留学中介乱收费"],
+            config.TOPIC_NEGATIVE_TERMS,
+            config.TOPIC_NEGATIVE_RESCUE_TERMS,
+        )
+
+    def test_pure_marketing_still_filtered(self):
+        assert is_marketing_noise(
+            ["考研机构春季班火热报名"],
+            config.TOPIC_NEGATIVE_TERMS,
+            config.TOPIC_NEGATIVE_RESCUE_TERMS,
+        )
 
 
 class TestIsBroadKeyword:

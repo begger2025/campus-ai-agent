@@ -218,7 +218,7 @@ class WeiboCrawler(AbstractCrawler):
                     run_state.add_page()
                     note_id_list: List[str] = []
                     note_list = filter_search_result_card(search_res.get("cards"))
-                    run_state.add_seen(len(note_list))  # 平台返回原始条数（过滤前）
+                    run_state.add_seen(len(note_list))  # 帖子卡数（filter_search_result_card 之后）
                     if not note_list:
                         utils.logger.info("[WeiboCrawler.search] Search note list is empty")
                         run_state.mark_stop(STOP_EMPTY_PAGE)
