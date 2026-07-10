@@ -138,6 +138,30 @@ class TestNegativeFilterConfigLists:
             config.TOPIC_NEGATIVE_RESCUE_TERMS,
         )
 
+    def test_bare_supplier_noun_not_over_filtered(self):
+        # "供应商"是通用角色名词（宿舍水/外卖/校园卡都有供应商），真实求助帖不应误杀；
+        # 故负面词收窄为"源头供应商"（广告术语），裸"供应商"不再命中
+        assert not is_marketing_noise(
+            ["中山大学宿舍桶装水供应商换了之后水质变差"],
+            config.TOPIC_NEGATIVE_TERMS,
+            config.TOPIC_NEGATIVE_RESCUE_TERMS,
+        )
+
+    def test_each_realestate_term_individually_filters(self):
+        # 逐词锁定：每个新增地产/家居 B 端词单独出现即应判为营销噪声（防未来误删某词）
+        samples = {
+            "集采": "本项目食堂设备集采规模可观",
+            "招标方": "招标方现面向全国征集合作",
+            "源头供应商": "认准源头供应商厂家直供",
+            "精装交付": "楼盘精装交付标准全屋配齐",
+            "工程采购": "工程采购批量下单享折扣",
+            "总拥有成本": "按总拥有成本核算更划算",
+        }
+        for term, text in samples.items():
+            assert is_marketing_noise(
+                [text], config.TOPIC_NEGATIVE_TERMS, config.TOPIC_NEGATIVE_RESCUE_TERMS
+            ), f"新增词 {term} 未能拦截样本：{text}"
+
 
 class TestIsBroadKeyword:
     def test_equals_qualifier(self):
