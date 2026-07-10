@@ -66,6 +66,7 @@ class EvidenceDatabaseTests(unittest.TestCase):
                 "source_url", "canonical_url", "source_domain", "source_type",
                 "published_at", "retrieved_at", "evidence_quote",
                 "retrieval_provider", "retrieval_model", "prompt_version",
+                "verification_status",
             }.issubset(columns)
         )
 

@@ -89,7 +89,7 @@ class EvidenceItem(Base):
     __tablename__ = "evidence_items"
     __table_args__ = (
         Index("ix_evidence_items_run_review", "run_id", "review_status"),
-        Index("ix_evidence_items_verifier_status", "verifier_status"),
+        Index("ix_evidence_items_verification_status", "verification_status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -107,7 +107,7 @@ class EvidenceItem(Base):
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
     scope_decision: Mapped[str] = mapped_column(String(32), nullable=False, default="needs_review")
     scope_reasons: Mapped[Optional[str]] = mapped_column(Text)
-    verifier_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     quality_score: Mapped[Optional[float]] = mapped_column(Float)
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     reviewed_by: Mapped[Optional[str]] = mapped_column(String(255))
