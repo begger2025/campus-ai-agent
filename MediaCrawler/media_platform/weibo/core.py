@@ -43,8 +43,9 @@ from store import run_history as run_history_store
 from store import weibo as weibo_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.crawl_quota import should_fetch_next_page
 from tools.publish_time_window import is_within_window, parse_window
-from tools.run_history import STOP_EXCEPTION, STOP_WINDOW_EXHAUSTED, RunState
+from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
 from tools.topic_scope import compose_topic_keyword, matches_topic
 from var import crawler_type_var, source_keyword_var
 
@@ -182,7 +183,7 @@ class WeiboCrawler(AbstractCrawler):
                 jitter = random.randint(1, int(getattr(config, "SEARCH_START_PAGE_JITTER_MAX", 1)))
                 keyword_start_page += jitter
                 utils.logger.info(f"[WeiboCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
-            # 配额锚定到偏移后的起始页：偏移平移翻页窗口而非烧掉配额（jitter=0 时与原行为等价）
+            # 起始页 jitter 仅平移翻页窗口：跳过的页不发请求、不计入已抓页数（jitter=0 时与原行为等价）
             # 通用爬取历史：本关键词一轮搜索写一行，try/finally 保证异常路径也落一行
             run_state = RunState(
                 platform="wb",
@@ -190,7 +191,14 @@ class WeiboCrawler(AbstractCrawler):
                 started_at=int(utils.get_current_timestamp()),
             )
             try:
-                while (page - keyword_start_page + 1) * weibo_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                # 配额按"新增入库条数"计（不再按页数），被过滤/跳过已入库的帖子不烧配额；
+                # 页数保护上限防止贫瘠词无限翻页（根治关键词一轮后"干涸"）
+                while should_fetch_next_page(
+                    run_state.items_stored,
+                    run_state.pages_fetched,
+                    config.CRAWLER_MAX_NOTES_COUNT,
+                    int(getattr(config, "CRAWL_MAX_PAGES_PER_KEYWORD", 10)),
+                ):
                     if page < keyword_start_page:
                         utils.logger.info(f"[WeiboCrawler.search] Skip page: {page}")
                         page += 1
@@ -201,6 +209,10 @@ class WeiboCrawler(AbstractCrawler):
                     note_id_list: List[str] = []
                     note_list = filter_search_result_card(search_res.get("cards"))
                     run_state.add_seen(len(note_list))  # 平台返回原始条数（过滤前）
+                    if not note_list:
+                        utils.logger.info("[WeiboCrawler.search] Search note list is empty")
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
+                        break
                     # If full text fetching is enabled, batch get full text of posts
                     note_list = await self.batch_get_notes_full_text(note_list)
                     page_resolved_ts: List[int] = []
@@ -276,6 +288,10 @@ class WeiboCrawler(AbstractCrawler):
                     utils.logger.info(f"[WeiboCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
 
                     await self.batch_get_notes_comments(note_id_list)
+
+                # 循环自然退出：入库配额达成归结 quota_reached（页保护上限触发则落 completed）
+                if run_state.items_stored >= config.CRAWLER_MAX_NOTES_COUNT:
+                    run_state.mark_stop(STOP_QUOTA_REACHED)
             except Exception:
                 # 异常路径也落一行历史（stop_reason=exception），异常按原行为继续上抛
                 run_state.mark_stop(STOP_EXCEPTION)

@@ -98,7 +98,12 @@ USER_DATA_DIR = "%s_user_data_dir"  # %s will be replaced by platform name
 START_PAGE = 1
 
 # Control the number of crawled videos/posts
+# 注意：对 wb/tieba 语义为"新增入库 N 条封顶"（被过滤/跳过已入库的帖子不烧配额），
+# 不再是"约抓 N 条"；小红书详情调度配额语义不变。最小值仍会被 clamp 到 10。
 CRAWLER_MAX_NOTES_COUNT = 10
+
+# 微博/贴吧单关键词翻页保护上限（页数）：配额按入库条数计后，防止贫瘠词无限翻页
+CRAWL_MAX_PAGES_PER_KEYWORD = 10
 
 # Conservative Xiaohongshu detail crawl mode.
 # When enabled, detail fetches become strictly serial, low-frequency and fail-fast.
