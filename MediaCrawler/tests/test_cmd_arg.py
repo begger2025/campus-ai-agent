@@ -44,22 +44,28 @@ class TestFreshPreset:
     async def test_fresh_yes_applies_time_first_presets(self, restore_config):
         config.SORT_TYPE = "general"
         config.WEIBO_SEARCH_TYPE = "default"
+        config.ZHIHU_SEARCH_SORT = ""
         await parse_cmd(BASE_ARGS + ["--fresh", "yes"])
         assert config.SORT_TYPE == "time_descending"
         assert config.WEIBO_SEARCH_TYPE == "real_time"
+        assert config.ZHIHU_SEARCH_SORT == "created_time"
 
     @pytest.mark.asyncio
     async def test_fresh_defaults_to_no_and_keeps_config(self, restore_config):
         config.SORT_TYPE = "general"
         config.WEIBO_SEARCH_TYPE = "default"
+        config.ZHIHU_SEARCH_SORT = ""
         await parse_cmd(list(BASE_ARGS))
         assert config.SORT_TYPE == "general"
         assert config.WEIBO_SEARCH_TYPE == "default"
+        assert config.ZHIHU_SEARCH_SORT == ""
 
     @pytest.mark.asyncio
     async def test_fresh_no_keeps_config(self, restore_config):
         config.SORT_TYPE = "general"
         config.WEIBO_SEARCH_TYPE = "default"
+        config.ZHIHU_SEARCH_SORT = ""
         await parse_cmd(BASE_ARGS + ["--fresh", "no"])
         assert config.SORT_TYPE == "general"
         assert config.WEIBO_SEARCH_TYPE == "default"
+        assert config.ZHIHU_SEARCH_SORT == ""

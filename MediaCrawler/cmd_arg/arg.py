@@ -366,6 +366,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         if enable_fresh:
             config.SORT_TYPE = "time_descending"
             config.WEIBO_SEARCH_TYPE = "real_time"
+            config.ZHIHU_SEARCH_SORT = "created_time"
 
         # Set platform-specific ID lists for detail/creator mode
         if specified_id_list:
