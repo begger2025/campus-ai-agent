@@ -111,8 +111,9 @@ class ExcelStoreBase(AbstractStore):
         super().__init__()
         self.platform = platform
         self.crawler_type = crawler_type
-        # 进程内去重：同一 run 内相同 (item_type, note_id/comment_id) 只写一次
-        self._dedup_guard = _DedupGuard()
+        # 进程内去重：跨实例共享的类级状态，键含 platform+crawler_type，
+        # 同一 run 内相同 (item_type, note_id/comment_id) 只写一次
+        self._dedup_guard = _DedupGuard(platform, crawler_type)
 
         # Create data directory
         if config.SAVE_DATA_PATH:

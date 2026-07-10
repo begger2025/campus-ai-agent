@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.add_crawler_unique_indexes import IndexPlan, TARGETS, plan_unique_indexes
+from sqlalchemy.exc import OperationalError
+
+from scripts.add_crawler_unique_indexes import (
+    IndexPlan,
+    TARGETS,
+    apply_plans,
+    exit_code_for,
+    plan_unique_indexes,
+    summarize_outcomes,
+)
 
 
 def _unexpected_call(table: str, column: str):
@@ -112,6 +121,99 @@ class PlanUniqueIndexesTest(unittest.TestCase):
         )
         for plan in plans:
             self.assertEqual(plan.action, "create")
+
+
+class ApplyPlansTest(unittest.TestCase):
+    """Issue 2 回归：单表 ALTER 失败不中断整体；汇总/退出码正确。全程不连库（注入假 apply_fn）。"""
+
+    @staticmethod
+    def _create_plan(table: str) -> IndexPlan:
+        return IndexPlan(table, "note_id", f"uk_{table}_note_id", "create")
+
+    def test_single_alter_failure_does_not_stop_remaining_targets(self):
+        plans = [self._create_plan("t1"), self._create_plan("t2"), self._create_plan("t3")]
+        applied = []
+
+        def apply_fn(plan: IndexPlan) -> None:
+            applied.append(plan.table)
+            if plan.table == "t2":
+                # 模拟 MySQL 1071 索引过长 / 1062 竞态重复等 DDL 错误
+                raise OperationalError("ALTER ...", {}, Exception("1071 index too long"))
+
+        outcomes = apply_plans(plans, apply_fn)
+
+        # 关键：t2 失败后 t3 仍被尝试（没有中断）
+        self.assertEqual(applied, ["t1", "t2", "t3"])
+        statuses = {o.plan.table: o.status for o in outcomes}
+        self.assertEqual(statuses, {"t1": "created", "t2": "failed", "t3": "created"})
+        # 失败明细带上了异常信息
+        failed = next(o for o in outcomes if o.status == "failed")
+        self.assertIn("1071", failed.error)
+
+        counts = summarize_outcomes(outcomes)
+        self.assertEqual(counts["created"], 2)
+        self.assertEqual(counts["failed"], 1)
+        self.assertEqual(exit_code_for(outcomes), 1)
+
+    def test_all_created_yields_exit_code_zero(self):
+        plans = [self._create_plan("t1"), self._create_plan("t2")]
+        outcomes = apply_plans(plans, lambda plan: None)
+        self.assertEqual(summarize_outcomes(outcomes)["created"], 2)
+        self.assertEqual(exit_code_for(outcomes), 0)
+
+    def test_refused_yields_exit_code_one_without_applying(self):
+        plans = [IndexPlan("t1", "note_id", "uk", "refuse_duplicates", duplicate_samples=[("x", 2)])]
+
+        def apply_fn(plan: IndexPlan) -> None:  # pragma: no cover - 必须不被调用
+            raise AssertionError("refuse_duplicates 不应触发 apply_fn")
+
+        outcomes = apply_plans(plans, apply_fn)
+        self.assertEqual(outcomes[0].status, "refused")
+        self.assertEqual(summarize_outcomes(outcomes)["refused"], 1)
+        self.assertEqual(exit_code_for(outcomes), 1)
+
+    def test_skip_outcomes_do_not_apply_and_exit_zero(self):
+        plans = [
+            IndexPlan("t1", "note_id", "uk1", "skip_missing_table"),
+            IndexPlan("t2", "note_id", "uk2", "skip_exists"),
+        ]
+
+        def apply_fn(plan: IndexPlan) -> None:  # pragma: no cover
+            raise AssertionError("skip_* 不应触发 apply_fn")
+
+        outcomes = apply_plans(plans, apply_fn)
+        self.assertEqual([o.status for o in outcomes], ["skipped", "skipped"])
+        self.assertEqual(summarize_outcomes(outcomes)["skipped"], 2)
+        self.assertEqual(exit_code_for(outcomes), 0)
+
+    def test_dry_run_never_applies_and_marks_would_create(self):
+        plans = [self._create_plan("t1")]
+
+        def apply_fn(plan: IndexPlan) -> None:  # pragma: no cover
+            raise AssertionError("dry-run 不应执行 ALTER")
+
+        outcomes = apply_plans(plans, apply_fn, dry_run=True)
+        self.assertEqual(outcomes[0].status, "would_create")
+        self.assertEqual(summarize_outcomes(outcomes)["would_create"], 1)
+        self.assertEqual(exit_code_for(outcomes), 0)
+
+    def test_mixed_failure_and_refusal_exit_one(self):
+        plans = [
+            self._create_plan("t1"),
+            IndexPlan("t2", "note_id", "uk", "refuse_duplicates", duplicate_samples=[("y", 3)]),
+            self._create_plan("t3"),
+        ]
+
+        def apply_fn(plan: IndexPlan) -> None:
+            if plan.table == "t3":
+                raise OperationalError("ALTER ...", {}, Exception("boom"))
+
+        outcomes = apply_plans(plans, apply_fn)
+        counts = summarize_outcomes(outcomes)
+        self.assertEqual(counts["created"], 1)
+        self.assertEqual(counts["refused"], 1)
+        self.assertEqual(counts["failed"], 1)
+        self.assertEqual(exit_code_for(outcomes), 1)
 
 
 if __name__ == "__main__":

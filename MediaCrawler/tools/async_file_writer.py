@@ -29,20 +29,39 @@ from tools.words import AsyncWordCloudGenerator
 
 
 class _DedupGuard:
-    """进程内去重：同一 item_type 下相同 id（note_id/comment_id）只允许写入一次。
+    """进程内去重：同一 (platform, crawler_type, item_type, id) 只允许写入一次。
+
+    为什么用类级共享状态而不是实例级：store 工厂 create_store() 对每一个
+    note/comment 都会新建一个 store（进而新建 AsyncFileWriter，或取到 Excel 单例）。
+    若 _seen 挂在实例上，csv/json/jsonl 每写一条就是一个全新的空 guard，去重永远
+    失效（早期实现只有 Excel 因为走单例才碰巧生效）。改成类级 dict 后，同一进程内
+    所有实例共享去重状态，各存储后端行为一致，且与"一个爬取进程 = 一次 run"对齐。
+
+    键里带上 platform + crawler_type，避免不同平台 / 不同爬取类型之间串味
+    （例如 xhs 的 note_id 不该挡住 weibo 的同名 id）。
 
     id 提取优先级由 item_type 决定：评论项（"comments"）同时带着自己的
-    comment_id 和所属帖子的 note_id，如果无脑先取 note_id，会把同一帖子下的
-    所有评论都当成"重复"而漏写；因此评论优先取 comment_id，其余（主要是
-    "contents"）优先取 note_id。两个字段都取不到时不去重，直接放行——避免
-    误伤没有这两个字段的数据（比如 creators）。
+    comment_id 和所属帖子的 note_id，若先取 note_id 会把同一帖子下的所有评论
+    误判成重复而漏写；因此评论优先取 comment_id，其余（主要是 "contents"）
+    优先取 note_id。两个字段都取不到时不去重，直接放行——避免误伤没有这两个
+    字段的数据（比如 creators）。
 
-    只做进程内、单次运行范围的去重；跨进程/跨文件（比如断点续爬接着上次写）
-    不做，那需要全文件扫描，代价不划算，设计文档"范围外"已注明。
+    只做进程内、单次运行范围的去重；进程退出即清空。跨进程/跨文件去重不做
+    （需全文件扫描，代价不划算），设计文档"范围外"已注明。
     """
 
-    def __init__(self) -> None:
-        self._seen: set = set()
+    # 类级共享：键 = (platform, crawler_type, item_type, id)，进程生命周期
+    _seen: set = set()
+
+    def __init__(self, platform: str = "", crawler_type: str = "") -> None:
+        self._platform = platform
+        self._crawler_type = crawler_type
+
+    @classmethod
+    def reset(cls) -> None:
+        """清空全进程去重状态。生产环境无需调用（进程天然隔离一次 run），
+        主要供测试在用例之间还原这份跨实例共享的状态。"""
+        cls._seen.clear()
 
     @staticmethod
     def _extract_id(item_type: str, item: Dict) -> Optional[object]:
@@ -55,14 +74,14 @@ class _DedupGuard:
 
     def should_write(self, item_type: str, item: Dict) -> bool:
         """True = 应当写入（首次出现，或没有可用的 id 字段无法判断）；
-        False = 本次进程运行内已经写过同一 (item_type, id)，应当跳过。"""
+        False = 本次进程运行内已经写过同一键，应当跳过。"""
         item_id = self._extract_id(item_type, item)
         if item_id is None:
             return True
-        key = (item_type, item_id)
-        if key in self._seen:
+        key = (self._platform, self._crawler_type, item_type, item_id)
+        if key in _DedupGuard._seen:
             return False
-        self._seen.add(key)
+        _DedupGuard._seen.add(key)
         return True
 
 
@@ -72,7 +91,7 @@ class AsyncFileWriter:
         self.platform = platform
         self.crawler_type = crawler_type
         self.wordcloud_generator = AsyncWordCloudGenerator() if config.ENABLE_GET_WORDCLOUD else None
-        self._dedup_guard = _DedupGuard()
+        self._dedup_guard = _DedupGuard(platform, crawler_type)
 
     def _get_file_path(self, file_type: str, item_type: str) -> str:
         if config.SAVE_DATA_PATH:

@@ -34,6 +34,7 @@ except ImportError:
     EXCEL_AVAILABLE = False
 
 from store.excel_store_base import ExcelStoreBase
+from tools.async_file_writer import _DedupGuard
 
 
 @pytest.mark.skipif(not EXCEL_AVAILABLE, reason="openpyxl not installed")
@@ -44,8 +45,12 @@ class TestExcelStoreBase:
     def clear_singleton_state(self):
         """Clear singleton state before and after each test"""
         ExcelStoreBase._instances.clear()
+        # 去重状态现在是进程级共享的类属性；这些用例在同一 (platform, crawler_type)
+        # 下复用相同 note_id/comment_id，必须逐用例清空，否则第二个用例会被去重误跳过
+        _DedupGuard.reset()
         yield
         ExcelStoreBase._instances.clear()
+        _DedupGuard.reset()
 
     @pytest.fixture
     def temp_dir(self):
@@ -206,9 +211,12 @@ class TestSingletonPattern:
         monkeypatch.chdir(tmp_path)
         # Clear singleton instances before each test
         ExcelStoreBase._instances.clear()
+        # 同上：进程级去重状态也要逐用例清空
+        _DedupGuard.reset()
         yield
         # Cleanup after test
         ExcelStoreBase._instances.clear()
+        _DedupGuard.reset()
 
     def test_get_instance_returns_same_instance(self):
         """Test that get_instance returns the same instance for same parameters"""

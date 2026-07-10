@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env", override=True, interpolate=False)
 
 from sqlalchemy import inspect, text  # noqa: E402
+from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 
 from backend.database import engine  # noqa: E402
 
@@ -104,17 +105,68 @@ def _duplicate_samples_from_db(table: str, column: str) -> List[Tuple[object, in
     return [(row[0], row[1]) for row in rows]
 
 
-def _create_unique_index(plan: IndexPlan, dry_run: bool) -> None:
+@dataclass
+class ApplyOutcome:
+    plan: IndexPlan
+    status: str  # "created" | "would_create" | "skipped" | "refused" | "failed"
+    error: str = ""
+
+
+def apply_plans(
+    plans: List[IndexPlan],
+    apply_fn: Callable[[IndexPlan], None],
+    dry_run: bool = False,
+) -> List[ApplyOutcome]:
+    """按 plan 逐目标执行并归类结果。create 动作调用注入的 apply_fn 落地 ALTER。
+
+    健壮性关键：单张表的 ALTER 失败（SQLAlchemyError，如 1071 索引过长、1062
+    竞态插入产生的重复）不会中断整体——记为 failed 后继续处理其余目标，绝不让
+    异常逃出去打断后面的表、吞掉汇总。apply_fn 便于测试注入假实现，主流程注入
+    真正连库执行的 _alter_index。
+    """
+    outcomes: List[ApplyOutcome] = []
+    for plan in plans:
+        if plan.action in ("skip_missing_table", "skip_exists"):
+            outcomes.append(ApplyOutcome(plan, "skipped"))
+        elif plan.action == "refuse_duplicates":
+            outcomes.append(ApplyOutcome(plan, "refused"))
+        elif plan.action == "create":
+            if dry_run:
+                outcomes.append(ApplyOutcome(plan, "would_create"))
+                continue
+            try:
+                apply_fn(plan)
+            except SQLAlchemyError as exc:
+                outcomes.append(ApplyOutcome(plan, "failed", error=str(exc)))
+            else:
+                outcomes.append(ApplyOutcome(plan, "created"))
+        else:
+            raise ValueError(f"未知 action: {plan.action}")
+    return outcomes
+
+
+def summarize_outcomes(outcomes: List[ApplyOutcome]) -> dict:
+    counts = {"created": 0, "would_create": 0, "skipped": 0, "refused": 0, "failed": 0}
+    for outcome in outcomes:
+        counts[outcome.status] += 1
+    return counts
+
+
+def exit_code_for(outcomes: List[ApplyOutcome]) -> int:
+    """有任何目标失败或被拒绝 → 退出码 1，否则 0。"""
+    return 1 if any(o.status in ("failed", "refused") for o in outcomes) else 0
+
+
+def _alter_index(plan: IndexPlan) -> None:
+    """真正连库执行单条 ALTER（DDL 自动提交）。失败抛 SQLAlchemyError，交由 apply_plans 兜住。"""
     sql = f"ALTER TABLE {plan.table} ADD UNIQUE INDEX {plan.index_name} ({plan.column})"
-    if dry_run:
-        print(f"[dry-run] 将执行: {sql}")
-        return
     print(f"执行: {sql}")
     with engine.begin() as conn:
         conn.execute(text(sql))
 
 
-def _report(plan: IndexPlan, dry_run: bool) -> None:
+def _describe_plan(plan: IndexPlan, dry_run: bool) -> None:
+    """打印计划阶段的说明（跳过/拒绝/试运行预览）；create 的实际执行不在这里。"""
     if plan.action == "skip_missing_table":
         print(f"[跳过] {plan.table}: 表不存在，跳过")
     elif plan.action == "skip_exists":
@@ -123,10 +175,9 @@ def _report(plan: IndexPlan, dry_run: bool) -> None:
         print(f"[拒绝] {plan.table}.{plan.column}: 发现重复值，拒绝加唯一索引。重复样本：")
         for value, count in plan.duplicate_samples:
             print(f"    {plan.column} = {value!r} 重复 {count} 次")
-    elif plan.action == "create":
-        _create_unique_index(plan, dry_run)
-    else:
-        raise ValueError(f"未知 action: {plan.action}")
+    elif plan.action == "create" and dry_run:
+        sql = f"ALTER TABLE {plan.table} ADD UNIQUE INDEX {plan.index_name} ({plan.column})"
+        print(f"[dry-run] 将执行: {sql}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -149,20 +200,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     plans = plan_unique_indexes(existing_tables, index_map, _duplicate_samples_from_db)
 
-    counts = {"create": 0, "skip_missing_table": 0, "skip_exists": 0, "refuse_duplicates": 0}
     for plan in plans:
-        _report(plan, args.dry_run)
-        counts[plan.action] += 1
+        _describe_plan(plan, args.dry_run)
 
-    created = counts["create"]
-    skipped = counts["skip_missing_table"] + counts["skip_exists"]
-    refused = counts["refuse_duplicates"]
+    outcomes = apply_plans(plans, _alter_index, dry_run=args.dry_run)
+
+    for outcome in outcomes:
+        if outcome.status == "failed":
+            print(
+                f"[失败] {outcome.plan.table}.{outcome.plan.column}: "
+                f"ALTER 失败，已跳过并继续处理其余表：{outcome.error}"
+            )
+
+    counts = summarize_outcomes(outcomes)
     created_label = "would_create" if args.dry_run else "created"
-    print(f"完成：{created_label}={created} skipped={skipped} refused={refused}")
-    if refused:
-        print("存在被拒绝的表，请先人工核实/清理重复数据后再重新运行本脚本。")
+    created = counts["would_create"] if args.dry_run else counts["created"]
+    print(
+        f"完成：{created_label}={created} skipped={counts['skipped']} "
+        f"refused={counts['refused']} failed={counts['failed']}"
+    )
+    if counts["refused"]:
+        print("存在被拒绝的表（有重复值），请先人工核实/清理重复数据后再重新运行本脚本。")
+    if counts["failed"]:
+        print("存在 ALTER 失败的表（见上方 [失败] 明细），其余目标已照常处理；请排查后重跑。")
 
-    return 1 if refused else 0
+    return exit_code_for(outcomes)
 
 
 if __name__ == "__main__":

@@ -131,8 +131,10 @@ class WeiboDbStoreImplement(AbstractStore):
             # 并发竞态：另一协程刚插入同一 note_id，唯一约束兜底触发。
             # weibo 这里插入/更新共用一条路径、无独立 add_/update_ helper，
             # get_session() 已经在退出时 rollback 并重新抛出，这里在其外层兜住即可，
-            # 不再尝试复用同一 session 转 update（该 session 已随异常关闭）；
-            # 跳过本条，记录告警，避免中断整场爬取——下次重爬同一帖子会自然更新。
+            # 不再尝试复用同一 session 转 update（该 session 已随异常关闭）；跳过本条并告警。
+            # 注意：约束能触发说明这一行已经由竞态里的"赢家"写进库了——内容本身不丢；
+            # 被丢弃的只是本次这个"输家"里那点更新的互动量。且默认 WEIBO_SKIP_EXISTING_NOTES=True
+            # 时下一轮会跳过已入库帖子、不会重抓覆盖，所以别指望"下次重爬自然更新"。
             utils.logger.warning(
                 f"[WeiboDbStoreImplement.store_content] note_id={note_id} 写入唯一键冲突（并发竞态），已跳过本次写入"
             )
