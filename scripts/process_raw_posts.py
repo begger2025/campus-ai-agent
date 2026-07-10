@@ -354,7 +354,7 @@ def _print_result(result: ProcessResult, dry_run: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Process raw_posts into processed_posts")
     parser.add_argument("--limit", type=int, default=100)
-    parser.add_argument("--platform", action="append", choices=["xhs", "weibo", "tieba"])
+    parser.add_argument("--platform", action="append", choices=["xhs", "weibo", "tieba", "zhihu"])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--refresh",

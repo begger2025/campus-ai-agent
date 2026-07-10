@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import sys
 import unittest
+from unittest import mock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -247,6 +249,27 @@ class ProcessRefreshTest(unittest.TestCase):
         row = self.db.query(ProcessedPost).filter_by(raw_post_id=raw.id).one()
         self.assertEqual(row.like_count, 1)
         self.assertEqual(row.heat_score, 1.0)
+
+
+class ProcessRawPostsCliTest(unittest.TestCase):
+    """`main()` 的 argparse：`--platform zhihu` 必须被接受（不报 SystemExit）。"""
+
+    def test_platform_zhihu_is_accepted_by_argparse(self) -> None:
+        import scripts.process_raw_posts as prp
+
+        captured: dict = {}
+
+        def fake_process(**kwargs):
+            captured.update(kwargs)
+            return prp.ProcessResult()
+
+        with mock.patch.object(prp, "process_raw_posts", side_effect=fake_process), mock.patch.object(
+            sys, "argv", ["process_raw_posts.py", "--platform", "zhihu"]
+        ):
+            rc = prp.main()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured.get("platforms"), ["zhihu"])
 
 
 if __name__ == "__main__":
