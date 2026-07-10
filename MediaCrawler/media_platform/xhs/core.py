@@ -42,7 +42,7 @@ from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_window, select_with_exploration
 from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
-from tools.topic_scope import compose_topic_keyword, is_marketing_noise, matches_topic
+from tools.topic_scope import compose_topic_keyword, is_broad_keyword, is_marketing_noise, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import XiaoHongShuClient
@@ -867,6 +867,17 @@ class XiaoHongShuCrawler(AbstractCrawler):
             self._reset_detail_run_state()
             keyword = keyword.strip()
             if not keyword:
+                continue
+
+            # 宽泛词拦截（用原始词判定，需在主题限定组合之前）：裸主题词对过滤零区分力
+            if is_broad_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+            ) and not getattr(config, "ALLOW_BROAD_KEYWORDS", False):
+                utils.logger.warning(
+                    f"[XiaoHongShuCrawler.search] 宽泛词已跳过：{keyword}（设 ALLOW_BROAD_KEYWORDS=True 可放行）"
+                )
                 continue
 
             composed_keyword = compose_topic_keyword(

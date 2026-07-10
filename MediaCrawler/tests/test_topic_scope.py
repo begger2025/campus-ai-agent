@@ -16,7 +16,12 @@
 # 详细许可条款请参阅项目根目录下的LICENSE文件。
 # 使用本代码即表示您同意遵守上述原则和LICENSE中的所有条款。
 
-from tools.topic_scope import compose_topic_keyword, is_marketing_noise, matches_topic
+from tools.topic_scope import (
+    compose_topic_keyword,
+    is_broad_keyword,
+    is_marketing_noise,
+    matches_topic,
+)
 
 TERMS = ["中山大学", "中大", "sysu", "逸仙"]
 
@@ -85,3 +90,29 @@ class TestIsMarketingNoise:
 
     def test_none_rescue_terms_tolerated(self):
         assert is_marketing_noise(["驾校报名优惠"], NEGATIVE_TERMS, None)
+
+
+class TestIsBroadKeyword:
+    def test_equals_qualifier(self):
+        assert is_broad_keyword("中山大学", "中山大学", TERMS)
+        assert is_broad_keyword("  中山大学 ", "中山大学", TERMS)
+
+    def test_equals_any_relevance_term(self):
+        assert is_broad_keyword("中大", "中山大学", TERMS)
+        assert is_broad_keyword("SYSU", "中山大学", TERMS)  # 大小写不敏感
+
+    def test_whole_word_equality_not_substring(self):
+        # 整词相等而非子串：含相关词的具体词不算宽泛词
+        assert not is_broad_keyword("中山大学宿舍搬迁", "中山大学", TERMS)
+        assert not is_broad_keyword("中大食堂", "中山大学", TERMS)
+
+    def test_specific_keyword_passthrough(self):
+        assert not is_broad_keyword("宿舍空调", "中山大学", TERMS)
+
+    def test_empty_inputs_tolerated(self):
+        assert not is_broad_keyword("", "中山大学", TERMS)
+        assert not is_broad_keyword(None, "中山大学", TERMS)
+        assert not is_broad_keyword("宿舍空调", "", None)
+
+    def test_matches_qualifier_even_without_terms(self):
+        assert is_broad_keyword("中山大学", "中山大学", None)

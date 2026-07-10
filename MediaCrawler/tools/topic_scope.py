@@ -66,6 +66,26 @@ def matches_topic(texts: Iterable[Any], relevance_terms: Optional[Iterable[str]]
     return False
 
 
+def is_broad_keyword(
+    keyword: Any,
+    qualifier: Optional[str],
+    relevance_terms: Optional[Iterable[str]] = None,
+) -> bool:
+    """裸主题词判定：strip+lower 后与限定词或任一相关词整词相等（非子串）→ 宽泛词。
+
+    宽泛词（如裸"中山大学"）对主题过滤零区分力，营销/招生/旅游内容会全数入库；
+    面板产出的词天然不触发（planner 已过滤），拦的是手输场景。
+    """
+
+    normalized = str(keyword or "").strip().lower()
+    if not normalized:
+        return False
+    qualifier = str(qualifier or "").strip().lower()
+    if qualifier and normalized == qualifier:
+        return True
+    return normalized in _normalized_terms(relevance_terms)
+
+
 def is_marketing_noise(
     texts: Iterable[Any],
     negative_terms: Optional[Iterable[str]],
