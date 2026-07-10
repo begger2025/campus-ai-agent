@@ -46,7 +46,7 @@ from tools.cdp_browser import CDPBrowserManager
 from tools.crawl_quota import should_fetch_next_page
 from tools.publish_time_window import is_within_window, parse_window
 from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
-from tools.topic_scope import compose_topic_keyword, matches_topic
+from tools.topic_scope import compose_topic_keyword, is_marketing_noise, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import WeiboClient
@@ -217,6 +217,7 @@ class WeiboCrawler(AbstractCrawler):
                     note_list = await self.batch_get_notes_full_text(note_list)
                     page_resolved_ts: List[int] = []
                     topic_filtered_count = 0
+                    marketing_filtered_count = 0
                     surviving_items: List[Tuple[Dict, Dict]] = []  # (note_item, mblog) that passed window/topic filters
                     for note_item in note_list:
                         if note_item:
@@ -240,10 +241,20 @@ class WeiboCrawler(AbstractCrawler):
                                 ):
                                     topic_filtered_count += 1
                                     continue
+                                # 营销内容负面词表（第三道防线）：命中负面词且无救回词的推广内容不入库
+                                if getattr(config, "ENABLE_TOPIC_NEGATIVE_FILTER", False) and is_marketing_noise(
+                                    [(mblog or {}).get("text") or (mblog or {}).get("content") or ""],
+                                    getattr(config, "TOPIC_NEGATIVE_TERMS", []),
+                                    getattr(config, "TOPIC_NEGATIVE_RESCUE_TERMS", []),
+                                ):
+                                    marketing_filtered_count += 1
+                                    continue
                                 surviving_items.append((note_item, mblog))
 
                     if topic_filtered_count:
                         utils.logger.info(f"[WeiboCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的微博")
+                    if marketing_filtered_count:
+                        utils.logger.info(f"[WeiboCrawler.search] 营销内容过滤：跳过 {marketing_filtered_count} 条")
 
                     # 爬取阶段跳过已入库帖子（省请求额度，仿小红书 XHS_SKIP_EXISTING_NOTE_DETAILS）：
                     # 必须在窗口/主题过滤之后、入库与评论抓取之前。page_resolved_ts 已在上面的过滤循环里

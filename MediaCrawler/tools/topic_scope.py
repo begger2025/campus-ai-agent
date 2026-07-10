@@ -64,3 +64,30 @@ def matches_topic(texts: Iterable[Any], relevance_terms: Optional[Iterable[str]]
         if any(term in lowered for term in terms):
             return True
     return False
+
+
+def is_marketing_noise(
+    texts: Iterable[Any],
+    negative_terms: Optional[Iterable[str]],
+    rescue_terms: Optional[Iterable[str]] = None,
+) -> bool:
+    """任一文本命中任一负面词 且 所有文本均未命中任何救回词 → 营销噪声。
+
+    救回词（投诉/维权/避雷等）优先：投诉这些机构本身是真舆情，不过滤；
+    负面词表为空时直通。大小写不敏感子串匹配。
+    """
+
+    negatives = _normalized_terms(negative_terms)
+    if not negatives:
+        return False
+    rescues = _normalized_terms(rescue_terms)
+    hit_negative = False
+    for text in texts or []:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            continue
+        if any(term in lowered for term in rescues):
+            return False
+        if any(term in lowered for term in negatives):
+            hit_negative = True
+    return hit_negative

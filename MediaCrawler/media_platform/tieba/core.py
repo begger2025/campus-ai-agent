@@ -43,7 +43,7 @@ from tools.cdp_browser import CDPBrowserManager
 from tools.crawl_quota import should_fetch_next_page
 from tools.publish_time_window import is_within_window, parse_tieba_publish_time_ms, parse_window
 from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
-from tools.topic_scope import compose_topic_keyword, matches_topic
+from tools.topic_scope import compose_topic_keyword, is_marketing_noise, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import BaiduTieBaClient
@@ -237,7 +237,9 @@ class TieBaCrawler(AbstractCrawler):
                         kept_notes: List[TiebaNote] = []
                         window_filtered_count = 0
                         topic_filtered_count = 0
+                        marketing_filtered_count = 0
                         topic_filter_enabled = getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False)
+                        negative_filter_enabled = getattr(config, "ENABLE_TOPIC_NEGATIVE_FILTER", False)
                         for note in notes_list:
                             if window_enabled:
                                 ts_ms = parse_tieba_publish_time_ms(note.publish_time)
@@ -252,6 +254,14 @@ class TieBaCrawler(AbstractCrawler):
                             ):
                                 topic_filtered_count += 1
                                 continue
+                            # 营销内容负面词表（第三道防线）：命中负面词且无救回词的推广内容不入库
+                            if negative_filter_enabled and is_marketing_noise(
+                                [note.title, note.desc, note.tieba_name],
+                                getattr(config, "TOPIC_NEGATIVE_TERMS", []),
+                                getattr(config, "TOPIC_NEGATIVE_RESCUE_TERMS", []),
+                            ):
+                                marketing_filtered_count += 1
+                                continue
                             kept_notes.append(note)
                         if window_filtered_count:
                             utils.logger.info(
@@ -260,6 +270,10 @@ class TieBaCrawler(AbstractCrawler):
                         if topic_filtered_count:
                             utils.logger.info(
                                 f"[TieBaCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的帖子"
+                            )
+                        if marketing_filtered_count:
+                            utils.logger.info(
+                                f"[TieBaCrawler.search] 营销内容过滤：跳过 {marketing_filtered_count} 条"
                             )
                         notes_list = kept_notes
 

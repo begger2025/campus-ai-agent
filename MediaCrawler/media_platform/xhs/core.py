@@ -42,7 +42,7 @@ from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_window, select_with_exploration
 from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
-from tools.topic_scope import compose_topic_keyword, matches_topic
+from tools.topic_scope import compose_topic_keyword, is_marketing_noise, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import XiaoHongShuClient
@@ -1000,19 +1000,21 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         stored_note_ids: List[str] = []
                         store_failed_note_ids: List[str] = []
                         topic_filtered_count = 0
+                        marketing_filtered_count = 0
                         for note_detail in note_details:
                             if note_detail:
                                 note_id = note_detail.get("note_id", "")
                                 if note_id:
                                     note_detail["_search_publish_time_raw"] = search_publish_time_hints.get(note_id, "")
 
+                                # 主题过滤与营销过滤共用同一组判定文本（标题+正文+标签）
+                                tag_names = []
+                                for tag_item in note_detail.get("tag_list") or []:
+                                    if isinstance(tag_item, dict):
+                                        tag_names.append(str(tag_item.get("name") or ""))
+                                    else:
+                                        tag_names.append(str(tag_item))
                                 if getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False):
-                                    tag_names = []
-                                    for tag_item in note_detail.get("tag_list") or []:
-                                        if isinstance(tag_item, dict):
-                                            tag_names.append(str(tag_item.get("name") or ""))
-                                        else:
-                                            tag_names.append(str(tag_item))
                                     if not matches_topic(
                                         [note_detail.get("title"), note_detail.get("desc"), *tag_names],
                                         getattr(config, "TOPIC_RELEVANCE_TERMS", []),
@@ -1022,6 +1024,18 @@ class XiaoHongShuCrawler(AbstractCrawler):
                                             f"[XiaoHongShuCrawler.search] 主题过滤：跳过与主题无关的笔记 {note_id}"
                                         )
                                         continue
+
+                                # 营销内容负面词表（第三道防线）：命中负面词且无救回词的推广内容不入库
+                                if getattr(config, "ENABLE_TOPIC_NEGATIVE_FILTER", False) and is_marketing_noise(
+                                    [note_detail.get("title"), note_detail.get("desc"), *tag_names],
+                                    getattr(config, "TOPIC_NEGATIVE_TERMS", []),
+                                    getattr(config, "TOPIC_NEGATIVE_RESCUE_TERMS", []),
+                                ):
+                                    marketing_filtered_count += 1
+                                    utils.logger.info(
+                                        f"[XiaoHongShuCrawler.search] 营销内容过滤：跳过笔记 {note_id}"
+                                    )
+                                    continue
 
                                 try:
                                     await xhs_store.update_xhs_note(note_detail)
@@ -1053,6 +1067,10 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         if topic_filtered_count:
                             utils.logger.info(
                                 f"[XiaoHongShuCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的笔记"
+                            )
+                        if marketing_filtered_count:
+                            utils.logger.info(
+                                f"[XiaoHongShuCrawler.search] 营销内容过滤：跳过 {marketing_filtered_count} 条"
                             )
                         page += 1
                         utils.logger.info(
