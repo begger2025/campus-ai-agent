@@ -55,6 +55,14 @@ class NormalizeXhsTagListTest(unittest.TestCase):
         self.assertEqual(normalize_xhs_tag_list(None), [])
         self.assertEqual(normalize_xhs_tag_list("null"), [])
 
+    def test_legacy_json_quoted_comma_string(self) -> None:
+        # 2026-06 存量数据形状：json.dumps 的逗号分隔字符串
+        raw = json.dumps("中山大学,中大破冰, 校园活动", ensure_ascii=False)
+        self.assertEqual(normalize_xhs_tag_list(raw), ["中山大学", "中大破冰", "校园活动"])
+
+    def test_json_quoted_single_tag_string(self) -> None:
+        self.assertEqual(normalize_xhs_tag_list('"中山大学"'), ["中山大学"])
+
 
 class MapperTagsTest(unittest.TestCase):
     def test_map_xhs_normalizes_dict_tags(self) -> None:
@@ -176,6 +184,21 @@ class BackfillTagsTest(unittest.TestCase):
         result = backfill_tags(self.db)
         self.assertEqual(result.updated, 0)
         self.assertEqual(result.scanned, 1)
+
+    def test_xhs_recovers_tags_from_raw_json_after_wipe(self) -> None:
+        # 上一轮回填把 tags_json 清空了；必须能从 raw_json 里的原始 tag_list 恢复
+        from scripts.backfill_tags import backfill_tags
+
+        raw_row = {"tag_list": json.dumps("中山大学,中大破冰", ensure_ascii=False)}
+        self._add_pair(1, "xhs", tags_json="", raw_json=json.dumps(raw_row, ensure_ascii=False))
+        self.db.commit()
+
+        result = backfill_tags(self.db)
+        self.db.commit()
+
+        self.assertEqual(result.updated, 1)
+        raw = self.db.query(RawPost).one()
+        self.assertEqual(json.loads(raw.tags_json), ["中山大学", "中大破冰"])
 
 
 if __name__ == "__main__":

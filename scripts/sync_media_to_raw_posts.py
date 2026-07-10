@@ -122,6 +122,9 @@ def normalize_xhs_tag_list(tag_list: Any) -> list[str]:
             tag_list = json.loads(tag_list)
         except (TypeError, ValueError):
             return []
+    if isinstance(tag_list, str):
+        # 旧版爬虫形状：json.dumps 过的逗号分隔字符串（"中山大学,中大破冰"）
+        tag_list = [part for part in tag_list.split(",")]
     if not isinstance(tag_list, list):
         return []
     names: list[str] = []

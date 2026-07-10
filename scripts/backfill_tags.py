@@ -35,7 +35,12 @@ class BackfillResult:
 
 def _target_tags(raw: RawPost) -> list[str]:
     if raw.platform == "xhs":
-        return normalize_xhs_tag_list(raw.tags_json)
+        # 优先用 raw_json 里的原始 tag_list（tags_json 可能已被早期回填误清空）
+        try:
+            raw_row = json.loads(raw.raw_json or "{}")
+        except (TypeError, ValueError):
+            raw_row = {}
+        return normalize_xhs_tag_list(raw_row.get("tag_list") or raw.tags_json)
     if raw.platform == "weibo":
         return extract_weibo_topics(raw.content)
     if raw.platform == "tieba":
