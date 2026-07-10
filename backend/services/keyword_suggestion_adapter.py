@@ -83,8 +83,11 @@ def _load_crawler_history(
         if previous is None or crawled_at > previous:
             crawled_at_by_keyword[keyword] = crawled_at
         latest = latest_run_by_keyword.get(keyword)
-        if latest is None or effective_ms > latest[0]:
-            latest_run_by_keyword[keyword] = (effective_ms, items_stored or 0)
+        # 时间并列时按 items_stored 大者优先：同一时刻既有零产出又有有产出记录，
+        # 不判贫瘠（宁可少降权也不误伤），且结果与行序无关
+        candidate = (effective_ms, items_stored or 0)
+        if latest is None or candidate > latest:
+            latest_run_by_keyword[keyword] = candidate
 
     barren = {kw for kw, (_, stored) in latest_run_by_keyword.items() if stored == 0}
     return barren, crawled_at_by_keyword

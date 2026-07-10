@@ -209,6 +209,52 @@ class CrawlerRunHistoryBarrenTest(unittest.TestCase):
         )
         self.assertIn("2天前爬过", by_kw["食堂"]["reason"])
 
+    def test_tied_finished_at_prefers_run_with_output(self) -> None:
+        """同毫秒完成的两次 run（零产出 + 有产出）→ 不判贫瘠，且与插入顺序无关。"""
+        finished = _ms(NOW - timedelta(days=2))
+        stored_by_platform = {"tieba": 0, "wb": 3}
+        for order in (("tieba", "wb"), ("wb", "tieba")):
+            with self.subTest(order=order):
+                db = make_session_factory()()
+                try:
+                    db.execute(text(_HISTORY_DDL))
+                    db.add(
+                        ChatQueryLog(
+                            user_id="7",
+                            message="空调维修怎么样",
+                            intent="opinion_answer",
+                            keyword="空调维修",
+                            hit_count=0,
+                            created_at=NOW - timedelta(days=1),
+                        )
+                    )
+                    for platform in order:
+                        db.execute(
+                            text(
+                                "INSERT INTO crawler_run_history "
+                                "(platform, source_keyword, started_at, finished_at, pages_fetched, items_seen, items_stored, stop_reason) "
+                                "VALUES (:platform, :kw, :started, :finished, 1, 10, :stored, 'completed')"
+                            ),
+                            {
+                                "platform": platform,
+                                "kw": "空调维修",
+                                "started": finished - 60_000,
+                                "finished": finished,
+                                "stored": stored_by_platform[platform],
+                            },
+                        )
+                    db.commit()
+
+                    data = get_keyword_suggestions(db, now=NOW)
+                    suggestion = data["suggestions"][0]
+
+                    # 有产出优先打破平局：不贫瘠，只按常规爬过降权（8.0×0.3=2.4）
+                    self.assertEqual(data["meta"]["barren_count"], 0)
+                    self.assertNotIn("无相关内容", suggestion["reason"])
+                    self.assertAlmostEqual(suggestion["score"], 2.4, places=1)
+                finally:
+                    db.close()
+
     def test_out_of_window_history_is_ignored(self) -> None:
         self._ask("空调维修")
         self._run("空调维修", finished_days_ago=20, items_stored=0)
