@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Optional
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from .database import Base
 
@@ -63,7 +64,7 @@ class EvidenceQuery(Base):
 class EvidenceDocument(Base):
     __tablename__ = "evidence_documents"
     __table_args__ = (
-        UniqueConstraint("source_type", "canonical_url", name="uq_evidence_documents_source_canonical"),
+        UniqueConstraint("canonical_url_hash", name="uq_evidence_documents_canonical_url_hash"),
         Index("ix_evidence_documents_domain_fetched", "domain", "fetched_at"),
     )
 
@@ -71,7 +72,12 @@ class EvidenceDocument(Base):
     query_id: Mapped[Optional[int]] = mapped_column(ForeignKey("evidence_queries.id"), index=True)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
-    canonical_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    canonical_url: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_url_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="SHA-256 hex digest of canonical_url; callers must supply 64 hexadecimal characters.",
+    )
     domain: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     document_type: Mapped[Optional[str]] = mapped_column(String(64))
     title: Mapped[Optional[str]] = mapped_column(Text)
@@ -83,6 +89,14 @@ class EvidenceDocument(Base):
 
     query: Mapped[Optional[EvidenceQuery]] = relationship(back_populates="documents")
     items: Mapped[list["EvidenceItem"]] = relationship(back_populates="document")
+
+    @validates("canonical_url_hash")
+    def validate_canonical_url_hash(self, _key: str, value: str) -> str:
+        """Require the caller-provided SHA-256 canonical URL digest."""
+
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+            raise ValueError("canonical_url_hash must be a 64-character hexadecimal SHA-256 digest")
+        return value.lower()
 
 
 class EvidenceItem(Base):
@@ -96,7 +110,12 @@ class EvidenceItem(Base):
     run_id: Mapped[int] = mapped_column(ForeignKey("evidence_runs.id"), nullable=False, index=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("evidence_documents.id"), nullable=False, index=True)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
-    canonical_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    canonical_url: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_url_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="SHA-256 hex digest of canonical_url retained for delivery auditability.",
+    )
     source_domain: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -118,6 +137,14 @@ class EvidenceItem(Base):
     run: Mapped[EvidenceRun] = relationship(back_populates="items")
     document: Mapped[EvidenceDocument] = relationship(back_populates="items")
     verifications: Mapped[list["EvidenceVerification"]] = relationship(back_populates="item", cascade="all, delete-orphan")
+
+    @validates("canonical_url_hash")
+    def validate_canonical_url_hash(self, _key: str, value: str) -> str:
+        """Require the caller-provided SHA-256 canonical URL digest."""
+
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+            raise ValueError("canonical_url_hash must be a 64-character hexadecimal SHA-256 digest")
+        return value.lower()
 
 
 class EvidenceVerification(Base):
