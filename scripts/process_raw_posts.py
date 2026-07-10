@@ -32,6 +32,7 @@ class ProcessResult:
     skipped_duplicate: int = 0
     skipped_empty: int = 0
     failed: int = 0
+    refreshed: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -213,6 +214,35 @@ def _to_processed(raw: RawPost) -> ProcessedPost:
     )
 
 
+# 互动量 + 热度：注意点 3 的 --refresh 只重算这五个字段，情绪/风险/标签等分析字段不动
+# （成本高、多为 LLM 相关，交给独立的分析流程）。
+REFRESHABLE_FIELDS = ("like_count", "collect_count", "comment_count", "share_count")
+
+
+def _refresh_processed_posts(db: Session, platforms: Iterable[str] | None = None) -> int:
+    """对已存在的 processed_posts 行，从其 raw_post 重算互动量与 heat_score（复用 calculate_heat_score）。"""
+
+    query = db.query(ProcessedPost)
+    platform_list = [item for item in platforms or [] if item]
+    if platform_list:
+        query = query.filter(ProcessedPost.platform.in_(platform_list))
+
+    refreshed = 0
+    for processed in query.all():
+        raw = processed.raw_post
+        if raw is None:
+            continue
+        new_values = {field_name: getattr(raw, field_name) or 0 for field_name in REFRESHABLE_FIELDS}
+        new_values["heat_score"] = calculate_heat_score(**new_values)
+        changed = any(getattr(processed, field_name) != value for field_name, value in new_values.items())
+        if not changed:
+            continue
+        for field_name, value in new_values.items():
+            setattr(processed, field_name, value)
+        refreshed += 1
+    return refreshed
+
+
 def _candidate_query(db: Session, platforms: Iterable[str] | None = None):
     processed_raw_ids = db.query(ProcessedPost.raw_post_id)
     query = (
@@ -227,11 +257,57 @@ def _candidate_query(db: Session, platforms: Iterable[str] | None = None):
     return query
 
 
+def _process_raw_posts(
+    db: Session,
+    *,
+    limit: int | None,
+    platforms: Iterable[str] | None,
+    dry_run: bool,
+    refresh: bool = False,
+) -> ProcessResult:
+    """核心处理逻辑：只依赖传入的 db session，不碰 init_db/SessionLocal，便于单测注入内存库。"""
+
+    result = ProcessResult()
+    query = _candidate_query(db, platforms)
+    if limit and limit > 0:
+        query = query.limit(limit)
+    rows = query.all()
+    result.scanned = len(rows)
+
+    for raw in rows:
+        try:
+            title = _title_from_raw(raw)
+            content = _content_from_raw(raw)
+            if not title and not content:
+                result.skipped_empty += 1
+                continue
+            exists = (
+                db.query(ProcessedPost)
+                .filter(ProcessedPost.raw_post_id == raw.id)
+                .first()
+            )
+            if exists:
+                result.skipped_duplicate += 1
+                continue
+            if not dry_run:
+                db.add(_to_processed(raw))
+            result.inserted += 1
+        except Exception as exc:
+            result.failed += 1
+            result.errors.append(str(exc))
+
+    if refresh:
+        result.refreshed = _refresh_processed_posts(db, platforms)
+
+    return result
+
+
 def process_raw_posts(
     *,
     limit: int | None = 100,
     platforms: Iterable[str] | None = None,
     dry_run: bool = False,
+    refresh: bool = False,
     record_task: bool | None = None,
     created_by: str = "system",
 ) -> ProcessResult:
@@ -243,36 +319,9 @@ def process_raw_posts(
     if _should_record_task(dry_run, record_task):
         task_id = _create_task_record(platforms=platforms, created_by=created_by)
 
-    result = ProcessResult()
     db = SessionLocal()
     try:
-        query = _candidate_query(db, platforms)
-        if limit and limit > 0:
-            query = query.limit(limit)
-        rows = query.all()
-        result.scanned = len(rows)
-
-        for raw in rows:
-            try:
-                title = _title_from_raw(raw)
-                content = _content_from_raw(raw)
-                if not title and not content:
-                    result.skipped_empty += 1
-                    continue
-                exists = (
-                    db.query(ProcessedPost)
-                    .filter(ProcessedPost.raw_post_id == raw.id)
-                    .first()
-                )
-                if exists:
-                    result.skipped_duplicate += 1
-                    continue
-                if not dry_run:
-                    db.add(_to_processed(raw))
-                result.inserted += 1
-            except Exception as exc:
-                result.failed += 1
-                result.errors.append(str(exc))
+        result = _process_raw_posts(db, limit=limit, platforms=platforms, dry_run=dry_run, refresh=refresh)
 
         if not dry_run:
             db.commit()
@@ -295,6 +344,7 @@ def _print_result(result: ProcessResult, dry_run: bool) -> None:
         f"inserted={result.inserted} "
         f"skipped_duplicate={result.skipped_duplicate} "
         f"skipped_empty={result.skipped_empty} "
+        f"refreshed={result.refreshed} "
         f"failed={result.failed}"
     )
     for error in result.errors[:5]:
@@ -306,12 +356,18 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--platform", action="append", choices=["xhs", "weibo", "tieba"])
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="对已存在的 processed_posts 行重新计算互动量与热度（默认不刷新）",
+    )
     args = parser.parse_args()
 
     result = process_raw_posts(
         limit=args.limit,
         platforms=args.platform,
         dry_run=args.dry_run,
+        refresh=args.refresh,
     )
     _print_result(result, args.dry_run)
     return 1 if result.failed else 0

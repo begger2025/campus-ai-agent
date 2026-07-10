@@ -41,6 +41,7 @@ class PlatformSyncStats:
     platform: str
     scanned: int = 0
     inserted: int = 0
+    updated: int = 0
     skipped_duplicate: int = 0
     failed: int = 0
     errors: list[str] = field(default_factory=list)
@@ -57,6 +58,10 @@ class SyncResult:
     @property
     def total_inserted(self) -> int:
         return sum(item.inserted for item in self.results)
+
+    @property
+    def total_updated(self) -> int:
+        return sum(item.updated for item in self.results)
 
     @property
     def total_skipped_duplicate(self) -> int:
@@ -543,11 +548,16 @@ def _read_json_records(path: Path) -> list[dict[str, Any]]:
     return []
 
 
+# 互动量字段：注意点 3 的 --refresh 只碰这四个，标题/正文/标签/发布时间等一律不动。
+ENGAGEMENT_FIELDS = ("like_count", "collect_count", "comment_count", "share_count")
+
+
 def _insert_payloads(
     db: Session,
     platform: str,
     payloads: list[dict[str, Any]],
     dry_run: bool,
+    refresh: bool = False,
 ) -> PlatformSyncStats:
     stats = PlatformSyncStats(platform=platform, scanned=len(payloads))
     for payload in payloads:
@@ -561,7 +571,20 @@ def _insert_payloads(
                 .first()
             )
             if exists:
-                stats.skipped_duplicate += 1
+                if refresh:
+                    changed = False
+                    for field_name in ENGAGEMENT_FIELDS:
+                        new_value = payload[field_name]
+                        if getattr(exists, field_name) != new_value:
+                            changed = True
+                            if not dry_run:
+                                setattr(exists, field_name, new_value)
+                    if changed:
+                        stats.updated += 1
+                    else:
+                        stats.skipped_duplicate += 1
+                else:
+                    stats.skipped_duplicate += 1
                 continue
             if not dry_run:
                 db.add(RawPost(**payload))
@@ -581,6 +604,7 @@ def sync_media_to_raw_posts(
     platforms: Iterable[str] | None = None,
     limit: int | None = None,
     dry_run: bool = False,
+    refresh: bool = False,
     record_task: bool | None = None,
     created_by: str = "system",
 ) -> SyncResult:
@@ -604,7 +628,7 @@ def sync_media_to_raw_posts(
             rows = _fetch_platform_rows(platform, limit)
             mapper = MAPPER_BY_PLATFORM[platform]
             payloads = [mapper(row) for row in rows]
-            result.results.append(_insert_payloads(db, platform, payloads, dry_run))
+            result.results.append(_insert_payloads(db, platform, payloads, dry_run, refresh=refresh))
         _finish_task_record(task_id, result)
     except Exception as exc:
         _fail_task_record(task_id, exc)
@@ -621,6 +645,7 @@ def sync_json_to_raw_posts(
     source_table: str | None = None,
     limit: int | None = None,
     dry_run: bool = False,
+    refresh: bool = False,
     record_task: bool | None = None,
     created_by: str = "system",
 ) -> SyncResult:
@@ -652,7 +677,7 @@ def sync_json_to_raw_posts(
     ]
     db = SessionLocal()
     try:
-        stats = _insert_payloads(db, platform, payloads, dry_run)
+        stats = _insert_payloads(db, platform, payloads, dry_run, refresh=refresh)
         result = SyncResult(results=[stats])
         _finish_task_record(task_id, result)
         return result
@@ -671,6 +696,7 @@ def _print_result(result: SyncResult, dry_run: bool) -> None:
             f"platform={stats.platform} "
             f"scanned={stats.scanned} "
             f"inserted={stats.inserted} "
+            f"updated={stats.updated} "
             f"skipped_duplicate={stats.skipped_duplicate} "
             f"failed={stats.failed}"
         )
@@ -680,6 +706,7 @@ def _print_result(result: SyncResult, dry_run: bool) -> None:
         "total "
         f"scanned={result.total_scanned} "
         f"inserted={result.total_inserted} "
+        f"updated={result.total_updated} "
         f"skipped_duplicate={result.total_skipped_duplicate} "
         f"failed={result.total_failed}"
     )
@@ -697,6 +724,11 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-path", type=Path)
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="命中已存在的行时刷新互动量字段（默认跳过不更新）",
+    )
     args = parser.parse_args()
 
     if args.json_path:
@@ -708,6 +740,7 @@ def main() -> int:
             platform=platform,
             limit=args.limit,
             dry_run=args.dry_run,
+            refresh=args.refresh,
         )
     else:
         platforms = args.platform or ["all"]
@@ -717,6 +750,7 @@ def main() -> int:
             platforms=platforms,
             limit=args.limit,
             dry_run=args.dry_run,
+            refresh=args.refresh,
         )
 
     _print_result(result, args.dry_run)
