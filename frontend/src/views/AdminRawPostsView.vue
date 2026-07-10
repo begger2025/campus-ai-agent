@@ -207,6 +207,7 @@ onMounted(() => reload(1))
 .source-xhs { background: #fff1f2; color: #be123c; }
 .source-weibo { background: #fff7ed; color: #c2410c; }
 .source-tieba { background: #eff6ff; color: #1d4ed8; }
+.source-zhihu { background: #f0f9ff; color: #0369a1; }
 
 .post-detail {
   display: flex;
