@@ -174,8 +174,9 @@ class TieBaCrawler(AbstractCrawler):
                 jitter = random.randint(1, int(getattr(config, "SEARCH_START_PAGE_JITTER_MAX", 1)))
                 keyword_start_page += jitter
                 utils.logger.info(f"[TieBaCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
+            # 配额锚定到偏移后的起始页：偏移平移翻页窗口而非烧掉配额（jitter=0 时与原行为等价）
             while (
-                page - start_page + 1
+                page - keyword_start_page + 1
             ) * tieba_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
                 if page < keyword_start_page:
                     utils.logger.info(f"[BaiduTieBaCrawler.search] Skip page {page}")

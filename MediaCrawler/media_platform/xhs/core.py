@@ -918,6 +918,8 @@ class XiaoHongShuCrawler(AbstractCrawler):
                             for post_item in selected_note_items
                         }
 
+                        # 注意：停止页上可能仍有因 keep_unknown 而入选的候选（发布时间解析不出的帖子），
+                        # 此处 break 会连同它们一并放弃——按"尽力而为"语义处理，不再为其单独发详情请求。
                         if (
                             window_enabled
                             and config.SORT_TYPE == "time_descending"
