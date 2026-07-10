@@ -410,7 +410,7 @@ class TiebaCreator(Base):
 class ZhihuContent(Base):
     __tablename__ = 'zhihu_content'
     id = Column(Integer, primary_key=True, comment='主键ID')
-    content_id = Column(String(64), index=True, comment='内容ID')
+    content_id = Column(String(64), unique=True, index=True, comment='内容ID')
     content_type = Column(Text, comment='内容类型')
     content_text = Column(Text, comment='内容文本')
     content_url = Column(Text, comment='内容URL')
@@ -438,7 +438,7 @@ class ZhihuContent(Base):
 class ZhihuComment(Base):
     __tablename__ = 'zhihu_comment'
     id = Column(Integer, primary_key=True, comment='主键ID')
-    comment_id = Column(String(64), index=True, comment='评论ID')
+    comment_id = Column(String(64), unique=True, index=True, comment='评论ID')
     parent_comment_id = Column(String(64), comment='父评论ID')
     content = Column(Text, comment='评论内容')
     publish_time = Column(String(32), index=True, comment='发布时间')

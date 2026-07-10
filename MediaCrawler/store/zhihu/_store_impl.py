@@ -27,10 +27,11 @@ import csv
 import json
 import os
 import pathlib
-from typing import Dict
+from typing import Dict, List, Set
 
 import aiofiles
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
@@ -117,6 +118,20 @@ class ZhihuDbStoreImplement(AbstractStore):
                     content_item["add_ts"] = utils.get_current_timestamp()
                 new_content = ZhihuContent(**content_item)
                 session.add(new_content)
+                try:
+                    # 立即 flush 让唯一约束冲突在 try/except 范围内抛出（仿 xhs 自愈模式），
+                    # 而不是等 commit 时才触发
+                    await session.flush()
+                except IntegrityError:
+                    # 并发竞态：另一协程刚插入同一 content_id；唯一约束兜底，这里退化为更新
+                    await session.rollback()
+                    stmt = select(ZhihuContent).where(ZhihuContent.content_id == content_id)
+                    result = await session.execute(stmt)
+                    existing_content = result.scalars().first()
+                    if existing_content:
+                        for key, value in content_item.items():
+                            if hasattr(existing_content, key):
+                                setattr(existing_content, key, value)
             await session.commit()
 
     async def store_comment(self, comment_item: Dict):
@@ -139,7 +154,40 @@ class ZhihuDbStoreImplement(AbstractStore):
                     comment_item["add_ts"] = utils.get_current_timestamp()
                 new_comment = ZhihuComment(**comment_item)
                 session.add(new_comment)
+                try:
+                    # 立即 flush 让唯一约束冲突在 try/except 范围内抛出（仿 xhs 自愈模式）
+                    await session.flush()
+                except IntegrityError:
+                    # 并发竞态：另一协程刚插入同一 comment_id；唯一约束兜底，这里退化为更新
+                    await session.rollback()
+                    stmt = select(ZhihuComment).where(ZhihuComment.comment_id == comment_id)
+                    result = await session.execute(stmt)
+                    existing_comment = result.scalars().first()
+                    if existing_comment:
+                        for key, value in comment_item.items():
+                            if hasattr(existing_comment, key):
+                                setattr(existing_comment, key, value)
             await session.commit()
+
+    async def batch_get_existing_note_ids(self, note_ids: List[str]) -> Set[str]:
+        normalized_note_ids = {
+            str(note_id).strip()
+            for note_id in note_ids
+            if str(note_id).strip()
+        }
+        if not normalized_note_ids:
+            return set()
+
+        async with get_session() as session:
+            stmt = select(ZhihuContent.content_id).where(
+                ZhihuContent.content_id.in_(list(normalized_note_ids))
+            )
+            result = await session.execute(stmt)
+            return {
+                str(content_id).strip()
+                for content_id in result.scalars().all()
+                if str(content_id).strip()
+            }
 
     async def store_creator(self, creator: Dict):
         """

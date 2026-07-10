@@ -19,7 +19,7 @@
 
 
 # -*- coding: utf-8 -*-
-from typing import List
+from typing import List, Set
 
 import config
 from base.base_crawler import AbstractStore
@@ -53,6 +53,35 @@ class ZhihuStoreFactory:
         if not store_class:
             raise ValueError("[ZhihuStoreFactory.create_store] Invalid save option only supported csv or db or json or sqlite or mongodb or excel ...")
         return store_class()
+
+async def batch_get_existing_note_ids(note_ids: List[str]) -> Set[str]:
+    """批量查询已入库的知乎内容 ID；非 db 系存储优雅降级返回空集（仿贴吧/小红书模式）。"""
+    normalized_note_ids = list(
+        {
+            str(note_id).strip()
+            for note_id in note_ids
+            if str(note_id).strip()
+        }
+    )
+    if not normalized_note_ids:
+        return set()
+
+    store = ZhihuStoreFactory.create_store()
+    batch_getter = getattr(store, "batch_get_existing_note_ids", None)
+    if not callable(batch_getter):
+        utils.logger.info(
+            f"[store.zhihu.batch_get_existing_note_ids] Current store backend does not support note existence lookup, "
+            f"save option: {config.SAVE_DATA_OPTION}"
+        )
+        return set()
+
+    existing_note_ids = await batch_getter(normalized_note_ids)
+    utils.logger.info(
+        f"[store.zhihu.batch_get_existing_note_ids] Checked {len(normalized_note_ids)} candidate content_ids, "
+        f"existing in store: {len(existing_note_ids)}"
+    )
+    return existing_note_ids
+
 
 async def batch_update_zhihu_contents(contents: List[ZhihuContent]):
     """
