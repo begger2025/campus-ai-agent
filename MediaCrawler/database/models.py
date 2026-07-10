@@ -221,7 +221,7 @@ class WeiboNote(Base):
     ip_location = Column(Text, default='', comment='IP地址位置')
     add_ts = Column(BigInteger, comment='添加时间戳')
     last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
-    note_id = Column(BigInteger, index=True, comment='笔记ID')
+    note_id = Column(BigInteger, unique=True, index=True, comment='笔记ID')
     content = Column(Text, comment='笔记内容')
     create_time = Column(BigInteger, index=True, comment='创建时间戳')
     create_date_time = Column(String(255), index=True, comment='创建日期时间')
@@ -242,7 +242,7 @@ class WeiboNoteComment(Base):
     ip_location = Column(Text, default='', comment='IP地址位置')
     add_ts = Column(BigInteger, comment='添加时间戳')
     last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
-    comment_id = Column(BigInteger, index=True, comment='评论ID')
+    comment_id = Column(BigInteger, unique=True, index=True, comment='评论ID')
     note_id = Column(BigInteger, index=True, comment='笔记ID')
     content = Column(Text, comment='评论内容')
     create_time = Column(BigInteger, comment='创建时间戳')
@@ -291,7 +291,7 @@ class XhsNote(Base):
     ip_location = Column(Text, comment='IP地址位置')
     add_ts = Column(BigInteger, comment='添加时间戳')
     last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
-    note_id = Column(String(255), index=True, comment='笔记ID')
+    note_id = Column(String(255), unique=True, index=True, comment='笔记ID')
     type = Column(Text, comment='笔记类型')
     title = Column(Text, comment='笔记标题')
     desc = Column(Text, comment='笔记描述')
@@ -342,7 +342,7 @@ class XhsNoteComment(Base):
     ip_location = Column(Text, comment='IP地址位置')
     add_ts = Column(BigInteger, comment='添加时间戳')
     last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
-    comment_id = Column(String(255), index=True, comment='评论ID')
+    comment_id = Column(String(255), unique=True, index=True, comment='评论ID')
     create_time = Column(BigInteger, index=True, comment='创建时间戳')
     note_id = Column(String(255), comment='笔记ID')
     content = Column(Text, comment='评论内容')
@@ -354,7 +354,7 @@ class XhsNoteComment(Base):
 class TiebaNote(Base):
     __tablename__ = 'tieba_note'
     id = Column(Integer, primary_key=True, comment='主键ID')
-    note_id = Column(String(644), index=True, comment='笔记ID')
+    note_id = Column(String(644), unique=True, index=True, comment='笔记ID')
     title = Column(Text, comment='笔记标题')
     desc = Column(Text, comment='笔记描述')
     note_url = Column(Text, comment='笔记URL')
@@ -375,7 +375,7 @@ class TiebaNote(Base):
 class TiebaComment(Base):
     __tablename__ = 'tieba_comment'
     id = Column(Integer, primary_key=True, comment='主键ID')
-    comment_id = Column(String(255), index=True, comment='评论ID')
+    comment_id = Column(String(255), unique=True, index=True, comment='评论ID')
     parent_comment_id = Column(String(255), default='', comment='父评论ID')
     content = Column(Text, comment='评论内容')
     user_link = Column(Text, default='', comment='用户链接')
