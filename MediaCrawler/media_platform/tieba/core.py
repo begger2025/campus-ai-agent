@@ -22,7 +22,7 @@ import asyncio
 import os
 import random
 from asyncio import Task
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from playwright.async_api import (
     BrowserContext,
@@ -244,6 +244,24 @@ class TieBaCrawler(AbstractCrawler):
                             f"[TieBaCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的帖子"
                         )
                     notes_list = kept_notes
+
+                    # 爬取阶段跳过已入库帖子（省请求额度，仿小红书 XHS_SKIP_EXISTING_NOTE_DETAILS）：
+                    # 必须在窗口/主题过滤之后、入库（及评论抓取，_handle_search_notes 内部决定）之前。
+                    # page_resolved_ts 已在上面的过滤循环里收集完毕，不受本次跳过影响——早停看的是整页
+                    # 发布时间是否过旧，与帖子是否已入库无关，已存在的帖子仍然贡献了它的发布时间。
+                    if notes_list and bool(getattr(config, "TIEBA_SKIP_EXISTING_NOTES", True)):
+                        existing_note_ids = await tieba_store.batch_get_existing_note_ids(
+                            [str(note.note_id or "").strip() for note in notes_list]
+                        )
+                        if existing_note_ids:
+                            before_count = len(notes_list)
+                            notes_list = [
+                                note for note in notes_list
+                                if str(note.note_id or "").strip() not in existing_note_ids
+                            ]
+                            skipped_existing_count = before_count - len(notes_list)
+                            if skipped_existing_count:
+                                utils.logger.info(f"[TieBaCrawler.search] 跳过已入库 {skipped_existing_count} 条")
 
                     if notes_list:
                         await self._handle_search_notes(notes_list)

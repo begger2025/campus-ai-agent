@@ -26,7 +26,7 @@ import asyncio
 import os
 import random  # Used for search start-page jitter (anti-starvation exploration)
 from asyncio import Task
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from playwright.async_api import (
     BrowserContext,
@@ -194,6 +194,7 @@ class WeiboCrawler(AbstractCrawler):
                 note_list = await self.batch_get_notes_full_text(note_list)
                 page_resolved_ts: List[int] = []
                 topic_filtered_count = 0
+                surviving_items: List[Tuple[Dict, Dict]] = []  # (note_item, mblog) that passed window/topic filters
                 for note_item in note_list:
                     if note_item:
                         mblog: Dict = note_item.get("mblog")
@@ -216,12 +217,33 @@ class WeiboCrawler(AbstractCrawler):
                             ):
                                 topic_filtered_count += 1
                                 continue
-                            note_id_list.append(mblog.get("id"))
-                            await weibo_store.update_weibo_note(note_item)
-                            await self.get_note_images(mblog)
+                            surviving_items.append((note_item, mblog))
 
                 if topic_filtered_count:
                     utils.logger.info(f"[WeiboCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的微博")
+
+                # 爬取阶段跳过已入库帖子（省请求额度，仿小红书 XHS_SKIP_EXISTING_NOTE_DETAILS）：
+                # 必须在窗口/主题过滤之后、入库与评论抓取之前。page_resolved_ts 已在上面的过滤循环里
+                # 收集完毕，不受本次跳过影响——早停看的是整页发布时间是否过旧，与帖子是否已入库无关，
+                # 已存在的帖子仍然贡献了它的发布时间到 page_resolved_ts。
+                existing_note_ids: Set[str] = set()
+                if surviving_items and bool(getattr(config, "WEIBO_SKIP_EXISTING_NOTES", True)):
+                    existing_note_ids = await weibo_store.batch_get_existing_note_ids(
+                        [str(mblog.get("id") or "").strip() for _, mblog in surviving_items]
+                    )
+
+                skipped_existing_count = 0
+                for note_item, mblog in surviving_items:
+                    note_id = str(mblog.get("id") or "").strip()
+                    if note_id and note_id in existing_note_ids:
+                        skipped_existing_count += 1
+                        continue
+                    note_id_list.append(mblog.get("id"))
+                    await weibo_store.update_weibo_note(note_item)
+                    await self.get_note_images(mblog)
+
+                if skipped_existing_count:
+                    utils.logger.info(f"[WeiboCrawler.search] 跳过已入库 {skipped_existing_count} 条")
 
                 if (
                     window_enabled

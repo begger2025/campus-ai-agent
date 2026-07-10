@@ -110,6 +110,10 @@ XHS_MAX_DETAIL_FETCH_PER_RUN = 5
 # Skip Xiaohongshu note details that already exist in storage when filtering search candidates.
 XHS_SKIP_EXISTING_NOTE_DETAILS = True
 
+# 爬取阶段跳过已入库的帖子（省请求额度；小红书对应 XHS_SKIP_EXISTING_NOTE_DETAILS）
+WEIBO_SKIP_EXISTING_NOTES = True
+TIEBA_SKIP_EXISTING_NOTES = True
+
 # Random sleep before each Xiaohongshu detail fetch.
 XHS_DETAIL_PRE_SLEEP_MIN_SEC = 60
 XHS_DETAIL_PRE_SLEEP_MAX_SEC = 120

@@ -23,7 +23,7 @@
 # @Desc    :
 
 import re
-from typing import List
+from typing import List, Set
 
 from var import source_keyword_var
 
@@ -106,6 +106,34 @@ async def update_weibo_note(note_item: Dict):
     }
     utils.logger.info(f"[store.weibo.update_weibo_note] weibo note id:{note_id}, title:{save_content_item.get('content')[:24]} ...")
     await WeibostoreFactory.create_store().store_content(content_item=save_content_item)
+
+
+async def batch_get_existing_note_ids(note_ids: List[str]) -> Set[str]:
+    normalized_note_ids = list(
+        {
+            str(note_id).strip()
+            for note_id in note_ids
+            if str(note_id).strip()
+        }
+    )
+    if not normalized_note_ids:
+        return set()
+
+    store = WeibostoreFactory.create_store()
+    batch_getter = getattr(store, "batch_get_existing_note_ids", None)
+    if not callable(batch_getter):
+        utils.logger.info(
+            f"[store.weibo.batch_get_existing_note_ids] Current store backend does not support note existence lookup, "
+            f"save option: {config.SAVE_DATA_OPTION}"
+        )
+        return set()
+
+    existing_note_ids = await batch_getter(normalized_note_ids)
+    utils.logger.info(
+        f"[store.weibo.batch_get_existing_note_ids] Checked {len(normalized_note_ids)} candidate note_ids, "
+        f"existing in store: {len(existing_note_ids)}"
+    )
+    return existing_note_ids
 
 
 async def batch_update_weibo_note_comments(note_id: str, comments: List[Dict]):

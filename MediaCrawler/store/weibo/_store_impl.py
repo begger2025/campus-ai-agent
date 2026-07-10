@@ -27,7 +27,7 @@ import csv
 import json
 import os
 import pathlib
-from typing import Dict
+from typing import Dict, List, Set
 
 import aiofiles
 from sqlalchemy import select
@@ -175,6 +175,26 @@ class WeiboDbStoreImplement(AbstractStore):
             utils.logger.warning(
                 f"[WeiboDbStoreImplement.store_comment] comment_id={comment_id} 写入唯一键冲突（并发竞态），已跳过本次写入"
             )
+
+    async def batch_get_existing_note_ids(self, note_ids: List[str]) -> Set[str]:
+        """WeiboNote.note_id 是 BigInteger：入参需转 int 才能进 .in_()，非数字 id 一律防御性跳过；
+        返回集合统一转回 str，方便调用方与原始字符串 id 比较。"""
+        normalized_note_ids: List[int] = []
+        for note_id in note_ids:
+            text_id = str(note_id).strip()
+            if not text_id:
+                continue
+            try:
+                normalized_note_ids.append(int(text_id))
+            except (TypeError, ValueError):
+                continue
+        if not normalized_note_ids:
+            return set()
+
+        async with get_session() as session:
+            stmt = select(WeiboNote.note_id).where(WeiboNote.note_id.in_(normalized_note_ids))
+            result = await session.execute(stmt)
+            return {str(note_id) for note_id in result.scalars().all()}
 
     async def store_creator(self, creator: Dict):
         """

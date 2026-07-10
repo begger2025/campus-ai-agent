@@ -27,7 +27,7 @@ import csv
 import json
 import os
 import pathlib
-from typing import Dict
+from typing import Dict, List, Set
 
 import aiofiles
 from sqlalchemy import select
@@ -151,6 +151,25 @@ class TieBaDbStoreImplement(AbstractStore):
             utils.logger.warning(
                 f"[TieBaDbStoreImplement.store_comment] comment_id={comment_id} 写入唯一键冲突（并发竞态），已跳过本次写入"
             )
+
+    async def batch_get_existing_note_ids(self, note_ids: List[str]) -> Set[str]:
+        """TiebaNote.note_id 是 String(644)，直接按字符串比较即可（不像 weibo 需要转 int）。"""
+        normalized_note_ids = {
+            str(note_id).strip()
+            for note_id in note_ids
+            if str(note_id).strip()
+        }
+        if not normalized_note_ids:
+            return set()
+
+        async with get_session() as session:
+            stmt = select(TiebaNote.note_id).where(TiebaNote.note_id.in_(list(normalized_note_ids)))
+            result = await session.execute(stmt)
+            return {
+                str(note_id).strip()
+                for note_id in result.scalars().all()
+                if str(note_id).strip()
+            }
 
     async def store_creator(self, creator: Dict):
         """
