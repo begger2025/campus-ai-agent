@@ -40,6 +40,7 @@ from store import xhs as xhs_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_window, select_with_exploration
+from tools.topic_scope import compose_topic_keyword, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import XiaoHongShuClient
@@ -866,6 +867,15 @@ class XiaoHongShuCrawler(AbstractCrawler):
             if not keyword:
                 continue
 
+            composed_keyword = compose_topic_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+            )
+            if composed_keyword != keyword:
+                utils.logger.info(f"[XiaoHongShuCrawler.search] 主题限定：{keyword} → {composed_keyword}")
+            keyword = composed_keyword
+
             source_keyword_var.set(keyword)
             utils.logger.info(f"[XiaoHongShuCrawler.search] Current search keyword: {keyword}")
             page = 1
@@ -976,11 +986,30 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
                         stored_note_ids: List[str] = []
                         store_failed_note_ids: List[str] = []
+                        topic_filtered_count = 0
                         for note_detail in note_details:
                             if note_detail:
                                 note_id = note_detail.get("note_id", "")
                                 if note_id:
                                     note_detail["_search_publish_time_raw"] = search_publish_time_hints.get(note_id, "")
+
+                                if getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False):
+                                    tag_names = []
+                                    for tag_item in note_detail.get("tag_list") or []:
+                                        if isinstance(tag_item, dict):
+                                            tag_names.append(str(tag_item.get("name") or ""))
+                                        else:
+                                            tag_names.append(str(tag_item))
+                                    if not matches_topic(
+                                        [note_detail.get("title"), note_detail.get("desc"), *tag_names],
+                                        getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+                                    ):
+                                        topic_filtered_count += 1
+                                        utils.logger.info(
+                                            f"[XiaoHongShuCrawler.search] 主题过滤：跳过与主题无关的笔记 {note_id}"
+                                        )
+                                        continue
+
                                 try:
                                     await xhs_store.update_xhs_note(note_detail)
                                     stored_note_ids.append(note_id)
@@ -1008,6 +1037,10 @@ class XiaoHongShuCrawler(AbstractCrawler):
                             f"stored: {len(stored_note_ids)}, store_failed: {len(store_failed_note_ids)}, "
                             f"stored note_ids: {stored_note_ids}, store_failed note_ids: {store_failed_note_ids}"
                         )
+                        if topic_filtered_count:
+                            utils.logger.info(
+                                f"[XiaoHongShuCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的笔记"
+                            )
                         page += 1
                         utils.logger.info(
                             f"[XiaoHongShuCrawler.search] Successful note details count: {len(note_details)}, "

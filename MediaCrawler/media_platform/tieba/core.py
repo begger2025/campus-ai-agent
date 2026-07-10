@@ -40,6 +40,7 @@ from store import tieba as tieba_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_tieba_publish_time_ms, parse_window
+from tools.topic_scope import compose_topic_keyword, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import BaiduTieBaClient
@@ -163,6 +164,14 @@ class TieBaCrawler(AbstractCrawler):
         window_lo, window_hi = parse_window(config.CRAWL_PUBLISH_TIME_START, config.CRAWL_PUBLISH_TIME_END)
         window_enabled = window_lo is not None or window_hi is not None
         for keyword in config.KEYWORDS.split(","):
+            composed_keyword = compose_topic_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+            )
+            if composed_keyword != keyword.strip():
+                utils.logger.info(f"[TieBaCrawler.search] 主题限定：{keyword} → {composed_keyword}")
+            keyword = composed_keyword
             source_keyword_var.set(keyword)
             utils.logger.info(
                 f"[BaiduTieBaCrawler.search] Current search keyword: {keyword}"
@@ -204,20 +213,37 @@ class TieBaCrawler(AbstractCrawler):
                         f"[BaiduTieBaCrawler.search] Note list len: {len(notes_list)}"
                     )
 
+                    # 窗口过滤与主题过滤相互独立：窗口过滤仅在启用窗口时生效，主题过滤按开关始终生效；
+                    # 两者合并为对 notes_list 的一次遍历。
                     page_resolved_ts: List[int] = []
-                    if window_enabled:
-                        kept_notes = []
-                        for note in notes_list:
+                    kept_notes: List[TiebaNote] = []
+                    window_filtered_count = 0
+                    topic_filtered_count = 0
+                    topic_filter_enabled = getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False)
+                    for note in notes_list:
+                        if window_enabled:
                             ts_ms = parse_tieba_publish_time_ms(note.publish_time)
                             if ts_ms is not None:
                                 page_resolved_ts.append(ts_ms)
-                            if is_within_window(ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
-                                kept_notes.append(note)
-                        if len(kept_notes) != len(notes_list):
-                            utils.logger.info(
-                                f"[TieBaCrawler.search] 发布时间窗口过滤 {len(notes_list) - len(kept_notes)} 条"
-                            )
-                        notes_list = kept_notes
+                            if not is_within_window(ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
+                                window_filtered_count += 1
+                                continue
+                        if topic_filter_enabled and not matches_topic(
+                            [note.title, note.desc, note.tieba_name],
+                            getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+                        ):
+                            topic_filtered_count += 1
+                            continue
+                        kept_notes.append(note)
+                    if window_filtered_count:
+                        utils.logger.info(
+                            f"[TieBaCrawler.search] 发布时间窗口过滤 {window_filtered_count} 条"
+                        )
+                    if topic_filtered_count:
+                        utils.logger.info(
+                            f"[TieBaCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的帖子"
+                        )
+                    notes_list = kept_notes
 
                     if notes_list:
                         await self._handle_search_notes(notes_list)

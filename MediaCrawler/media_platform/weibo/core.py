@@ -43,6 +43,7 @@ from store import weibo as weibo_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_window
+from tools.topic_scope import compose_topic_keyword, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import WeiboClient
@@ -162,6 +163,14 @@ class WeiboCrawler(AbstractCrawler):
             return
 
         for keyword in config.KEYWORDS.split(","):
+            composed_keyword = compose_topic_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+            )
+            if composed_keyword != keyword.strip():
+                utils.logger.info(f"[WeiboCrawler.search] 主题限定：{keyword} → {composed_keyword}")
+            keyword = composed_keyword
             source_keyword_var.set(keyword)
             utils.logger.info(f"[WeiboCrawler.search] Current search keyword: {keyword}")
             page = 1
@@ -184,6 +193,7 @@ class WeiboCrawler(AbstractCrawler):
                 # If full text fetching is enabled, batch get full text of posts
                 note_list = await self.batch_get_notes_full_text(note_list)
                 page_resolved_ts: List[int] = []
+                topic_filtered_count = 0
                 for note_item in note_list:
                     if note_item:
                         mblog: Dict = note_item.get("mblog")
@@ -200,9 +210,18 @@ class WeiboCrawler(AbstractCrawler):
                                     page_resolved_ts.append(publish_ts_ms)
                                 if not is_within_window(publish_ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
                                     continue
+                            if getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False) and not matches_topic(
+                                [(mblog or {}).get("text") or (mblog or {}).get("content") or ""],
+                                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+                            ):
+                                topic_filtered_count += 1
+                                continue
                             note_id_list.append(mblog.get("id"))
                             await weibo_store.update_weibo_note(note_item)
                             await self.get_note_images(mblog)
+
+                if topic_filtered_count:
+                    utils.logger.info(f"[WeiboCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的微博")
 
                 if (
                     window_enabled
