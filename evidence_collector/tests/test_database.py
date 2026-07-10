@@ -2,11 +2,17 @@
 
 import unittest
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import String, create_engine, inspect
 from sqlalchemy.exc import IntegrityError
 
 from evidence_collector.database import create_session_factory, init_database
-from evidence_collector.models import EvidenceDocument
+from evidence_collector.models import (
+    EvidenceDeliveryBatch,
+    EvidenceDocument,
+    EvidenceItem,
+    EvidenceRun,
+    EvidenceVerification,
+)
 
 
 class EvidenceDatabaseTests(unittest.TestCase):
@@ -40,6 +46,38 @@ class EvidenceDatabaseTests(unittest.TestCase):
         self.assertTrue(table_names)
         self.assertTrue(all(name.startswith("evidence_") for name in table_names))
         self.assertNotIn("raw_posts", table_names)
+
+    def test_unique_canonical_url_column_is_bounded_for_mysql_indexes(self):
+        canonical_url = EvidenceDocument.__table__.c.canonical_url
+        self.assertIsInstance(canonical_url.type, String)
+        self.assertEqual(canonical_url.type.length, 2048)
+
+    def test_run_has_creator_usage_duration_and_sanitized_error_audit_fields(self):
+        columns = set(EvidenceRun.__table__.c.keys())
+        self.assertTrue(
+            {"creator", "duration_ms", "usage_input_tokens", "usage_output_tokens",
+             "usage_total_tokens", "sanitized_error_summary"}.issubset(columns)
+        )
+
+    def test_item_is_self_auditable_without_its_document_relationship(self):
+        columns = set(EvidenceItem.__table__.c.keys())
+        self.assertTrue(
+            {
+                "source_url", "canonical_url", "source_domain", "source_type",
+                "published_at", "retrieved_at", "evidence_quote",
+                "retrieval_provider", "retrieval_model", "prompt_version",
+            }.issubset(columns)
+        )
+
+    def test_verification_has_conflict_and_version_audit_fields(self):
+        columns = set(EvidenceVerification.__table__.c.keys())
+        self.assertTrue(
+            {"conflict_reason", "verification_version", "model_version"}.issubset(columns)
+        )
+
+    def test_delivery_batch_has_approver_audit_fields(self):
+        columns = set(EvidenceDeliveryBatch.__table__.c.keys())
+        self.assertTrue({"approver", "approved_at"}.issubset(columns))
 
 
 if __name__ == "__main__":
