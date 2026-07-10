@@ -130,6 +130,10 @@ class ZhihuDbStoreImplement(AbstractStore):
                     existing_content = result.scalars().first()
                     if existing_content:
                         for key, value in content_item.items():
+                            if key == "add_ts":
+                                # insert 分支注入的 add_ts 不参与自愈更新：
+                                # 保留胜出方的首次入库时间，勿被竞态失败方覆盖
+                                continue
                             if hasattr(existing_content, key):
                                 setattr(existing_content, key, value)
             await session.commit()
@@ -165,6 +169,10 @@ class ZhihuDbStoreImplement(AbstractStore):
                     existing_comment = result.scalars().first()
                     if existing_comment:
                         for key, value in comment_item.items():
+                            if key == "add_ts":
+                                # insert 分支注入的 add_ts 不参与自愈更新：
+                                # 保留胜出方的首次入库时间，勿被竞态失败方覆盖
+                                continue
                             if hasattr(existing_comment, key):
                                 setattr(existing_comment, key, value)
             await session.commit()
