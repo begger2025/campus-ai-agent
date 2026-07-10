@@ -316,6 +316,15 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Basic Configuration",
             ),
         ] = config.CRAWL_PUBLISH_TIME_END,
+        fresh: Annotated[
+            str,
+            typer.Option(
+                "--fresh",
+                help="Fresh-first preset (pairs with panel recommended keywords): sets xhs SORT_TYPE=time_descending and weibo WEIBO_SEARCH_TYPE=real_time, supports yes/true/t/y/1 or no/false/f/n/0",
+                rich_help_panel="Basic Configuration",
+                show_default=True,
+            ),
+        ] = "no",
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
@@ -323,6 +332,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         enable_sub_comment = _to_bool(get_sub_comment)
         enable_headless = _to_bool(headless)
         enable_ip_proxy_value = _to_bool(enable_ip_proxy)
+        enable_fresh = _to_bool(fresh)
         init_db_value = init_db.value if init_db else None
 
         # Parse specified_id and creator_id into lists
@@ -349,6 +359,13 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.IP_PROXY_PROVIDER_NAME = ip_proxy_provider_name
         config.CRAWL_PUBLISH_TIME_START = start_date
         config.CRAWL_PUBLISH_TIME_END = end_date
+
+        # "新鲜优先"预设：推荐词语义是"最近冒头的需求/话题"，默认排序（xhs 热度、微博综合）
+        # 捞到的是历史爆款老帖；--fresh yes 切到时间倒序/实时，同时使时间窗口整页早停可用。
+        # 贴吧本就时间倒序，无需覆盖。
+        if enable_fresh:
+            config.SORT_TYPE = "time_descending"
+            config.WEIBO_SEARCH_TYPE = "real_time"
 
         # Set platform-specific ID lists for detail/creator mode
         if specified_id_list:
