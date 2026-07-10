@@ -10,7 +10,8 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from backend.agent.public_opinion_core.keyword_planner import (
@@ -21,6 +22,8 @@ from backend.agent.public_opinion_core.keyword_planner import (
 from backend.models import ChatQueryLog, ProcessedPost
 
 CONTENT_WINDOW_DAYS = 14
+
+_EPOCH = datetime(1970, 1, 1)
 
 
 def _parse_tags(tags_json: str) -> list[str]:
@@ -40,6 +43,51 @@ def _parse_tags(tags_json: str) -> list[str]:
         if name:
             names.append(name)
     return names
+
+
+def _load_crawler_history(
+    db: Session, *, now: datetime
+) -> tuple[set[str], dict[str, datetime]]:
+    """读 crawler_run_history（MediaCrawler 侧建表），返回 (贫瘠词集合, 每词最新爬取时间)。
+
+    - 窗口：近 CONTENT_WINDOW_DAYS 天（按 finished_at 毫秒过滤；finished_at 为 0/None
+      的行退回用 started_at）。
+    - 贫瘠判定：每个 source_keyword 取窗口内最新一次 run（跨平台合并），
+      items_stored == 0 → 贫瘠。
+    - 所有窗口内行的 finished_at 转 datetime 后按词取 max，供并入 crawled_at_by_keyword
+      ——零产出的爬取从此也能触发常规降权。
+    - 表不存在（共享库尚未建表 / SQLite 测试库）→ 优雅降级为空，行为与现状一致。
+    """
+    cutoff_ms = int((now - timedelta(days=CONTENT_WINDOW_DAYS) - _EPOCH).total_seconds() * 1000)
+    sql = text(
+        "SELECT source_keyword, started_at, finished_at, items_stored "
+        "FROM crawler_run_history "
+        "WHERE source_keyword IS NOT NULL AND source_keyword != '' "
+        "AND COALESCE(NULLIF(finished_at, 0), started_at) >= :cutoff_ms"
+    )
+    try:
+        rows = db.execute(sql, {"cutoff_ms": cutoff_ms}).fetchall()
+    except (OperationalError, ProgrammingError):
+        # MySQL 表不存在报 ProgrammingError(1146)，SQLite 报 OperationalError
+        db.rollback()
+        return set(), {}
+
+    latest_run_by_keyword: dict[str, tuple[int, int]] = {}  # 词 -> (毫秒时间, items_stored)
+    crawled_at_by_keyword: dict[str, datetime] = {}
+    for keyword, started_at, finished_at, items_stored in rows:
+        effective_ms = finished_at or started_at
+        if not effective_ms:
+            continue
+        crawled_at = datetime.utcfromtimestamp(effective_ms / 1000.0)
+        previous = crawled_at_by_keyword.get(keyword)
+        if previous is None or crawled_at > previous:
+            crawled_at_by_keyword[keyword] = crawled_at
+        latest = latest_run_by_keyword.get(keyword)
+        if latest is None or effective_ms > latest[0]:
+            latest_run_by_keyword[keyword] = (effective_ms, items_stored or 0)
+
+    barren = {kw for kw, (_, stored) in latest_run_by_keyword.items() if stored == 0}
+    return barren, crawled_at_by_keyword
 
 
 def get_keyword_suggestions(
@@ -91,7 +139,21 @@ def get_keyword_suggestions(
     )
     crawled_at_by_keyword = {keyword: crawled_at for keyword, crawled_at in crawled_rows}
 
-    suggestions = plan_keywords(queries, content_stats, crawled_at_by_keyword, now=now, top_n=top)
+    # 爬取历史：零产出的词进贫瘠集合强降权；finished_at 与内容表倒推值取 max
+    barren_keywords, history_crawled_at = _load_crawler_history(db, now=now)
+    for keyword, crawled_at in history_crawled_at.items():
+        existing = crawled_at_by_keyword.get(keyword)
+        if existing is None or crawled_at > existing:
+            crawled_at_by_keyword[keyword] = crawled_at
+
+    suggestions = plan_keywords(
+        queries,
+        content_stats,
+        crawled_at_by_keyword,
+        now=now,
+        top_n=top,
+        barren_keywords=barren_keywords,
+    )
     return {
         "suggestions": [s.to_dict() for s in suggestions],
         "meta": {
@@ -99,5 +161,6 @@ def get_keyword_suggestions(
             "post_count": len(posts),
             "query_window_days": days,
             "content_window_days": CONTENT_WINDOW_DAYS,
+            "barren_count": len(barren_keywords),
         },
     }
