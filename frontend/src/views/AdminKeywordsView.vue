@@ -109,8 +109,16 @@ function scoreWidth(score) {
   return `${Math.min(Math.round((score / 10) * 100), 100)}%`
 }
 
+function freshStartDate() {
+  // 今天减 14 天（本地时区），与推荐信号的 14 天内容窗口对齐
+  const d = new Date()
+  d.setDate(d.getDate() - 14)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 async function copyCommand(keyword) {
-  const command = `.\\.venv\\Scripts\\python.exe main.py --platform ${platform.value} --keywords "${keyword}" --get_comment yes`
+  const command = `.\\.venv\\Scripts\\python.exe main.py --platform ${platform.value} --keywords "${keyword}" --get_comment yes --fresh yes --start_date ${freshStartDate()}`
   try {
     await navigator.clipboard.writeText(command)
     ElMessage.success('已复制爬取命令，请在 MediaCrawler 目录下执行')
