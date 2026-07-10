@@ -69,6 +69,25 @@ def is_within_window(
     return True
 
 
+# 知乎服务端时间档位（media_platform/zhihu/field.py SearchTime 的 value）：
+# 按窗口起点距今天数选最小可覆盖档位；返回字符串值而非枚举，避免 tools→media_platform 反向依赖
+_ZHIHU_TIME_BUCKETS = (
+    (1, "a_day"), (7, "a_week"), (31, "a_month"),
+    (92, "three_months"), (183, "half_a_year"), (366, "a_year"),
+)
+
+
+def pick_zhihu_search_time_value(window_lo_ms: Optional[int], now_ms: int) -> str:
+    """按窗口起点距今天数选知乎服务端时间档位；覆盖不到（>1年）或无窗口返回 ""（不限）。"""
+    if window_lo_ms is None:
+        return ""
+    days = max((now_ms - window_lo_ms) / (24 * 3600 * 1000), 0.0)
+    for limit, value in _ZHIHU_TIME_BUCKETS:
+        if days <= limit:
+            return value
+    return ""
+
+
 def parse_tieba_publish_time_ms(text: Any) -> Optional[int]:
     """解析贴吧搜索结果的发布时间字符串（"2026-6-12" / "2026-06-12 09:30"）。
 

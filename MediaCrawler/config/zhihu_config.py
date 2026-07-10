@@ -20,6 +20,11 @@
 
 # Zhihu platform configuration
 
+# 搜索结果排序方式（media_platform/zhihu/field.py SearchSort 的 value）：
+# "" = 综合排序（默认） | "upvoted_count" = 最多赞同 | "created_time" = 最新发布
+# --fresh yes 会覆盖为 "created_time"（时间倒序使窗口整页早停可用）
+ZHIHU_SEARCH_SORT = ""
+
 # Specify Zhihu user URL list
 ZHIHU_CREATOR_URL_LIST = [
     "https://www.zhihu.com/people/yd1234567",

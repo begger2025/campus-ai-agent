@@ -25,8 +25,11 @@ from tools.publish_time_window import (
     is_within_window,
     parse_tieba_publish_time_ms,
     parse_window,
+    pick_zhihu_search_time_value,
     select_with_exploration,
 )
+
+DAY_MS = 24 * 3600 * 1000
 
 
 def _ms(y, m, d, hh=0, mm=0, ss=0):
@@ -93,6 +96,32 @@ class TestParseTiebaPublishTime:
         assert parse_tieba_publish_time_ms("") is None
         assert parse_tieba_publish_time_ms(None) is None
         assert parse_tieba_publish_time_ms("2026-13-40") is None  # 非法日期
+
+
+class TestPickZhihuSearchTimeValue:
+    NOW = 1_800_000_000_000  # 固定 now，毫秒
+
+    def _lo(self, days_ago: float) -> int:
+        return int(self.NOW - days_ago * DAY_MS)
+
+    def test_no_window_returns_default(self):
+        assert pick_zhihu_search_time_value(None, self.NOW) == ""
+
+    def test_buckets(self):
+        assert pick_zhihu_search_time_value(self._lo(0.5), self.NOW) == "a_day"
+        assert pick_zhihu_search_time_value(self._lo(1), self.NOW) == "a_day"  # 边界含
+        assert pick_zhihu_search_time_value(self._lo(6.9), self.NOW) == "a_week"
+        assert pick_zhihu_search_time_value(self._lo(7), self.NOW) == "a_week"
+        assert pick_zhihu_search_time_value(self._lo(31), self.NOW) == "a_month"
+        assert pick_zhihu_search_time_value(self._lo(92), self.NOW) == "three_months"
+        assert pick_zhihu_search_time_value(self._lo(183), self.NOW) == "half_a_year"
+        assert pick_zhihu_search_time_value(self._lo(366), self.NOW) == "a_year"
+
+    def test_older_than_a_year_returns_default(self):
+        assert pick_zhihu_search_time_value(self._lo(400), self.NOW) == ""
+
+    def test_future_lo_clamps_to_smallest_bucket(self):
+        assert pick_zhihu_search_time_value(self.NOW + DAY_MS, self.NOW) == "a_day"
 
 
 class TestSelectWithExploration:
