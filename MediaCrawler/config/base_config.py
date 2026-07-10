@@ -184,6 +184,22 @@ FONT_PATH = "./docs/STZHONGS.TTF"
 # Crawl interval
 CRAWLER_MAX_SLEEP_SEC = 18
 
+# ==================== 发布时间窗口与防饥饿策略 ====================
+# 按发布时间过滤搜索结果（"YYYY-MM-DD"，空字符串 = 不启用；闭区间，END 含当天）。
+# 三平台搜索 API 均无服务端时间参数，过滤在客户端做；时间倒序时整页过旧会提前停止翻页。
+CRAWL_PUBLISH_TIME_START = ""
+CRAWL_PUBLISH_TIME_END = ""
+
+# 解析不出发布时间的帖子是否保留（贴吧旧版搜索结果是相对文本，解析弱，默认保留防误伤）
+PUBLISH_TIME_KEEP_UNKNOWN = True
+
+# 防饥饿：小红书每个详情名额以该概率从较旧候选随机抽一条（0 = 关闭，恒取最新）
+XHS_EXPLORE_OLDER_PROB = 0.2
+
+# 防饥饿：微博/贴吧每个关键词开搜前，以该概率把起始页随机后移 1..MAX 页
+SEARCH_START_PAGE_JITTER_PROB = 0.2
+SEARCH_START_PAGE_JITTER_MAX = 5
+
 # 是否禁用 SSL 证书验证。仅在使用企业代理、Burp Suite、mitmproxy 等会注入自签名证书的中间人代理时设为 True。
 # 警告：禁用 SSL 验证将使所有流量暴露于中间人攻击风险，请勿在生产环境中开启。
 DISABLE_SSL_VERIFY = False

@@ -300,6 +300,22 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Proxy Configuration",
             ),
         ] = config.IP_PROXY_PROVIDER_NAME,
+        start_date: Annotated[
+            str,
+            typer.Option(
+                "--start_date",
+                help="Only crawl posts published on/after this date (YYYY-MM-DD, empty=disabled)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = config.CRAWL_PUBLISH_TIME_START,
+        end_date: Annotated[
+            str,
+            typer.Option(
+                "--end_date",
+                help="Only crawl posts published on/before this date (YYYY-MM-DD, empty=disabled)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = config.CRAWL_PUBLISH_TIME_END,
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
@@ -331,6 +347,8 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.ENABLE_IP_PROXY = enable_ip_proxy_value
         config.IP_PROXY_POOL_COUNT = ip_proxy_pool_count
         config.IP_PROXY_PROVIDER_NAME = ip_proxy_provider_name
+        config.CRAWL_PUBLISH_TIME_START = start_date
+        config.CRAWL_PUBLISH_TIME_END = end_date
 
         # Set platform-specific ID lists for detail/creator mode
         if specified_id_list:
