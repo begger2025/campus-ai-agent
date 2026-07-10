@@ -39,6 +39,7 @@ from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import xhs as xhs_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.publish_time_window import is_within_window, parse_window, select_with_exploration
 from var import crawler_type_var, source_keyword_var
 
 from .client import XiaoHongShuClient
@@ -336,7 +337,11 @@ class XiaoHongShuCrawler(AbstractCrawler):
             new_note_items,
             context=context,
         )
-        selected_note_items = sorted_new_note_items[:remaining_quota]
+        selected_note_items = select_with_exploration(
+            sorted_new_note_items,
+            remaining_quota,
+            float(getattr(config, "XHS_EXPLORE_OLDER_PROB", 0.0)),
+        )
 
         utils.logger.info(f"[{context}] Skip existing note details enabled: {skip_existing_enabled}")
         utils.logger.info(f"[{context}] Search candidates total: {total_candidates}")
@@ -410,6 +415,36 @@ class XiaoHongShuCrawler(AbstractCrawler):
                     "has_resolved_publish_time": has_resolved_publish_time,
                 }
             )
+
+        window_lo, window_hi = getattr(self, "_publish_window", (None, None))
+        window_enabled = window_lo is not None or window_hi is not None
+        if window_enabled:
+            # 提前停止信号基于本页全部已解析候选（过滤前），代表"整页是否都早于窗口起点"
+            resolved_ts_all = [
+                candidate["publish_timestamp_ms"]
+                for candidate in sortable_candidates
+                if candidate["has_resolved_publish_time"]
+            ]
+            self._last_page_all_before_window = bool(
+                window_lo is not None and resolved_ts_all and all(ts < window_lo for ts in resolved_ts_all)
+            )
+
+            before_window_filter_count = len(sortable_candidates)
+            sortable_candidates = [
+                candidate
+                for candidate in sortable_candidates
+                if is_within_window(
+                    candidate["publish_timestamp_ms"] if candidate["has_resolved_publish_time"] else None,
+                    window_lo,
+                    window_hi,
+                    config.PUBLISH_TIME_KEEP_UNKNOWN,
+                )
+            ]
+            dropped_by_window = before_window_filter_count - len(sortable_candidates)
+            if dropped_by_window:
+                utils.logger.info(
+                    f"[{context}] Dropped {dropped_by_window} candidates outside publish-time window"
+                )
 
         sorted_candidates = sorted(
             sortable_candidates,
@@ -821,6 +856,10 @@ class XiaoHongShuCrawler(AbstractCrawler):
             f"effective detail scheduling limit: {max_notes_count}"
         )
         start_page = config.START_PAGE
+        window_lo, window_hi = parse_window(config.CRAWL_PUBLISH_TIME_START, config.CRAWL_PUBLISH_TIME_END)
+        self._publish_window = (window_lo, window_hi)
+        window_enabled = window_lo is not None or window_hi is not None
+        self._last_page_all_before_window = False
         for keyword in config.KEYWORDS.split(","):
             self._reset_detail_run_state()
             keyword = keyword.strip()
@@ -845,6 +884,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         page += 1
                         continue
 
+                    self._last_page_all_before_window = False
                     try:
                         utils.logger.info(f"[XiaoHongShuCrawler.search] search Xiaohongshu keyword: {keyword}, page: {page}")
                         note_ids: List[str] = []
@@ -877,6 +917,15 @@ class XiaoHongShuCrawler(AbstractCrawler):
                             str(post_item.get("id") or "").strip(): self._extract_search_candidate_publish_time_raw(post_item)
                             for post_item in selected_note_items
                         }
+
+                        if (
+                            window_enabled
+                            and config.SORT_TYPE == "time_descending"
+                            and self._last_page_all_before_window
+                        ):
+                            utils.logger.info("[XiaoHongShuCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                            history_state["stop_reason"] = history_state.get("stop_reason") or "publish_time_window_exhausted"
+                            break
 
                         if not selected_note_items:
                             if not notes_res.get("has_more", False):

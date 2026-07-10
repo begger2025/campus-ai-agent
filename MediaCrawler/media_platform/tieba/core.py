@@ -20,6 +20,7 @@
 
 import asyncio
 import os
+import random
 from asyncio import Task
 from typing import Dict, List, Optional, Tuple
 
@@ -38,6 +39,7 @@ from proxy.proxy_ip_pool import IpInfoModel, ProxyIpPool, create_ip_pool
 from store import tieba as tieba_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.publish_time_window import is_within_window, parse_tieba_publish_time_ms, parse_window
 from var import crawler_type_var, source_keyword_var
 
 from .client import BaiduTieBaClient
@@ -158,16 +160,24 @@ class TieBaCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < tieba_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = tieba_limit_count
         start_page = config.START_PAGE
+        window_lo, window_hi = parse_window(config.CRAWL_PUBLISH_TIME_START, config.CRAWL_PUBLISH_TIME_END)
+        window_enabled = window_lo is not None or window_hi is not None
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(
                 f"[BaiduTieBaCrawler.search] Current search keyword: {keyword}"
             )
             page = 1
+            # 防饥饿：本关键词开搜前，以一定概率把起始页随机后移，避免每次都只翻到前几页
+            keyword_start_page = start_page
+            if random.random() < float(getattr(config, "SEARCH_START_PAGE_JITTER_PROB", 0.0)):
+                jitter = random.randint(1, int(getattr(config, "SEARCH_START_PAGE_JITTER_MAX", 1)))
+                keyword_start_page += jitter
+                utils.logger.info(f"[TieBaCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
             while (
                 page - start_page + 1
             ) * tieba_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
-                if page < start_page:
+                if page < keyword_start_page:
                     utils.logger.info(f"[BaiduTieBaCrawler.search] Skip page {page}")
                     page += 1
                     continue
@@ -192,7 +202,33 @@ class TieBaCrawler(AbstractCrawler):
                     utils.logger.info(
                         f"[BaiduTieBaCrawler.search] Note list len: {len(notes_list)}"
                     )
-                    await self._handle_search_notes(notes_list)
+
+                    page_resolved_ts: List[int] = []
+                    if window_enabled:
+                        kept_notes = []
+                        for note in notes_list:
+                            ts_ms = parse_tieba_publish_time_ms(note.publish_time)
+                            if ts_ms is not None:
+                                page_resolved_ts.append(ts_ms)
+                            if is_within_window(ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
+                                kept_notes.append(note)
+                        if len(kept_notes) != len(notes_list):
+                            utils.logger.info(
+                                f"[TieBaCrawler.search] 发布时间窗口过滤 {len(notes_list) - len(kept_notes)} 条"
+                            )
+                        notes_list = kept_notes
+
+                    if notes_list:
+                        await self._handle_search_notes(notes_list)
+
+                    if (
+                        window_enabled
+                        and window_lo is not None
+                        and page_resolved_ts
+                        and all(ts < window_lo for ts in page_resolved_ts)
+                    ):
+                        utils.logger.info("[TieBaCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                        break
 
                     # Sleep after page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)

@@ -24,7 +24,7 @@
 
 import asyncio
 import os
-# import random  # Removed as we now use fixed config.CRAWLER_MAX_SLEEP_SEC intervals
+import random  # Used for search start-page jitter (anti-starvation exploration)
 from asyncio import Task
 from typing import Dict, List, Optional, Tuple
 
@@ -42,6 +42,7 @@ from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import weibo as weibo_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.publish_time_window import is_within_window, parse_window
 from var import crawler_type_var, source_keyword_var
 
 from .client import WeiboClient
@@ -144,6 +145,8 @@ class WeiboCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < weibo_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = weibo_limit_count
         start_page = config.START_PAGE
+        window_lo, window_hi = parse_window(config.CRAWL_PUBLISH_TIME_START, config.CRAWL_PUBLISH_TIME_END)
+        window_enabled = window_lo is not None or window_hi is not None
 
         # Set the search type based on the configuration for weibo
         if config.WEIBO_SEARCH_TYPE == "default":
@@ -162,8 +165,14 @@ class WeiboCrawler(AbstractCrawler):
             source_keyword_var.set(keyword)
             utils.logger.info(f"[WeiboCrawler.search] Current search keyword: {keyword}")
             page = 1
+            # 防饥饿：本关键词开搜前，以一定概率把起始页随机后移，避免每次都只翻到前几页
+            keyword_start_page = start_page
+            if random.random() < float(getattr(config, "SEARCH_START_PAGE_JITTER_PROB", 0.0)):
+                jitter = random.randint(1, int(getattr(config, "SEARCH_START_PAGE_JITTER_MAX", 1)))
+                keyword_start_page += jitter
+                utils.logger.info(f"[WeiboCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
             while (page - start_page + 1) * weibo_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
-                if page < start_page:
+                if page < keyword_start_page:
                     utils.logger.info(f"[WeiboCrawler.search] Skip page: {page}")
                     page += 1
                     continue
@@ -173,13 +182,37 @@ class WeiboCrawler(AbstractCrawler):
                 note_list = filter_search_result_card(search_res.get("cards"))
                 # If full text fetching is enabled, batch get full text of posts
                 note_list = await self.batch_get_notes_full_text(note_list)
+                page_resolved_ts: List[int] = []
                 for note_item in note_list:
                     if note_item:
                         mblog: Dict = note_item.get("mblog")
                         if mblog:
+                            publish_ts_ms = None
+                            try:
+                                created_at = (mblog or {}).get("created_at")
+                                if created_at:
+                                    publish_ts_ms = int(utils.rfc2822_to_china_datetime(created_at).timestamp() * 1000)
+                            except (TypeError, ValueError):
+                                publish_ts_ms = None
+                            if window_enabled:
+                                if publish_ts_ms is not None:
+                                    page_resolved_ts.append(publish_ts_ms)
+                                if not is_within_window(publish_ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
+                                    continue
                             note_id_list.append(mblog.get("id"))
                             await weibo_store.update_weibo_note(note_item)
                             await self.get_note_images(mblog)
+
+                if (
+                    window_enabled
+                    and window_lo is not None
+                    and config.WEIBO_SEARCH_TYPE == "real_time"
+                    and page_resolved_ts
+                    and all(ts < window_lo for ts in page_resolved_ts)
+                ):
+                    utils.logger.info("[WeiboCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                    await self.batch_get_notes_comments(note_id_list)
+                    break
 
                 page += 1
 
