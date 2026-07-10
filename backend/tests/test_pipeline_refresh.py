@@ -110,6 +110,74 @@ class SyncRefreshTest(unittest.TestCase):
         self.assertEqual(stats.skipped_duplicate, 1)
 
 
+class ZhihuSyncRefreshTest(unittest.TestCase):
+    """Z5：zhihu 的 --refresh 只刷 like_count（voteup）与 comment_count，collect/share 不动。"""
+
+    def setUp(self) -> None:
+        self.db = make_session_factory()()
+        self.addCleanup(self.db.close)
+
+    @staticmethod
+    def _zhihu_payload(voteup: int = 99, comment: int = 8):
+        from scripts.sync_media_to_raw_posts import _map_zhihu
+
+        return _map_zhihu(
+            {
+                "id": 7,
+                "content_id": "answer-1",
+                "content_text": "新正文",
+                "content_url": "https://www.zhihu.com/question/1/answer/1",
+                "title": "新标题",
+                "created_time": "1750000000",
+                "voteup_count": voteup,
+                "comment_count": comment,
+                "source_keyword": "宿舍",
+                "add_ts": 1750000000000,
+            }
+        )
+
+    def _seed_zhihu_row(self, **overrides) -> RawPost:
+        row = RawPost(
+            platform="zhihu",
+            external_id="answer-1",
+            title="旧标题",
+            content="旧正文",
+            like_count=1,
+            collect_count=5,
+            comment_count=1,
+            share_count=3,
+        )
+        for key, value in overrides.items():
+            setattr(row, key, value)
+        self.db.add(row)
+        self.db.commit()
+        return row
+
+    def test_zhihu_refresh_updates_like_and_comment_only(self) -> None:
+        self._seed_zhihu_row()
+
+        stats = _insert_payloads(self.db, "zhihu", [self._zhihu_payload()], dry_run=False, refresh=True)
+        self.db.commit()
+
+        self.assertEqual(stats.updated, 1)
+        row = self.db.query(RawPost).filter_by(platform="zhihu", external_id="answer-1").one()
+        self.assertEqual(row.like_count, 99)
+        self.assertEqual(row.comment_count, 8)
+        # 知乎映射的 collect/share 恒 0，refresh 不得用 0 覆盖已有值
+        self.assertEqual(row.collect_count, 5)
+        self.assertEqual(row.share_count, 3)
+        self.assertEqual(row.title, "旧标题")
+
+    def test_zhihu_refresh_identical_two_fields_counts_as_skipped(self) -> None:
+        # collect/share 与 payload（恒 0）不同，但不在 zhihu 的刷新字段内 -> 视为无变化
+        self._seed_zhihu_row(like_count=99, comment_count=8)
+
+        stats = _insert_payloads(self.db, "zhihu", [self._zhihu_payload()], dry_run=False, refresh=True)
+
+        self.assertEqual(stats.updated, 0)
+        self.assertEqual(stats.skipped_duplicate, 1)
+
+
 class ProcessRefreshTest(unittest.TestCase):
     """`_process_raw_posts` 的 refresh 分支：已存在的 processed_posts 行是否重算互动量 + 热度。"""
 

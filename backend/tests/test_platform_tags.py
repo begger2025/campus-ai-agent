@@ -14,6 +14,7 @@ from scripts.sync_media_to_raw_posts import (
     _map_tieba,
     _map_weibo,
     _map_xhs,
+    _map_zhihu,
     extract_weibo_topics,
     normalize_xhs_tag_list,
 )
@@ -96,6 +97,74 @@ class MapperTagsTest(unittest.TestCase):
         row = {"id": 1, "note_id": "t1", "title": "标题", "desc": "", "source_keyword": "宿舍"}
         payload = _map_tieba(row)
         self.assertEqual(payload["tags_json"], "")
+
+
+def _zhihu_row(**overrides):
+    """zhihu_content 原生行形状（created_time 是 String(32) 秒级 epoch 字符串）。"""
+    row = {
+        "id": 7,
+        "content_id": "answer-1",
+        "content_type": "answer",
+        "content_text": "宿舍空调坏了怎么办，求靠谱维修渠道",
+        "content_url": "https://www.zhihu.com/question/1/answer/1",
+        "question_id": "q1",
+        "title": "中大宿舍空调问题",
+        "desc": "描述文本",
+        "created_time": "1750000000",
+        "voteup_count": 12,
+        "comment_count": 3,
+        "source_keyword": "宿舍",
+        "user_nickname": "答主甲",
+        "add_ts": 1750000000000,
+        "last_modify_ts": 1750000500000,
+    }
+    row.update(overrides)
+    return row
+
+
+class ZhihuMappingTest(unittest.TestCase):
+    """Z5：zhihu_content -> raw_posts 映射与 created_time 容错三态。"""
+
+    def test_zhihu_created_at_normal_seconds(self) -> None:
+        payload = _map_zhihu(_zhihu_row(created_time="1750000000"))
+        self.assertEqual(payload["publish_time"], datetime.fromtimestamp(1750000000))
+
+    def test_zhihu_created_at_zero_falls_back_to_add_ts(self) -> None:
+        payload = _map_zhihu(_zhihu_row(created_time="0", add_ts=1750000000000))
+        self.assertEqual(payload["publish_time"], datetime.fromtimestamp(1750000000))
+
+    def test_zhihu_created_at_garbage_falls_back_to_add_ts(self) -> None:
+        payload = _map_zhihu(_zhihu_row(created_time="abc", add_ts=1750000000000))
+        self.assertEqual(payload["publish_time"], datetime.fromtimestamp(1750000000))
+
+    def test_zhihu_row_mapping(self) -> None:
+        payload = _map_zhihu(_zhihu_row())
+        self.assertEqual(payload["platform"], "zhihu")
+        self.assertEqual(payload["source_table"], "zhihu_content")
+        self.assertEqual(payload["external_id"], "answer-1")
+        self.assertEqual(payload["title"], "中大宿舍空调问题")
+        self.assertEqual(payload["content"], "宿舍空调坏了怎么办，求靠谱维修渠道")
+        self.assertEqual(payload["like_count"], 12)  # voteup_count -> like_count
+        self.assertEqual(payload["comment_count"], 3)
+        self.assertEqual(payload["collect_count"], 0)
+        self.assertEqual(payload["share_count"], 0)
+        self.assertEqual(payload["tags_json"], "[]")  # 知乎无标签体系
+        self.assertEqual(payload["url"], "https://www.zhihu.com/question/1/answer/1")
+        self.assertEqual(payload["source_keyword"], "宿舍")
+
+    def test_zhihu_platform_registered(self) -> None:
+        from scripts.sync_media_to_raw_posts import (
+            MAPPER_BY_PLATFORM,
+            SUPPORTED_PLATFORMS,
+            TABLE_BY_PLATFORM,
+            _normalize_platforms,
+        )
+
+        self.assertIn("zhihu", SUPPORTED_PLATFORMS)
+        self.assertEqual(TABLE_BY_PLATFORM["zhihu"], "zhihu_content")
+        self.assertIs(MAPPER_BY_PLATFORM["zhihu"], _map_zhihu)
+        self.assertIn("zhihu", _normalize_platforms(None))
+        self.assertIn("zhihu", _normalize_platforms(["all"]))
 
 
 NOW = datetime(2026, 7, 10, 12, 0, 0)

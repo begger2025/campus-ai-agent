@@ -28,11 +28,12 @@ from backend.services.log_service import create_crawl_task, finish_crawl_task, w
 from scripts.ensure_wp4_schema import ensure_wp4_schema  # noqa: E402
 
 
-SUPPORTED_PLATFORMS = {"xhs", "weibo", "tieba"}
+SUPPORTED_PLATFORMS = {"xhs", "weibo", "tieba", "zhihu"}
 TABLE_BY_PLATFORM = {
     "xhs": "xhs_note",
     "weibo": "weibo_note",
     "tieba": "tieba_note",
+    "zhihu": "zhihu_content",
 }
 
 
@@ -352,6 +353,43 @@ def _map_tieba(row: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _zhihu_publish_time(row: dict[str, Any]) -> Any:
+    """zhihu_content.created_time 是 String(32) 秒级 epoch 字符串，int() 容错：
+
+    正常秒级 -> 直接用；"0"/空/非数字 -> 回退 add_ts（毫秒，_parse_datetime 会自动换算成秒）。
+    """
+    try:
+        seconds = int(str(row.get("created_time") or "").strip())
+    except (TypeError, ValueError):
+        seconds = 0
+    if seconds > 0:
+        return seconds
+    return row.get("add_ts")
+
+
+def _map_zhihu(row: dict[str, Any]) -> dict[str, Any]:
+    crawl_time = row.get("last_modify_ts") or row.get("add_ts")
+    return _base_payload(
+        platform="zhihu",
+        source_table="zhihu_content",
+        source_raw_id=row.get("id"),
+        external_id=row.get("content_id"),
+        source_keyword=row.get("source_keyword"),
+        title=row.get("title"),
+        content=row.get("content_text"),
+        author=row.get("user_nickname"),
+        publish_time=_zhihu_publish_time(row),
+        url=row.get("content_url"),
+        like_count=row.get("voteup_count"),
+        collect_count=0,
+        comment_count=row.get("comment_count"),
+        share_count=0,
+        tags_json="[]",  # 知乎无标签体系，D 新话题信号不参与
+        crawl_time=crawl_time,
+        raw_row=row,
+    )
+
+
 def _map_json(row: dict[str, Any], platform: str, source_table: str) -> dict[str, Any]:
     return _base_payload(
         platform=platform,
@@ -380,17 +418,18 @@ MAPPER_BY_PLATFORM = {
     "xhs": _map_xhs,
     "weibo": _map_weibo,
     "tieba": _map_tieba,
+    "zhihu": _map_zhihu,
 }
 
 
 def _normalize_platforms(platforms: Iterable[str] | None) -> list[str]:
     if not platforms:
-        return ["xhs", "weibo", "tieba"]
+        return ["xhs", "weibo", "tieba", "zhihu"]
     result: list[str] = []
     for platform in platforms:
         item = platform.lower().strip()
         if item == "all":
-            return ["xhs", "weibo", "tieba"]
+            return ["xhs", "weibo", "tieba", "zhihu"]
         if item not in SUPPORTED_PLATFORMS:
             raise ValueError(f"unsupported platform: {platform}")
         if item not in result:
@@ -550,6 +589,10 @@ def _read_json_records(path: Path) -> list[dict[str, Any]]:
 
 # 互动量字段：注意点 3 的 --refresh 只碰这四个，标题/正文/标签/发布时间等一律不动。
 ENGAGEMENT_FIELDS = ("like_count", "collect_count", "comment_count", "share_count")
+# 知乎映射的 collect/share 恒 0（平台无此计数），--refresh 只刷赞同与评论，避免 0 覆盖既有值。
+REFRESH_FIELDS_BY_PLATFORM = {
+    "zhihu": ("like_count", "comment_count"),
+}
 
 
 def _insert_payloads(
@@ -573,7 +616,10 @@ def _insert_payloads(
             if exists:
                 if refresh:
                     changed = False
-                    for field_name in ENGAGEMENT_FIELDS:
+                    refresh_fields = REFRESH_FIELDS_BY_PLATFORM.get(
+                        payload["platform"], ENGAGEMENT_FIELDS
+                    )
+                    for field_name in refresh_fields:
                         new_value = payload[field_name]
                         if getattr(exists, field_name) != new_value:
                             changed = True
@@ -717,7 +763,7 @@ def main() -> int:
     parser.add_argument(
         "--platform",
         action="append",
-        choices=["all", "xhs", "weibo", "tieba", "json"],
+        choices=["all", "xhs", "weibo", "tieba", "zhihu", "json"],
         default=None,
         help="Platform to sync. Use multiple --platform values or all.",
     )
