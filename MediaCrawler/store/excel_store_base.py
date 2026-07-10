@@ -46,6 +46,7 @@ except ImportError:
 
 from base.base_crawler import AbstractStore
 from tools import utils
+from tools.async_file_writer import _DedupGuard
 import config
 
 
@@ -110,6 +111,8 @@ class ExcelStoreBase(AbstractStore):
         super().__init__()
         self.platform = platform
         self.crawler_type = crawler_type
+        # 进程内去重：同一 run 内相同 (item_type, note_id/comment_id) 只写一次
+        self._dedup_guard = _DedupGuard()
 
         # Create data directory
         if config.SAVE_DATA_PATH:
@@ -241,6 +244,12 @@ class ExcelStoreBase(AbstractStore):
         Args:
             content_item: Content data dictionary
         """
+        if not self._dedup_guard.should_write("contents", content_item):
+            utils.logger.info(
+                f"[ExcelStoreBase] Skip duplicate content in this run: {content_item.get('note_id', 'N/A')}"
+            )
+            return
+
         # Define headers (customize based on platform)
         headers = list(content_item.keys())
 
@@ -263,6 +272,12 @@ class ExcelStoreBase(AbstractStore):
         Args:
             comment_item: Comment data dictionary
         """
+        if not self._dedup_guard.should_write("comments", comment_item):
+            utils.logger.info(
+                f"[ExcelStoreBase] Skip duplicate comment in this run: {comment_item.get('comment_id', 'N/A')}"
+            )
+            return
+
         # Define headers
         headers = list(comment_item.keys())
 

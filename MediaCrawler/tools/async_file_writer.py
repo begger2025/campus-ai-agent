@@ -21,11 +21,50 @@ import csv
 import json
 import os
 import pathlib
-from typing import Dict, List
+from typing import Dict, List, Optional
 import aiofiles
 import config
 from tools.utils import utils
 from tools.words import AsyncWordCloudGenerator
+
+
+class _DedupGuard:
+    """进程内去重：同一 item_type 下相同 id（note_id/comment_id）只允许写入一次。
+
+    id 提取优先级由 item_type 决定：评论项（"comments"）同时带着自己的
+    comment_id 和所属帖子的 note_id，如果无脑先取 note_id，会把同一帖子下的
+    所有评论都当成"重复"而漏写；因此评论优先取 comment_id，其余（主要是
+    "contents"）优先取 note_id。两个字段都取不到时不去重，直接放行——避免
+    误伤没有这两个字段的数据（比如 creators）。
+
+    只做进程内、单次运行范围的去重；跨进程/跨文件（比如断点续爬接着上次写）
+    不做，那需要全文件扫描，代价不划算，设计文档"范围外"已注明。
+    """
+
+    def __init__(self) -> None:
+        self._seen: set = set()
+
+    @staticmethod
+    def _extract_id(item_type: str, item: Dict) -> Optional[object]:
+        candidates = ("comment_id", "note_id") if item_type == "comments" else ("note_id", "comment_id")
+        for field_name in candidates:
+            value = item.get(field_name)
+            if value not in (None, ""):
+                return value
+        return None
+
+    def should_write(self, item_type: str, item: Dict) -> bool:
+        """True = 应当写入（首次出现，或没有可用的 id 字段无法判断）；
+        False = 本次进程运行内已经写过同一 (item_type, id)，应当跳过。"""
+        item_id = self._extract_id(item_type, item)
+        if item_id is None:
+            return True
+        key = (item_type, item_id)
+        if key in self._seen:
+            return False
+        self._seen.add(key)
+        return True
+
 
 class AsyncFileWriter:
     def __init__(self, platform: str, crawler_type: str):
@@ -33,6 +72,7 @@ class AsyncFileWriter:
         self.platform = platform
         self.crawler_type = crawler_type
         self.wordcloud_generator = AsyncWordCloudGenerator() if config.ENABLE_GET_WORDCLOUD else None
+        self._dedup_guard = _DedupGuard()
 
     def _get_file_path(self, file_type: str, item_type: str) -> str:
         if config.SAVE_DATA_PATH:
@@ -44,6 +84,9 @@ class AsyncFileWriter:
         return f"{base_path}/{file_name}"
 
     async def write_to_csv(self, item: Dict, item_type: str):
+        if not self._dedup_guard.should_write(item_type, item):
+            utils.logger.info(f"[AsyncFileWriter.write_to_csv] Skip duplicate {item_type} item in this run")
+            return
         file_path = self._get_file_path('csv', item_type)
         async with self.lock:
             file_exists = os.path.exists(file_path)
@@ -54,12 +97,18 @@ class AsyncFileWriter:
                 await writer.writerow(item)
 
     async def write_to_jsonl(self, item: Dict, item_type: str):
+        if not self._dedup_guard.should_write(item_type, item):
+            utils.logger.info(f"[AsyncFileWriter.write_to_jsonl] Skip duplicate {item_type} item in this run")
+            return
         file_path = self._get_file_path('jsonl', item_type)
         async with self.lock:
             async with aiofiles.open(file_path, 'a', encoding='utf-8') as f:
                 await f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
     async def write_single_item_to_json(self, item: Dict, item_type: str):
+        if not self._dedup_guard.should_write(item_type, item):
+            utils.logger.info(f"[AsyncFileWriter.write_single_item_to_json] Skip duplicate {item_type} item in this run")
+            return
         file_path = self._get_file_path('json', item_type)
         async with self.lock:
             existing_data = []
