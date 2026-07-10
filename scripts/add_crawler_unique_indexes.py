@@ -40,6 +40,8 @@ TARGETS: List[Tuple[str, str, str]] = [
     ("weibo_note_comment", "comment_id", "uk_weibo_note_comment_comment_id"),
     ("tieba_note", "note_id", "uk_tieba_note_note_id"),
     ("tieba_comment", "comment_id", "uk_tieba_comment_comment_id"),
+    ("zhihu_content", "content_id", "uk_zhihu_content_content_id"),
+    ("zhihu_comment", "comment_id", "uk_zhihu_comment_comment_id"),
 ]
 
 
