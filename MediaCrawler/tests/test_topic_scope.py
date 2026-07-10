@@ -118,6 +118,26 @@ class TestNegativeFilterConfigLists:
             config.TOPIC_NEGATIVE_RESCUE_TERMS,
         )
 
+    def test_realestate_b2b_ad_is_filtered(self):
+        # 蹭校名的地产/家居 B 端营销长文（实测漏网样本：床垫集采广告）应被拦
+        assert is_marketing_noise(
+            [
+                "酒店/地产/床垫集采避坑：越来越多招标方指定慕思工程，"
+                "事业单位宿舍改造、地产精装交付按总拥有成本核算，"
+                "工程采购认准源头供应商，中山大学深圳校区等4000+项目同款"
+            ],
+            config.TOPIC_NEGATIVE_TERMS,
+            config.TOPIC_NEGATIVE_RESCUE_TERMS,
+        )
+
+    def test_genuine_dorm_tender_question_not_over_filtered(self):
+        # 真实学生帖含"招标"但非"招标方"，不应被误杀（刻意用招标方而非招标）
+        assert not is_marketing_noise(
+            ["中山大学东校区宿舍空调招标结果什么时候出"],
+            config.TOPIC_NEGATIVE_TERMS,
+            config.TOPIC_NEGATIVE_RESCUE_TERMS,
+        )
+
 
 class TestIsBroadKeyword:
     def test_equals_qualifier(self):
