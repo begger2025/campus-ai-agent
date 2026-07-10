@@ -21,7 +21,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import os
-# import random  # Removed as we now use fixed config.CRAWLER_MAX_SLEEP_SEC intervals
+import random  # Used for search start-page jitter (anti-starvation exploration)
 from asyncio import Task
 from typing import Dict, List, Optional, Tuple, cast
 
@@ -38,13 +38,19 @@ from constant import zhihu as constant
 from base.base_crawler import AbstractCrawler
 from model.m_zhihu import ZhihuContent, ZhihuCreator
 from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
+from store import run_history as run_history_store
 from store import zhihu as zhihu_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.crawl_quota import should_fetch_next_page
+from tools.publish_time_window import is_within_window, parse_window, pick_zhihu_search_time_value
+from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
+from tools.topic_scope import compose_topic_keyword, is_broad_keyword, is_marketing_noise, matches_topic
 from var import crawler_type_var, source_keyword_var
 
 from .client import ZhiHuClient
 from .exception import DataFetchError
+from .field import SearchSort, SearchTime
 from .help import ZhihuExtractor, judge_zhihu_url
 from .login import ZhiHuLogin
 
@@ -147,6 +153,82 @@ class ZhihuCrawler(AbstractCrawler):
 
             utils.logger.info("[ZhihuCrawler.start] Zhihu Crawler finished ...")
 
+    async def _filter_and_store_page(
+        self,
+        content_list: List[ZhihuContent],
+        window_lo: Optional[int],
+        window_hi: Optional[int],
+        window_enabled: bool,
+        run_state: RunState,
+    ) -> Tuple[List[ZhihuContent], List[int]]:
+        """单页搜索结果的过滤与入库：窗口 → 主题相关 → 营销负面 → 跳过已入库 → 逐条入库计数。
+
+        返回（本页实际入库成功的内容列表, page_resolved_ts）；page_resolved_ts 在一切
+        跳过/过滤决策之外收集——整页早停只看发布时间是否过旧，与内容是否被过滤/已入库无关。
+        """
+        page_resolved_ts: List[int] = []
+        kept: List[ZhihuContent] = []
+        window_filtered = topic_filtered = marketing_filtered = 0
+        topic_terms = getattr(config, "TOPIC_RELEVANCE_TERMS", [])
+        for content in content_list:
+            # created_time 为秒级 epoch（0 视为 unknown，按 PUBLISH_TIME_KEEP_UNKNOWN 处理）
+            ts_ms = int(content.created_time) * 1000 if content.created_time else None
+            if ts_ms is not None:
+                page_resolved_ts.append(ts_ms)
+            if window_enabled and not is_within_window(
+                ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN
+            ):
+                window_filtered += 1
+                continue
+            # 知乎判定文本最富（搜索结果直接含全文），主题/营销过滤共用同组文本
+            texts = [content.title, content.desc, content.content_text]
+            if getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False) and not matches_topic(texts, topic_terms):
+                topic_filtered += 1
+                continue
+            # 营销内容负面词表（第三道防线）：命中负面词且无救回词的推广内容不入库
+            if getattr(config, "ENABLE_TOPIC_NEGATIVE_FILTER", False) and is_marketing_noise(
+                texts,
+                getattr(config, "TOPIC_NEGATIVE_TERMS", []),
+                getattr(config, "TOPIC_NEGATIVE_RESCUE_TERMS", []),
+            ):
+                marketing_filtered += 1
+                continue
+            kept.append(content)
+
+        if window_filtered:
+            utils.logger.info(f"[ZhihuCrawler.search] 时间窗口过滤：跳过 {window_filtered} 条窗口外内容")
+        if topic_filtered:
+            utils.logger.info(f"[ZhihuCrawler.search] 主题过滤：跳过 {topic_filtered} 条与主题无关的内容")
+        if marketing_filtered:
+            utils.logger.info(f"[ZhihuCrawler.search] 营销内容过滤：跳过 {marketing_filtered} 条")
+
+        # 爬取阶段跳过已入库内容（省请求额度）：必须在过滤后、入库与评论抓取之前；
+        # page_resolved_ts 已在上面收集完毕，不受本次跳过影响
+        if kept and bool(getattr(config, "ZHIHU_SKIP_EXISTING_NOTES", True)):
+            existing = await zhihu_store.batch_get_existing_note_ids(
+                [str(content.content_id or "").strip() for content in kept]
+            )
+            if existing:
+                before = len(kept)
+                kept = [
+                    content for content in kept
+                    if str(content.content_id or "").strip() not in existing
+                ]
+                if before - len(kept):
+                    utils.logger.info(f"[ZhihuCrawler.search] 跳过已入库 {before - len(kept)} 条")
+
+        stored: List[ZhihuContent] = []
+        for content in kept:
+            try:
+                await zhihu_store.update_zhihu_content(content)
+                stored.append(content)
+                run_state.add_stored(1)  # 真正入库条数（过滤/跳过后）
+            except Exception as ex:
+                utils.logger.error(
+                    f"[ZhihuCrawler.search] store failed content_id={content.content_id}: {ex}"
+                )
+        return stored, page_resolved_ts
+
     async def search(self) -> None:
         """Search for notes and retrieve their comment information."""
         utils.logger.info("[ZhihuCrawler.search] Begin search zhihu keywords")
@@ -154,49 +236,118 @@ class ZhihuCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < zhihu_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = zhihu_limit_count
         start_page = config.START_PAGE
-        for keyword in config.KEYWORDS.split(","):
-            source_keyword_var.set(keyword)
-            utils.logger.info(
-                f"[ZhihuCrawler.search] Current search keyword: {keyword}"
-            )
-            page = 1
-            while (
-                page - start_page + 1
-            ) * zhihu_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
-                if page < start_page:
-                    utils.logger.info(f"[ZhihuCrawler.search] Skip page {page}")
-                    page += 1
-                    continue
+        window_lo, window_hi = parse_window(config.CRAWL_PUBLISH_TIME_START, config.CRAWL_PUBLISH_TIME_END)
+        window_enabled = window_lo is not None or window_hi is not None
 
-                try:
-                    utils.logger.info(
-                        f"[ZhihuCrawler.search] search zhihu keyword: {keyword}, page: {page}"
+        # 知乎独有的服务端增强：排序（综合/最赞/最新）与时间档位（按窗口起点距今选最小覆盖档）
+        sort_value = str(getattr(config, "ZHIHU_SEARCH_SORT", "") or "")
+        search_sort = SearchSort(sort_value) if sort_value else SearchSort.DEFAULT
+        search_time = SearchTime(
+            pick_zhihu_search_time_value(window_lo, int(utils.get_current_timestamp()))
+        )
+
+        for keyword in config.KEYWORDS.split(","):
+            # 宽泛词拦截（用原始词判定，需在主题限定组合之前）：裸主题词对过滤零区分力
+            if is_broad_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+            ) and not getattr(config, "ALLOW_BROAD_KEYWORDS", False):
+                utils.logger.warning(
+                    f"[ZhihuCrawler.search] 宽泛词已跳过：{keyword.strip()}（设 ALLOW_BROAD_KEYWORDS=True 可放行）"
+                )
+                continue
+            composed_keyword = compose_topic_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+            )
+            if composed_keyword != keyword.strip():
+                utils.logger.info(f"[ZhihuCrawler.search] 主题限定：{keyword} → {composed_keyword}")
+            keyword = composed_keyword
+            source_keyword_var.set(keyword)
+            utils.logger.info(f"[ZhihuCrawler.search] Current search keyword: {keyword}")
+            page = 1
+            # 防饥饿：仅综合排序时以一定概率把起始页随机后移（最新排序时间倒序天然无饥饿，不偏移）
+            keyword_start_page = start_page
+            if search_sort == SearchSort.DEFAULT and random.random() < float(
+                getattr(config, "SEARCH_START_PAGE_JITTER_PROB", 0.0)
+            ):
+                jitter = random.randint(1, int(getattr(config, "SEARCH_START_PAGE_JITTER_MAX", 1)))
+                keyword_start_page += jitter
+                utils.logger.info(f"[ZhihuCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
+            # 起始页 jitter 仅平移翻页窗口：跳过的页不发请求、不计入已抓页数（jitter=0 时与原行为等价）
+            # 通用爬取历史：本关键词一轮搜索写一行，try/except/finally 保证异常路径也落一行
+            run_state = RunState(
+                platform="zhihu",
+                source_keyword=keyword,
+                started_at=int(utils.get_current_timestamp()),
+            )
+            try:
+                # 配额按"新增入库条数"计（不再按页数），被过滤/跳过已入库的内容不烧配额；
+                # 页数保护上限防止贫瘠词无限翻页
+                while should_fetch_next_page(
+                    run_state.items_stored,
+                    run_state.pages_fetched,
+                    config.CRAWLER_MAX_NOTES_COUNT,
+                    int(getattr(config, "CRAWL_MAX_PAGES_PER_KEYWORD", 10)),
+                ):
+                    if page < keyword_start_page:
+                        utils.logger.info(f"[ZhihuCrawler.search] Skip page {page}")
+                        page += 1
+                        continue
+                    utils.logger.info(f"[ZhihuCrawler.search] search zhihu keyword: {keyword}, page: {page}")
+                    content_list: List[ZhihuContent] = await self.zhihu_client.get_note_by_keyword(
+                        keyword=keyword,
+                        page=page,
+                        sort=search_sort,
+                        search_time=search_time,
                     )
-                    content_list: List[ZhihuContent] = (
-                        await self.zhihu_client.get_note_by_keyword(
-                            keyword=keyword,
-                            page=page,
-                        )
-                    )
-                    utils.logger.info(
-                        f"[ZhihuCrawler.search] Search contents :{content_list}"
-                    )
+                    run_state.add_page()
+                    run_state.add_seen(len(content_list))
                     if not content_list:
-                        utils.logger.info("No more content!")
+                        utils.logger.info("[ZhihuCrawler.search] Search content list is empty")
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
                         break
+
+                    stored, page_resolved_ts = await self._filter_and_store_page(
+                        content_list, window_lo, window_hi, window_enabled, run_state
+                    )
+
+                    # 评论只对本页新入库内容抓取（跟随全局 ENABLE_GET_COMMENTS）
+                    await self.batch_get_content_comments(stored)
+
+                    # 最新排序（时间倒序）且整页发布时间全部早于窗口起点 → 提前停止翻页
+                    if (
+                        search_sort == SearchSort.CREATE_TIME
+                        and window_lo is not None
+                        and page_resolved_ts
+                        and all(ts < window_lo for ts in page_resolved_ts)
+                    ):
+                        utils.logger.info("[ZhihuCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                        run_state.mark_stop(STOP_WINDOW_EXHAUSTED)
+                        break
+
+                    page += 1
 
                     # Sleep after page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
                     utils.logger.info(f"[ZhihuCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
 
-                    page += 1
-                    for content in content_list:
-                        await zhihu_store.update_zhihu_content(content)
-
-                    await self.batch_get_content_comments(content_list)
-                except DataFetchError:
-                    utils.logger.error("[ZhihuCrawler.search] Search content error")
-                    return
+                # 循环自然退出：入库配额达成归结 quota_reached（页保护上限触发则落 completed）
+                if run_state.items_stored >= config.CRAWLER_MAX_NOTES_COUNT:
+                    run_state.mark_stop(STOP_QUOTA_REACHED)
+            except DataFetchError as ex:
+                # 原行为是 return 中断全部关键词；现在记 exception 落一行历史后继续下一关键词
+                run_state.mark_stop(STOP_EXCEPTION)
+                utils.logger.error(f"[ZhihuCrawler.search] Search content error, keyword: {keyword}, error: {ex}")
+            except Exception:
+                # 其他异常路径也落一行历史（stop_reason=exception），异常按微博行为继续上抛
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
+            finally:
+                run_state.finish(int(utils.get_current_timestamp()))
+                await run_history_store.save_crawler_run_history(run_state.as_row())
 
     async def batch_get_content_comments(self, content_list: List[ZhihuContent]):
         """
