@@ -36,10 +36,12 @@ import config
 from base.base_crawler import AbstractCrawler
 from model.m_xiaohongshu import NoteUrlInfo, CreatorUrlInfo
 from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
+from store import run_history as run_history_store
 from store import xhs as xhs_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_window, select_with_exploration
+from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
 from tools.topic_scope import compose_topic_keyword, matches_topic
 from var import crawler_type_var, source_keyword_var
 
@@ -886,6 +888,12 @@ class XiaoHongShuCrawler(AbstractCrawler):
             history_store_failed_note_ids: List[str] = []
             history_stored_note_ids: List[str] = []
             await self._create_crawl_history_record(history_state)
+            # 通用爬取历史（crawler_run_history）：与 xhs 专表双写，互不影响
+            run_state = RunState(
+                platform="xhs",
+                source_keyword=keyword,
+                started_at=int(history_state.get("started_at") or 0),
+            )
 
             try:
                 while scheduled_note_count < max_notes_count and not self.detail_stop_requested:
@@ -906,13 +914,16 @@ class XiaoHongShuCrawler(AbstractCrawler):
                             sort=(SearchSortType(config.SORT_TYPE) if config.SORT_TYPE != "" else SearchSortType.GENERAL),
                         )
                         utils.logger.info(f"[XiaoHongShuCrawler.search] Search notes response: {notes_res}")
+                        run_state.add_page()
                         if not notes_res:
                             utils.logger.info("[XiaoHongShuCrawler.search] Empty search response, stop current keyword")
                             history_state["stop_reason"] = history_state.get("stop_reason") or "empty_search_response"
+                            run_state.mark_stop(STOP_EMPTY_PAGE)
                             break
 
                         remaining_quota = max_notes_count - scheduled_note_count
                         items = notes_res.get("items", [])
+                        run_state.add_seen(len(items))  # 平台返回原始条数（过滤前）
                         selected_note_items = await self._filter_new_note_items_before_detail(
                             items,
                             remaining_quota=remaining_quota,
@@ -937,12 +948,14 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         ):
                             utils.logger.info("[XiaoHongShuCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
                             history_state["stop_reason"] = history_state.get("stop_reason") or "publish_time_window_exhausted"
+                            run_state.mark_stop(STOP_WINDOW_EXHAUSTED)
                             break
 
                         if not selected_note_items:
                             if not notes_res.get("has_more", False):
                                 utils.logger.info("[XiaoHongShuCrawler.search] No more new note content!")
                                 history_state["stop_reason"] = history_state.get("stop_reason") or "no_more_new_note_content"
+                                run_state.mark_stop(STOP_EMPTY_PAGE)
                                 break
 
                             page += 1
@@ -1053,6 +1066,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                                 f"[XiaoHongShuCrawler.search] Reached detail scheduling limit: {scheduled_note_count}/{max_notes_count}"
                             )
                             history_state["stop_reason"] = history_state.get("stop_reason") or "detail_limit_reached"
+                            run_state.mark_stop(STOP_QUOTA_REACHED)
                             break
                         if self.detail_stop_requested:
                             utils.logger.warning(
@@ -1063,6 +1077,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         if not notes_res.get("has_more", False):
                             utils.logger.info("[XiaoHongShuCrawler.search] No more content!")
                             history_state["stop_reason"] = history_state.get("stop_reason") or "no_more_content"
+                            run_state.mark_stop(STOP_EMPTY_PAGE)
                             break
 
                         if self._is_conservative_detail_mode():
@@ -1079,12 +1094,18 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         utils.logger.error("[XiaoHongShuCrawler.search] Get note detail error")
                         if not self.detail_stop_reason:
                             self.detail_stop_reason = "data_fetch_error"
+                        run_state.mark_stop(STOP_EXCEPTION)
                         break
                     except Exception as ex:
                         utils.logger.error(f"[XiaoHongShuCrawler.search] Unexpected error: {ex}")
                         if not self.detail_stop_reason:
                             self.detail_stop_reason = "unknown_error"
+                        run_state.mark_stop(STOP_EXCEPTION)
                         break
+            except Exception:
+                # 页内异常已被上面的 except 吞掉并 break；此处兜底其余异常路径也落一行历史
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
             finally:
                 await self._finalize_crawl_history_record(
                     history_state,
@@ -1098,6 +1119,13 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         "skip_existing_note_details": bool(getattr(config, "XHS_SKIP_EXISTING_NOTE_DETAILS", True)),
                     },
                 )
+                # 通用爬取历史（crawler_run_history）双写：入库数复用 history_stored_note_ids
+                run_state.add_stored(len(history_stored_note_ids))
+                if self.detail_stop_requested:
+                    # 风控/连续详情失败等中止统一归结为 exception
+                    run_state.mark_stop(STOP_EXCEPTION)
+                run_state.finish(int(utils.get_current_timestamp()))
+                await run_history_store.save_crawler_run_history(run_state.as_row())
 
             if self.detail_stop_requested:
                 utils.logger.warning(

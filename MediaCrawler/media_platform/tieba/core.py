@@ -36,10 +36,12 @@ import config
 from base.base_crawler import AbstractCrawler
 from model.m_baidu_tieba import TiebaCreator, TiebaNote
 from proxy.proxy_ip_pool import IpInfoModel, ProxyIpPool, create_ip_pool
+from store import run_history as run_history_store
 from store import tieba as tieba_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_tieba_publish_time_ms, parse_window
+from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_WINDOW_EXHAUSTED, RunState
 from tools.topic_scope import compose_topic_keyword, matches_topic
 from var import crawler_type_var, source_keyword_var
 
@@ -184,107 +186,127 @@ class TieBaCrawler(AbstractCrawler):
                 keyword_start_page += jitter
                 utils.logger.info(f"[TieBaCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
             # 配额锚定到偏移后的起始页：偏移平移翻页窗口而非烧掉配额（jitter=0 时与原行为等价）
-            while (
-                page - keyword_start_page + 1
-            ) * tieba_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
-                if page < keyword_start_page:
-                    utils.logger.info(f"[BaiduTieBaCrawler.search] Skip page {page}")
-                    page += 1
-                    continue
-                try:
-                    utils.logger.info(
-                        f"[BaiduTieBaCrawler.search] search tieba keyword: {keyword}, page: {page}"
-                    )
-                    notes_list: List[TiebaNote] = (
-                        await self.tieba_client.get_notes_by_keyword(
-                            keyword=keyword,
-                            page=page,
-                            page_size=tieba_limit_count,
-                            sort=SearchSortType.TIME_DESC,
-                            note_type=SearchNoteType.FIXED_THREAD,
-                        )
-                    )
-                    if not notes_list:
+            # 通用爬取历史：本关键词一轮搜索写一行，try/finally 保证异常路径也落一行
+            run_state = RunState(
+                platform="tieba",
+                source_keyword=keyword,
+                started_at=int(utils.get_current_timestamp()),
+            )
+            try:
+                while (
+                    page - keyword_start_page + 1
+                ) * tieba_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                    if page < keyword_start_page:
+                        utils.logger.info(f"[BaiduTieBaCrawler.search] Skip page {page}")
+                        page += 1
+                        continue
+                    try:
                         utils.logger.info(
-                            f"[BaiduTieBaCrawler.search] Search note list is empty"
+                            f"[BaiduTieBaCrawler.search] search tieba keyword: {keyword}, page: {page}"
                         )
-                        break
-                    utils.logger.info(
-                        f"[BaiduTieBaCrawler.search] Note list len: {len(notes_list)}"
-                    )
+                        notes_list: List[TiebaNote] = (
+                            await self.tieba_client.get_notes_by_keyword(
+                                keyword=keyword,
+                                page=page,
+                                page_size=tieba_limit_count,
+                                sort=SearchSortType.TIME_DESC,
+                                note_type=SearchNoteType.FIXED_THREAD,
+                            )
+                        )
+                        run_state.add_page()
+                        run_state.add_seen(len(notes_list or []))  # 平台返回原始条数（过滤前）
+                        if not notes_list:
+                            utils.logger.info(
+                                f"[BaiduTieBaCrawler.search] Search note list is empty"
+                            )
+                            run_state.mark_stop(STOP_EMPTY_PAGE)
+                            break
+                        utils.logger.info(
+                            f"[BaiduTieBaCrawler.search] Note list len: {len(notes_list)}"
+                        )
 
-                    # 窗口过滤与主题过滤相互独立：窗口过滤仅在启用窗口时生效，主题过滤按开关始终生效；
-                    # 两者合并为对 notes_list 的一次遍历。
-                    page_resolved_ts: List[int] = []
-                    kept_notes: List[TiebaNote] = []
-                    window_filtered_count = 0
-                    topic_filtered_count = 0
-                    topic_filter_enabled = getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False)
-                    for note in notes_list:
-                        if window_enabled:
-                            ts_ms = parse_tieba_publish_time_ms(note.publish_time)
-                            if ts_ms is not None:
-                                page_resolved_ts.append(ts_ms)
-                            if not is_within_window(ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
-                                window_filtered_count += 1
+                        # 窗口过滤与主题过滤相互独立：窗口过滤仅在启用窗口时生效，主题过滤按开关始终生效；
+                        # 两者合并为对 notes_list 的一次遍历。
+                        page_resolved_ts: List[int] = []
+                        kept_notes: List[TiebaNote] = []
+                        window_filtered_count = 0
+                        topic_filtered_count = 0
+                        topic_filter_enabled = getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False)
+                        for note in notes_list:
+                            if window_enabled:
+                                ts_ms = parse_tieba_publish_time_ms(note.publish_time)
+                                if ts_ms is not None:
+                                    page_resolved_ts.append(ts_ms)
+                                if not is_within_window(ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
+                                    window_filtered_count += 1
+                                    continue
+                            if topic_filter_enabled and not matches_topic(
+                                [note.title, note.desc, note.tieba_name],
+                                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+                            ):
+                                topic_filtered_count += 1
                                 continue
-                        if topic_filter_enabled and not matches_topic(
-                            [note.title, note.desc, note.tieba_name],
-                            getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+                            kept_notes.append(note)
+                        if window_filtered_count:
+                            utils.logger.info(
+                                f"[TieBaCrawler.search] 发布时间窗口过滤 {window_filtered_count} 条"
+                            )
+                        if topic_filtered_count:
+                            utils.logger.info(
+                                f"[TieBaCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的帖子"
+                            )
+                        notes_list = kept_notes
+
+                        # 爬取阶段跳过已入库帖子（省请求额度，仿小红书 XHS_SKIP_EXISTING_NOTE_DETAILS）：
+                        # 必须在窗口/主题过滤之后、入库（及评论抓取，_handle_search_notes 内部决定）之前。
+                        # page_resolved_ts 已在上面的过滤循环里收集完毕，不受本次跳过影响——早停看的是整页
+                        # 发布时间是否过旧，与帖子是否已入库无关，已存在的帖子仍然贡献了它的发布时间。
+                        if notes_list and bool(getattr(config, "TIEBA_SKIP_EXISTING_NOTES", True)):
+                            existing_note_ids = await tieba_store.batch_get_existing_note_ids(
+                                [str(note.note_id or "").strip() for note in notes_list]
+                            )
+                            if existing_note_ids:
+                                before_count = len(notes_list)
+                                notes_list = [
+                                    note for note in notes_list
+                                    if str(note.note_id or "").strip() not in existing_note_ids
+                                ]
+                                skipped_existing_count = before_count - len(notes_list)
+                                if skipped_existing_count:
+                                    utils.logger.info(f"[TieBaCrawler.search] 跳过已入库 {skipped_existing_count} 条")
+
+                        if notes_list:
+                            await self._handle_search_notes(notes_list)
+                            run_state.add_stored(len(notes_list))  # 传入 _handle_search_notes 的条数即入库条数
+
+                        if (
+                            window_enabled
+                            and window_lo is not None
+                            and page_resolved_ts
+                            and all(ts < window_lo for ts in page_resolved_ts)
                         ):
-                            topic_filtered_count += 1
-                            continue
-                        kept_notes.append(note)
-                    if window_filtered_count:
-                        utils.logger.info(
-                            f"[TieBaCrawler.search] 发布时间窗口过滤 {window_filtered_count} 条"
-                        )
-                    if topic_filtered_count:
-                        utils.logger.info(
-                            f"[TieBaCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的帖子"
-                        )
-                    notes_list = kept_notes
+                            utils.logger.info("[TieBaCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                            run_state.mark_stop(STOP_WINDOW_EXHAUSTED)
+                            break
 
-                    # 爬取阶段跳过已入库帖子（省请求额度，仿小红书 XHS_SKIP_EXISTING_NOTE_DETAILS）：
-                    # 必须在窗口/主题过滤之后、入库（及评论抓取，_handle_search_notes 内部决定）之前。
-                    # page_resolved_ts 已在上面的过滤循环里收集完毕，不受本次跳过影响——早停看的是整页
-                    # 发布时间是否过旧，与帖子是否已入库无关，已存在的帖子仍然贡献了它的发布时间。
-                    if notes_list and bool(getattr(config, "TIEBA_SKIP_EXISTING_NOTES", True)):
-                        existing_note_ids = await tieba_store.batch_get_existing_note_ids(
-                            [str(note.note_id or "").strip() for note in notes_list]
+                        # Sleep after page navigation
+                        await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                        utils.logger.info(f"[TieBaCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page}")
+
+                        page += 1
+                    except Exception as ex:
+                        utils.logger.error(
+                            f"[BaiduTieBaCrawler.search] Search keywords error, current page: {page}, current keyword: {keyword}, err: {ex}"
                         )
-                        if existing_note_ids:
-                            before_count = len(notes_list)
-                            notes_list = [
-                                note for note in notes_list
-                                if str(note.note_id or "").strip() not in existing_note_ids
-                            ]
-                            skipped_existing_count = before_count - len(notes_list)
-                            if skipped_existing_count:
-                                utils.logger.info(f"[TieBaCrawler.search] 跳过已入库 {skipped_existing_count} 条")
-
-                    if notes_list:
-                        await self._handle_search_notes(notes_list)
-
-                    if (
-                        window_enabled
-                        and window_lo is not None
-                        and page_resolved_ts
-                        and all(ts < window_lo for ts in page_resolved_ts)
-                    ):
-                        utils.logger.info("[TieBaCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                        run_state.mark_stop(STOP_EXCEPTION)
                         break
-
-                    # Sleep after page navigation
-                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-                    utils.logger.info(f"[TieBaCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page}")
-
-                    page += 1
-                except Exception as ex:
-                    utils.logger.error(
-                        f"[BaiduTieBaCrawler.search] Search keywords error, current page: {page}, current keyword: {keyword}, err: {ex}"
-                    )
-                    break
+            except Exception:
+                # 页内异常已被上面的 except 吞掉并 break；此处兜底其余异常路径也落一行历史
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
+            finally:
+                run_state.finish(int(utils.get_current_timestamp()))
+                await run_history_store.save_crawler_run_history(run_state.as_row())
 
     async def _handle_search_notes(self, notes_list: List[TiebaNote]) -> None:
         if config.ENABLE_GET_COMMENTS:

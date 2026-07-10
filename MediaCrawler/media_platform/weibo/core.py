@@ -39,10 +39,12 @@ from playwright.async_api import (
 import config
 from base.base_crawler import AbstractCrawler
 from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
+from store import run_history as run_history_store
 from store import weibo as weibo_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.publish_time_window import is_within_window, parse_window
+from tools.run_history import STOP_EXCEPTION, STOP_WINDOW_EXHAUSTED, RunState
 from tools.topic_scope import compose_topic_keyword, matches_topic
 from var import crawler_type_var, source_keyword_var
 
@@ -181,88 +183,106 @@ class WeiboCrawler(AbstractCrawler):
                 keyword_start_page += jitter
                 utils.logger.info(f"[WeiboCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
             # 配额锚定到偏移后的起始页：偏移平移翻页窗口而非烧掉配额（jitter=0 时与原行为等价）
-            while (page - keyword_start_page + 1) * weibo_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
-                if page < keyword_start_page:
-                    utils.logger.info(f"[WeiboCrawler.search] Skip page: {page}")
-                    page += 1
-                    continue
-                utils.logger.info(f"[WeiboCrawler.search] search weibo keyword: {keyword}, page: {page}")
-                search_res = await self.wb_client.get_note_by_keyword(keyword=keyword, page=page, search_type=search_type)
-                note_id_list: List[str] = []
-                note_list = filter_search_result_card(search_res.get("cards"))
-                # If full text fetching is enabled, batch get full text of posts
-                note_list = await self.batch_get_notes_full_text(note_list)
-                page_resolved_ts: List[int] = []
-                topic_filtered_count = 0
-                surviving_items: List[Tuple[Dict, Dict]] = []  # (note_item, mblog) that passed window/topic filters
-                for note_item in note_list:
-                    if note_item:
-                        mblog: Dict = note_item.get("mblog")
-                        if mblog:
-                            publish_ts_ms = None
-                            try:
-                                created_at = (mblog or {}).get("created_at")
-                                if created_at:
-                                    publish_ts_ms = int(utils.rfc2822_to_china_datetime(created_at).timestamp() * 1000)
-                            except (TypeError, ValueError):
-                                publish_ts_ms = None
-                            if window_enabled:
-                                if publish_ts_ms is not None:
-                                    page_resolved_ts.append(publish_ts_ms)
-                                if not is_within_window(publish_ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
-                                    continue
-                            if getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False) and not matches_topic(
-                                [(mblog or {}).get("text") or (mblog or {}).get("content") or ""],
-                                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
-                            ):
-                                topic_filtered_count += 1
-                                continue
-                            surviving_items.append((note_item, mblog))
-
-                if topic_filtered_count:
-                    utils.logger.info(f"[WeiboCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的微博")
-
-                # 爬取阶段跳过已入库帖子（省请求额度，仿小红书 XHS_SKIP_EXISTING_NOTE_DETAILS）：
-                # 必须在窗口/主题过滤之后、入库与评论抓取之前。page_resolved_ts 已在上面的过滤循环里
-                # 收集完毕，不受本次跳过影响——早停看的是整页发布时间是否过旧，与帖子是否已入库无关，
-                # 已存在的帖子仍然贡献了它的发布时间到 page_resolved_ts。
-                existing_note_ids: Set[str] = set()
-                if surviving_items and bool(getattr(config, "WEIBO_SKIP_EXISTING_NOTES", True)):
-                    existing_note_ids = await weibo_store.batch_get_existing_note_ids(
-                        [str(mblog.get("id") or "").strip() for _, mblog in surviving_items]
-                    )
-
-                skipped_existing_count = 0
-                for note_item, mblog in surviving_items:
-                    note_id = str(mblog.get("id") or "").strip()
-                    if note_id and note_id in existing_note_ids:
-                        skipped_existing_count += 1
+            # 通用爬取历史：本关键词一轮搜索写一行，try/finally 保证异常路径也落一行
+            run_state = RunState(
+                platform="wb",
+                source_keyword=keyword,
+                started_at=int(utils.get_current_timestamp()),
+            )
+            try:
+                while (page - keyword_start_page + 1) * weibo_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
+                    if page < keyword_start_page:
+                        utils.logger.info(f"[WeiboCrawler.search] Skip page: {page}")
+                        page += 1
                         continue
-                    note_id_list.append(mblog.get("id"))
-                    await weibo_store.update_weibo_note(note_item)
-                    await self.get_note_images(mblog)
+                    utils.logger.info(f"[WeiboCrawler.search] search weibo keyword: {keyword}, page: {page}")
+                    search_res = await self.wb_client.get_note_by_keyword(keyword=keyword, page=page, search_type=search_type)
+                    run_state.add_page()
+                    note_id_list: List[str] = []
+                    note_list = filter_search_result_card(search_res.get("cards"))
+                    run_state.add_seen(len(note_list))  # 平台返回原始条数（过滤前）
+                    # If full text fetching is enabled, batch get full text of posts
+                    note_list = await self.batch_get_notes_full_text(note_list)
+                    page_resolved_ts: List[int] = []
+                    topic_filtered_count = 0
+                    surviving_items: List[Tuple[Dict, Dict]] = []  # (note_item, mblog) that passed window/topic filters
+                    for note_item in note_list:
+                        if note_item:
+                            mblog: Dict = note_item.get("mblog")
+                            if mblog:
+                                publish_ts_ms = None
+                                try:
+                                    created_at = (mblog or {}).get("created_at")
+                                    if created_at:
+                                        publish_ts_ms = int(utils.rfc2822_to_china_datetime(created_at).timestamp() * 1000)
+                                except (TypeError, ValueError):
+                                    publish_ts_ms = None
+                                if window_enabled:
+                                    if publish_ts_ms is not None:
+                                        page_resolved_ts.append(publish_ts_ms)
+                                    if not is_within_window(publish_ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN):
+                                        continue
+                                if getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False) and not matches_topic(
+                                    [(mblog or {}).get("text") or (mblog or {}).get("content") or ""],
+                                    getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+                                ):
+                                    topic_filtered_count += 1
+                                    continue
+                                surviving_items.append((note_item, mblog))
 
-                if skipped_existing_count:
-                    utils.logger.info(f"[WeiboCrawler.search] 跳过已入库 {skipped_existing_count} 条")
+                    if topic_filtered_count:
+                        utils.logger.info(f"[WeiboCrawler.search] 主题过滤：跳过 {topic_filtered_count} 条与主题无关的微博")
 
-                if (
-                    window_enabled
-                    and window_lo is not None
-                    and config.WEIBO_SEARCH_TYPE == "real_time"
-                    and page_resolved_ts
-                    and all(ts < window_lo for ts in page_resolved_ts)
-                ):
-                    utils.logger.info("[WeiboCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                    # 爬取阶段跳过已入库帖子（省请求额度，仿小红书 XHS_SKIP_EXISTING_NOTE_DETAILS）：
+                    # 必须在窗口/主题过滤之后、入库与评论抓取之前。page_resolved_ts 已在上面的过滤循环里
+                    # 收集完毕，不受本次跳过影响——早停看的是整页发布时间是否过旧，与帖子是否已入库无关，
+                    # 已存在的帖子仍然贡献了它的发布时间到 page_resolved_ts。
+                    existing_note_ids: Set[str] = set()
+                    if surviving_items and bool(getattr(config, "WEIBO_SKIP_EXISTING_NOTES", True)):
+                        existing_note_ids = await weibo_store.batch_get_existing_note_ids(
+                            [str(mblog.get("id") or "").strip() for _, mblog in surviving_items]
+                        )
+
+                    skipped_existing_count = 0
+                    for note_item, mblog in surviving_items:
+                        note_id = str(mblog.get("id") or "").strip()
+                        if note_id and note_id in existing_note_ids:
+                            skipped_existing_count += 1
+                            continue
+                        note_id_list.append(mblog.get("id"))
+                        await weibo_store.update_weibo_note(note_item)
+                        run_state.add_stored(1)  # 真正入库条数（过滤/跳过后）
+                        await self.get_note_images(mblog)
+
+                    if skipped_existing_count:
+                        utils.logger.info(f"[WeiboCrawler.search] 跳过已入库 {skipped_existing_count} 条")
+
+                    if (
+                        window_enabled
+                        and window_lo is not None
+                        and config.WEIBO_SEARCH_TYPE == "real_time"
+                        and page_resolved_ts
+                        and all(ts < window_lo for ts in page_resolved_ts)
+                    ):
+                        utils.logger.info("[WeiboCrawler.search] 整页发布时间早于窗口起点，提前停止翻页")
+                        run_state.mark_stop(STOP_WINDOW_EXHAUSTED)
+                        await self.batch_get_notes_comments(note_id_list)
+                        break
+
+                    page += 1
+
+                    # Sleep after page navigation
+                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                    utils.logger.info(f"[WeiboCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
+
                     await self.batch_get_notes_comments(note_id_list)
-                    break
-
-                page += 1
-
-                # Sleep after page navigation
-                await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-                utils.logger.info(f"[WeiboCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
-
-                await self.batch_get_notes_comments(note_id_list)
+            except Exception:
+                # 异常路径也落一行历史（stop_reason=exception），异常按原行为继续上抛
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
+            finally:
+                run_state.finish(int(utils.get_current_timestamp()))
+                await run_history_store.save_crawler_run_history(run_state.as_row())
 
     async def get_specified_notes(self):
         """

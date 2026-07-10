@@ -475,3 +475,20 @@ class ZhihuCreator(Base):
     get_voteup_count = Column(Integer, default=0, comment='获赞数')
     add_ts = Column(BigInteger, comment='添加时间戳')
     last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
+
+class CrawlerRunHistory(Base):
+    """通用爬取历史：三平台每个关键词跑完一轮 search 写一行，纯追加日志表（无唯一约束）。
+
+    读侧（推荐端 adapter）按 platform + source_keyword 归一化对账，
+    items_stored == 0 判定贫瘠词，finished_at 并入降权时间。
+    """
+    __tablename__ = 'crawler_run_history'
+    id = Column(Integer, primary_key=True, comment='主键ID')
+    platform = Column(String(16), index=True, comment='平台（xhs | wb | tieba）')
+    source_keyword = Column(String(255), index=True, comment='搜索关键词（主题限定组合后）')
+    started_at = Column(BigInteger, comment='开始时间戳（毫秒）')
+    finished_at = Column(BigInteger, comment='结束时间戳（毫秒）')
+    pages_fetched = Column(Integer, default=0, comment='实际抓取页数')
+    items_seen = Column(Integer, default=0, comment='平台返回原始条数（过滤前）')
+    items_stored = Column(Integer, default=0, comment='真正入库条数（过滤/跳过后）')
+    stop_reason = Column(String(64), default='', comment='停止原因（quota_reached | empty_page | window_exhausted | exception | completed）')
