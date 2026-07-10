@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Set
 
 from sqlalchemy import func, select, update, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -131,7 +132,12 @@ class XhsDbStoreImplement(AbstractStore):
             if await self.content_is_exist(session, note_id):
                 await self.update_content(session, content_item)
             else:
-                await self.add_content(session, content_item)
+                try:
+                    await self.add_content(session, content_item)
+                except IntegrityError:
+                    # 并发竞态：另一协程刚插入同一 note_id；唯一约束兜底，这里退化为更新
+                    await session.rollback()
+                    await self.update_content(session, content_item)
 
     async def add_content(self, session: AsyncSession, content_item: Dict):
         current_ts = int(get_current_timestamp())
@@ -169,6 +175,9 @@ class XhsDbStoreImplement(AbstractStore):
             crawl_count=1,
         )
         session.add(note)
+        # 立即 flush 让唯一约束冲突在这里抛出，方便调用方 catch 后转 update，
+        # 而不是等到 get_session() 退出时才 commit 触发（那时已经不在 try/except 范围内）
+        await session.flush()
 
     async def update_content(self, session: AsyncSession, content_item: Dict):
         note_id = content_item.get("note_id")
@@ -341,7 +350,12 @@ class XhsDbStoreImplement(AbstractStore):
             if await self.comment_is_exist(session, comment_id):
                 await self.update_comment(session, comment_item)
             else:
-                await self.add_comment(session, comment_item)
+                try:
+                    await self.add_comment(session, comment_item)
+                except IntegrityError:
+                    # 并发竞态：另一协程刚插入同一 comment_id；唯一约束兜底，这里退化为更新
+                    await session.rollback()
+                    await self.update_comment(session, comment_item)
 
     async def add_comment(self, session: AsyncSession, comment_item: Dict):
         add_ts = int(get_current_timestamp())
@@ -363,6 +377,8 @@ class XhsDbStoreImplement(AbstractStore):
             like_count=str(comment_item.get("like_count"))
         )
         session.add(comment)
+        # 同上：立即 flush 让唯一约束冲突在 try/except 范围内抛出
+        await session.flush()
 
     async def update_comment(self, session: AsyncSession, comment_item: Dict):
         comment_id = comment_item.get("comment_id")

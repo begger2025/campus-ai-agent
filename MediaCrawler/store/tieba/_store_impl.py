@@ -31,6 +31,7 @@ from typing import Dict
 
 import aiofiles
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import config
@@ -105,17 +106,26 @@ class TieBaDbStoreImplement(AbstractStore):
             content_item: content item dict
         """
         note_id = content_item.get("note_id")
-        async with get_session() as session:
-            stmt = select(TiebaNote).where(TiebaNote.note_id == note_id)
-            res = await session.execute(stmt)
-            db_note = res.scalar_one_or_none()
-            if db_note:
-                for key, value in content_item.items():
-                    setattr(db_note, key, value)
-            else:
-                db_note = TiebaNote(**content_item)
-                session.add(db_note)
-            await session.commit()
+        try:
+            async with get_session() as session:
+                stmt = select(TiebaNote).where(TiebaNote.note_id == note_id)
+                res = await session.execute(stmt)
+                db_note = res.scalar_one_or_none()
+                if db_note:
+                    for key, value in content_item.items():
+                        setattr(db_note, key, value)
+                else:
+                    db_note = TiebaNote(**content_item)
+                    session.add(db_note)
+                await session.commit()
+        except IntegrityError:
+            # 并发竞态：另一协程刚插入同一 note_id，唯一约束兜底触发。
+            # tieba 同 weibo，插入/更新共用一条路径、无独立 add_/update_ helper，
+            # get_session() 已在退出时 rollback 并重新抛出，这里在外层兜住，
+            # 跳过本条并记录告警，避免中断整场爬取——下次重爬同一帖子会自然更新。
+            utils.logger.warning(
+                f"[TieBaDbStoreImplement.store_content] note_id={note_id} 写入唯一键冲突（并发竞态），已跳过本次写入"
+            )
 
     async def store_comment(self, comment_item: Dict):
         """
@@ -124,17 +134,23 @@ class TieBaDbStoreImplement(AbstractStore):
             comment_item: comment item dict
         """
         comment_id = comment_item.get("comment_id")
-        async with get_session() as session:
-            stmt = select(TiebaComment).where(TiebaComment.comment_id == comment_id)
-            res = await session.execute(stmt)
-            db_comment = res.scalar_one_or_none()
-            if db_comment:
-                for key, value in comment_item.items():
-                    setattr(db_comment, key, value)
-            else:
-                db_comment = TiebaComment(**comment_item)
-                session.add(db_comment)
-            await session.commit()
+        try:
+            async with get_session() as session:
+                stmt = select(TiebaComment).where(TiebaComment.comment_id == comment_id)
+                res = await session.execute(stmt)
+                db_comment = res.scalar_one_or_none()
+                if db_comment:
+                    for key, value in comment_item.items():
+                        setattr(db_comment, key, value)
+                else:
+                    db_comment = TiebaComment(**comment_item)
+                    session.add(db_comment)
+                await session.commit()
+        except IntegrityError:
+            # 并发竞态兜底，理由同 store_content：跳过本条并记录告警，不中断爬取。
+            utils.logger.warning(
+                f"[TieBaDbStoreImplement.store_comment] comment_id={comment_id} 写入唯一键冲突（并发竞态），已跳过本次写入"
+            )
 
     async def store_creator(self, creator: Dict):
         """
