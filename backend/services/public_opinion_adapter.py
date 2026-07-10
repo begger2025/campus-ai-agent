@@ -142,11 +142,18 @@ def query_agent_rows(
     def bare_note_id(value: str) -> str:
         return (value or "").split(":", 1)[-1]
 
-    comments_by_note = fetch_top_comments(
-        db, [bare_note_id(row["note_id"]) for row in agent_rows if row.get("note_id")]
+    comments_by_ref = fetch_top_comments(
+        db,
+        [
+            (row["platform"], bare_note_id(row["note_id"]))
+            for row in agent_rows
+            if row.get("note_id")
+        ],
     )
     for row in agent_rows:
-        row["top_comments"] = comments_by_note.get(bare_note_id(row.get("note_id") or ""), [])
+        row["top_comments"] = comments_by_ref.get(
+            (row["platform"], bare_note_id(row.get("note_id") or "")), []
+        )
     return agent_rows
 
 
