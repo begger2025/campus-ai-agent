@@ -85,6 +85,7 @@ const PLATFORM_OPTIONS = [
   { value: 'xhs', label: '小红书' },
   { value: 'wb', label: '微博' },
   { value: 'tieba', label: '贴吧' },
+  { value: 'zhihu', label: '知乎' },
 ]
 const platform = ref('xhs')
 
