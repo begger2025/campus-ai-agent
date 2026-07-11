@@ -135,6 +135,26 @@ class KuaishouDbStoreImplement(AbstractStore):
                         setattr(comment_detail, key, value)
             await session.commit()
 
+    async def batch_get_existing_note_ids(self, note_ids):
+        normalized_note_ids = {
+            str(note_id).strip()
+            for note_id in note_ids
+            if str(note_id).strip()
+        }
+        if not normalized_note_ids:
+            return set()
+
+        async with get_session() as session:
+            stmt = select(KuaishouVideo.video_id).where(
+                KuaishouVideo.video_id.in_(list(normalized_note_ids))
+            )
+            result = await session.execute(stmt)
+            return {
+                str(video_id).strip()
+                for video_id in result.scalars().all()
+                if str(video_id).strip()
+            }
+
 
 class KuaishouJsonStoreImplement(AbstractStore):
     def __init__(self, **kwargs):

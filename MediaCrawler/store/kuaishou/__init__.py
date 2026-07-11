@@ -22,7 +22,7 @@
 # @Author  : relakkes@gmail.com
 # @Time    : 2024/1/14 20:03
 # @Desc    :
-from typing import List
+from typing import Dict, List, Set
 
 import config
 from var import source_keyword_var
@@ -68,6 +68,7 @@ async def update_kuaishou_video(video_item: Dict):
         "avatar": user_info.get("headerUrl", ""),
         "liked_count": str(photo_info.get("realLikeCount")),
         "viewd_count": str(photo_info.get("viewCount")),
+        "comment_count": str(photo_info.get("commentCount") or 0),
         "last_modify_ts": utils.get_current_timestamp(),
         "video_url": f"https://www.kuaishou.com/short-video/{video_id}",
         "video_cover_url": photo_info.get("coverUrl", ""),
@@ -128,3 +129,32 @@ async def save_creator(user_id: str, creator: Dict):
     }
     utils.logger.info(f"[store.kuaishou.save_creator] creator:{local_db_item}")
     await KuaishouStoreFactory.create_store().store_creator(local_db_item)
+
+
+async def batch_get_existing_note_ids(note_ids: List[str]) -> Set[str]:
+    """批量查询已入库的快手 video_id；非 db 系存储优雅降级返回空集（仿知乎模式）。"""
+    normalized_note_ids = list(
+        {
+            str(note_id).strip()
+            for note_id in note_ids
+            if str(note_id).strip()
+        }
+    )
+    if not normalized_note_ids:
+        return set()
+
+    store = KuaishouStoreFactory.create_store()
+    batch_getter = getattr(store, "batch_get_existing_note_ids", None)
+    if not callable(batch_getter):
+        utils.logger.info(
+            f"[store.kuaishou.batch_get_existing_note_ids] Current store backend does not support note existence lookup, "
+            f"save option: {config.SAVE_DATA_OPTION}"
+        )
+        return set()
+
+    existing_note_ids = await batch_getter(normalized_note_ids)
+    utils.logger.info(
+        f"[store.kuaishou.batch_get_existing_note_ids] Checked {len(normalized_note_ids)} candidate video_ids, "
+        f"existing in store: {len(existing_note_ids)}"
+    )
+    return existing_note_ids
