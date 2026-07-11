@@ -40,6 +40,35 @@ class CanonicalizeTests(unittest.TestCase):
             canonical_url_hash("https://news.sysu.edu.cn/"),
         )
 
+    def test_trailing_slash_on_a_non_empty_path_is_stripped(self) -> None:
+        # Providers return the same article with and without the trailing slash;
+        # without this the article lands in evidence_documents twice and is
+        # double-counted in sentiment statistics and event clustering.
+        self.assertEqual(
+            canonicalize_url("https://news.sysu.edu.cn/notice/1/"),
+            "https://news.sysu.edu.cn/notice/1",
+        )
+        self.assertEqual(
+            canonical_url_hash("https://news.sysu.edu.cn/notice/1"),
+            canonical_url_hash("https://news.sysu.edu.cn/notice/1/"),
+        )
+
+    def test_root_path_keeps_its_slash(self) -> None:
+        # ``https://host`` must stay ``https://host/`` — stripping the root
+        # slash would produce a hostname-only URL that is not a valid page.
+        self.assertEqual(canonicalize_url("https://news.sysu.edu.cn/"), "https://news.sysu.edu.cn/")
+        self.assertEqual(canonicalize_url("https://news.sysu.edu.cn"), "https://news.sysu.edu.cn/")
+        self.assertEqual(
+            canonicalize_url("https://news.sysu.edu.cn/?a=1"),
+            "https://news.sysu.edu.cn/?a=1",
+        )
+
+    def test_trailing_slash_is_stripped_before_the_query(self) -> None:
+        self.assertEqual(
+            canonical_url_hash("https://news.sysu.edu.cn/notice/?id=1"),
+            canonical_url_hash("https://news.sysu.edu.cn/notice?id=1"),
+        )
+
     def test_default_port_is_stripped(self) -> None:
         self.assertEqual(
             canonical_url_hash("https://news.sysu.edu.cn/a"),

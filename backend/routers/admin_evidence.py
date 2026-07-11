@@ -23,6 +23,7 @@ from backend.models_evidence import EvidenceItem, EvidenceQuery, EvidenceRun
 from backend.schemas import ok
 from backend.services.auth_service import require_admin
 from backend.services.evidence.collector import EvidenceCollector
+from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS, load_settings
 from backend.services.evidence.providers import create_provider_registry
 from backend.services.evidence.review_delivery import deliver_batch, review_item, verify_item
 from backend.services.evidence.schemas import (
@@ -179,6 +180,33 @@ async def create_evidence_run(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ok(_run_item(run))
+
+
+@router.get("/admin/evidence/providers")
+def list_evidence_providers(current_user: User = Depends(require_admin)):
+    """Report which retrieval providers are actually usable.
+
+    The frontend's provider picker would otherwise offer all five supported
+    providers and fail with a 404 at collection time on an unconfigured one.
+
+    Only the provider id and an availability boolean are returned: API keys,
+    base URLs, and model names never cross this boundary, so an admin session
+    cannot be used to read the server's credentials back out.
+    """
+
+    settings = load_settings()
+    return ok(
+        {
+            "providers": [
+                {
+                    "provider_id": provider_id,
+                    "enabled": settings.providers[provider_id].enabled,
+                }
+                for provider_id in SUPPORTED_PROVIDER_IDS
+            ],
+            "enabled_provider_ids": list(settings.enabled_provider_ids),
+        }
+    )
 
 
 @router.get("/admin/evidence/runs")

@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -19,6 +22,7 @@ from backend.models_evidence import EvidenceDocument, EvidenceItem, EvidenceQuer
 from backend.routers.admin_evidence import get_evidence_collector
 from backend.services.auth_service import create_access_token, ensure_user
 from backend.services.evidence.canonicalize import canonical_url_hash, canonicalize_url
+from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS
 
 
 def make_session_factory():
@@ -162,6 +166,7 @@ class EvidenceApiAuthTest(EvidenceApiTestBase):
         ("get", "/api/admin/evidence/runs"),
         ("get", "/api/admin/evidence/runs/1"),
         ("get", "/api/admin/evidence/items"),
+        ("get", "/api/admin/evidence/providers"),
         ("post", "/api/admin/evidence/runs"),
         ("post", "/api/admin/evidence/runs/1/deliver"),
         ("post", "/api/admin/evidence/items/1/verify"),
@@ -258,6 +263,62 @@ class EvidenceRunApiTest(EvidenceApiTestBase):
     def test_unknown_run_is_404(self) -> None:
         response = self.client.get("/api/admin/evidence/runs/9999", headers=self.admin_headers())
         self.assertEqual(response.status_code, 404)
+
+
+class EvidenceProviderApiTest(EvidenceApiTestBase):
+    """provider 可用性接口：只暴露 id + enabled，绝不外泄任何凭据。"""
+
+    SECRETS = {
+        "EVIDENCE_DEEPSEEK_API_KEY": "sk-deepseek-super-secret",
+        "EVIDENCE_DEEPSEEK_WEB_SEARCH_ENABLED": "true",
+        "EVIDENCE_DEEPSEEK_MODEL": "deepseek-chat",
+        "EVIDENCE_DEEPSEEK_BASE_URL": "https://api.deepseek.internal/v1",
+        "EVIDENCE_GLM_API_KEY": "sk-glm-super-secret",
+        "EVIDENCE_GLM_WEB_SEARCH_ENABLED": "false",
+    }
+
+    def _get(self, environ: dict) -> dict:
+        cleared = {
+            key: "" for key in os.environ if key.startswith("EVIDENCE_")
+        }
+        with mock.patch.dict(os.environ, {**cleared, **environ}, clear=False):
+            response = self.client.get(
+                "/api/admin/evidence/providers", headers=self.admin_headers()
+            )
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_lists_every_supported_provider_with_its_enabled_flag(self) -> None:
+        data = self._get(self.SECRETS)["data"]
+
+        listed = {row["provider_id"]: row["enabled"] for row in data["providers"]}
+        self.assertEqual(sorted(listed), sorted(SUPPORTED_PROVIDER_IDS))
+        # 有 key 且 WEB_SEARCH_ENABLED=true 才算可用
+        self.assertTrue(listed["deepseek"])
+        # 有 key 但未开联网检索 → 不可用
+        self.assertFalse(listed["glm"])
+        self.assertFalse(listed["kimi"])
+        self.assertEqual(data["enabled_provider_ids"], ["deepseek"])
+        # 每行只有 id 与 enabled 两个字段，不给凭据留位置
+        for row in data["providers"]:
+            self.assertEqual(set(row), {"provider_id", "enabled"})
+
+    def test_no_credential_material_leaks_into_the_response(self) -> None:
+        body = json.dumps(self._get(self.SECRETS), ensure_ascii=False)
+
+        for secret in self.SECRETS.values():
+            if secret in ("true", "false"):
+                continue
+            self.assertNotIn(secret, body)
+        for fragment in ("api_key", "apiKey", "base_url", "sk-", "deepseek.internal"):
+            self.assertNotIn(fragment, body)
+
+    def test_no_configured_provider_yields_an_empty_enabled_list(self) -> None:
+        data = self._get({})["data"]
+
+        self.assertEqual(data["enabled_provider_ids"], [])
+        self.assertEqual(len(data["providers"]), len(SUPPORTED_PROVIDER_IDS))
+        self.assertTrue(all(row["enabled"] is False for row in data["providers"]))
 
 
 class EvidenceItemApiTest(EvidenceApiTestBase):

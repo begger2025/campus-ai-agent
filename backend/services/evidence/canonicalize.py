@@ -26,6 +26,12 @@ def canonicalize_url(url: str) -> str:
     443 for https) is dropped, so ``https://host`` , ``https://host/`` and
     ``https://host:443/`` share one canonical form.
 
+    A trailing slash on a *non-empty* path is stripped, so ``/notice/1/`` and
+    ``/notice/1`` are the same document; providers return the same article both
+    ways and two canonical forms would store — and later double-count — it
+    twice.  The root path stays ``/``: ``https://host/`` never becomes
+    ``https://host``.
+
     Meaningful query parameters are sorted by ``(key, value)``; different
     providers return the same article with the parameters in different orders
     and an order-sensitive canonical form would store that page twice.
@@ -80,9 +86,12 @@ def canonicalize_url(url: str) -> str:
 
     # Sort so that ``?b=1&c=2`` and ``?c=2&b=1`` canonicalize identically.
     query = urlencode(sorted(meaningful_query), doseq=True)
-    # An empty path is the site root; normalize it so ``https://host`` and
-    # ``https://host/`` produce the same canonical_url_hash.
-    path = parsed.path or "/"
+    # ``/notice/1/`` and ``/notice/1`` are one article: providers return it both
+    # ways and two canonical forms would mean two evidence_documents rows, i.e.
+    # the article counted twice downstream.  ``or "/"`` keeps the site root a
+    # ``/`` — both an empty path and a bare ``/`` land on the same hash, and
+    # ``https://host`` never degrades into a hostname without a path.
+    path = parsed.path.rstrip("/") or "/"
     return urlunsplit((scheme, netloc, path, query, ""))
 
 

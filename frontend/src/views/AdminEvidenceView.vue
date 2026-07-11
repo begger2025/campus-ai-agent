@@ -25,14 +25,43 @@
           multiple
           collapse-tags
           class="form-providers"
-          placeholder="检索模型：默认全部已启用"
+          :disabled="!providers.enabledIds.length"
+          :placeholder="providerPlaceholder"
         >
-          <el-option v-for="p in PROVIDER_IDS" :key="p" :label="PROVIDER_LABELS[p]" :value="p" />
+          <el-option
+            v-for="p in providers.enabledIds"
+            :key="p"
+            :label="PROVIDER_LABELS[p] || p"
+            :value="p"
+          />
         </el-select>
-        <el-button type="primary" :loading="form.submitting" @click="submitRun">
+        <el-button
+          type="primary"
+          :loading="form.submitting"
+          :disabled="!providers.enabledIds.length"
+          @click="submitRun"
+        >
           {{ form.submitting ? '采集中…' : '开始采集' }}
         </el-button>
       </div>
+      <el-alert
+        v-if="providers.loaded && !providers.enabledIds.length"
+        class="provider-empty"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="尚未配置任何联网检索模型，无法发起采集"
+      >
+        <p class="provider-empty-body">
+          请在项目根目录 <code>.env</code> 中为至少一家模型厂商补齐四项配置后重启后端：
+          <code>EVIDENCE_&lt;PROVIDER&gt;_API_KEY</code>、
+          <code>EVIDENCE_&lt;PROVIDER&gt;_MODEL</code>、
+          <code>EVIDENCE_&lt;PROVIDER&gt;_BASE_URL</code>、
+          <code>EVIDENCE_&lt;PROVIDER&gt;_WEB_SEARCH_ENABLED=true</code>。
+          其中 <code>&lt;PROVIDER&gt;</code> 取 {{ PROVIDER_IDS.map((p) => p.toUpperCase()).join(' / ') }}
+          之一，例如 <code>EVIDENCE_DEEPSEEK_API_KEY</code>。
+        </p>
+      </el-alert>
       <p v-if="form.feedback" :class="['run-feedback', `run-feedback--${form.feedbackType}`]">
         {{ form.feedback }}
       </p>
@@ -330,7 +359,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   createEvidenceRun,
@@ -338,6 +367,7 @@ import {
   fetchEvidenceItems,
   fetchEvidenceRunDetail,
   fetchEvidenceRuns,
+  listProviders,
   reviewEvidenceItem,
   verifyEvidenceItem,
 } from '@/api/evidence'
@@ -388,6 +418,16 @@ const form = reactive({
   feedbackType: 'info',
 })
 
+// 只有后端确认可用（有 key 且开了联网检索）的厂商才允许被选中，
+// 否则发起采集时会在 provider 注册表里 404。
+const providers = reactive({ enabledIds: [], loaded: false, loading: false })
+
+const providerPlaceholder = computed(() => {
+  if (providers.loading) return '正在读取可用模型…'
+  if (!providers.enabledIds.length) return '暂无可用的检索模型'
+  return '检索模型：默认全部已启用'
+})
+
 const runs = reactive({ items: [], total: 0, page: 1, loading: false })
 const runDetail = reactive({ run: null, queries: [], loading: false })
 const items = reactive({ rows: [], total: 0, page: 1, loading: false })
@@ -429,7 +469,28 @@ function blockers(item, { ignoreReview = false } = {}) {
   return reasons
 }
 
+async function loadProviders() {
+  providers.loading = true
+  try {
+    const data = await listProviders()
+    providers.enabledIds =
+      data.enabled_provider_ids ||
+      (data.providers || []).filter((p) => p.enabled).map((p) => p.provider_id)
+    // 已选但随后被禁用的厂商要剔除，避免提交一个后端并不认识的 provider
+    form.providerIds = form.providerIds.filter((id) => providers.enabledIds.includes(id))
+    providers.loaded = true
+  } catch (error) {
+    ElMessage.error(error.message || '加载可用检索模型失败')
+  } finally {
+    providers.loading = false
+  }
+}
+
 async function submitRun() {
+  if (!providers.enabledIds.length) {
+    ElMessage.warning('尚未配置任何联网检索模型，无法发起采集')
+    return
+  }
   const topic = form.topic.trim()
   const queries = form.queries
     .split('\n')
@@ -622,6 +683,7 @@ function openDetail(item) {
 }
 
 onMounted(async () => {
+  await loadProviders()
   await loadRuns(1)
   await loadItems(1)
 })
@@ -668,6 +730,25 @@ onMounted(async () => {
 
 .form-providers {
   width: 220px;
+}
+
+.provider-empty {
+  margin-top: 12px;
+}
+
+.provider-empty-body {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.provider-empty-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  word-break: break-all;
 }
 
 .run-feedback {

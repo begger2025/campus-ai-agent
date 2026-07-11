@@ -10,6 +10,13 @@ import http from './http'
 // 因此单独放宽该请求的超时时间（axios 请求级配置覆盖实例配置）。
 const RUN_TIMEOUT_MS = 180_000
 
+// —— provider 可用性 ——
+// 返回 { providers: [{ provider_id, enabled }], enabled_provider_ids }
+// 只含 id 与开关，后端不会下发任何 key / base_url。
+export function listProviders() {
+  return http.get('/admin/evidence/providers')
+}
+
 // —— 采集任务 ——
 export function createEvidenceRun({ topic, queries, provider_ids = undefined }) {
   return http.post(
