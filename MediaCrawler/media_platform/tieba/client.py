@@ -293,7 +293,7 @@ class BaiduTieBaClient(AbstractApiClient):
             await self.playwright_page.goto(full_url, wait_until="domcontentloaded")
 
             # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+            await utils.random_crawl_sleep()
 
             # Get page HTML content
             page_content = await self.playwright_page.content()
@@ -345,7 +345,7 @@ class BaiduTieBaClient(AbstractApiClient):
             await self.playwright_page.goto(note_url, wait_until="domcontentloaded")
 
             # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+            await utils.random_crawl_sleep()
 
             # Get page HTML content
             page_content = await self.playwright_page.content()
@@ -393,7 +393,7 @@ class BaiduTieBaClient(AbstractApiClient):
                 await self.playwright_page.goto(comment_url, wait_until="domcontentloaded")
 
                 # Wait for page loading, using delay setting from config file
-                await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                await utils.random_crawl_sleep()
 
                 # Get page HTML content
                 page_content = await self.playwright_page.content()
@@ -479,7 +479,7 @@ class BaiduTieBaClient(AbstractApiClient):
                     await self.playwright_page.goto(sub_comment_url, wait_until="domcontentloaded")
 
                     # Wait for page loading, using delay setting from config file
-                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                    await utils.random_crawl_sleep()
 
                     # Get page HTML content
                     page_content = await self.playwright_page.content()
@@ -536,7 +536,7 @@ class BaiduTieBaClient(AbstractApiClient):
             await self.playwright_page.goto(tieba_url, wait_until="domcontentloaded")
 
             # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+            await utils.random_crawl_sleep()
 
             # Get page HTML content
             page_content = await self.playwright_page.content()
@@ -571,7 +571,7 @@ class BaiduTieBaClient(AbstractApiClient):
             await self.playwright_page.goto(creator_url, wait_until="domcontentloaded")
 
             # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+            await utils.random_crawl_sleep()
 
             # Get page HTML content
             page_content = await self.playwright_page.content()
@@ -606,7 +606,7 @@ class BaiduTieBaClient(AbstractApiClient):
             await self.playwright_page.goto(creator_url, wait_until="domcontentloaded")
 
             # Wait for page loading, using delay setting from config file
-            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+            await utils.random_crawl_sleep()
 
             # Get page content (this API returns JSON)
             page_content = await self.playwright_page.content()

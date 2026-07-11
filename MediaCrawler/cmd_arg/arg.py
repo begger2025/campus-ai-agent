@@ -325,6 +325,23 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 show_default=True,
             ),
         ] = "no",
+        from_queue: Annotated[
+            str,
+            typer.Option(
+                "--from-queue",
+                help="Queue-driven mode: claim keywords from shared crawl_task_queue (yes/no)",
+                rich_help_panel="Basic Configuration",
+                show_default=True,
+            ),
+        ] = "no",
+        worker: Annotated[
+            str,
+            typer.Option(
+                "--worker",
+                help="Worker id for queue mode (empty = hostname)",
+                rich_help_panel="Basic Configuration",
+            ),
+        ] = "",
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
@@ -359,6 +376,8 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.IP_PROXY_PROVIDER_NAME = ip_proxy_provider_name
         config.CRAWL_PUBLISH_TIME_START = start_date
         config.CRAWL_PUBLISH_TIME_END = end_date
+        config.CRAWL_FROM_QUEUE = _to_bool(from_queue)
+        config.CRAWL_WORKER_ID = worker
 
         # "新鲜优先"预设：推荐词语义是"最近冒头的需求/话题"，默认排序（xhs 热度、微博综合）
         # 捞到的是历史爆款老帖；--fresh yes 切到时间倒序/实时，同时使时间窗口整页早停可用。

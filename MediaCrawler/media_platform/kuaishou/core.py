@@ -120,7 +120,11 @@ class KuaishouCrawler(AbstractCrawler):
             crawler_type_var.set(config.CRAWLER_TYPE)
             if config.CRAWLER_TYPE == "search":
                 # Search for videos and retrieve their comment information.
-                await self.search()
+                if config.CRAWL_FROM_QUEUE:
+                    from tools.crawl_queue_runner import run_keyword_queue
+                    await run_keyword_queue(self)
+                else:
+                    await self.search()
             elif config.CRAWLER_TYPE == "detail":
                 # Get the information and comments of the specified post
                 await self.get_specified_videos()
@@ -296,7 +300,7 @@ class KuaishouCrawler(AbstractCrawler):
                     )
 
                     # Sleep after page navigation
-                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                    await utils.random_crawl_sleep()
                     utils.logger.info(
                         f"[KuaishouCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page}"
                     )
@@ -366,7 +370,7 @@ class KuaishouCrawler(AbstractCrawler):
                 result = await self.ks_client.get_video_info(video_id)
 
                 # Sleep after fetching video details
-                await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                await utils.random_crawl_sleep()
                 utils.logger.info(f"[KuaishouCrawler.get_video_info_task] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after fetching video details {video_id}")
 
                 utils.logger.info(
@@ -424,7 +428,7 @@ class KuaishouCrawler(AbstractCrawler):
                 )
 
                 # Sleep before fetching comments
-                await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                await utils.random_crawl_sleep()
                 utils.logger.info(f"[KuaishouCrawler.get_comments] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds before fetching comments for video {video_id}")
 
                 await self.ks_client.get_video_all_comments(

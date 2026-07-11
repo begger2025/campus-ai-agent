@@ -835,7 +835,11 @@ class XiaoHongShuCrawler(AbstractCrawler):
             crawler_type_var.set(config.CRAWLER_TYPE)
             if config.CRAWLER_TYPE == "search":
                 # Search for notes and retrieve their comment information.
-                await self.search()
+                if config.CRAWL_FROM_QUEUE:
+                    from tools.crawl_queue_runner import run_keyword_queue
+                    await run_keyword_queue(self)
+                else:
+                    await self.search()
             elif config.CRAWLER_TYPE == "detail":
                 # Get the information and comments of the specified post
                 await self.get_specified_notes()
@@ -1115,7 +1119,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                                 "skip fixed page sleep because detail throttle is handled before each detail fetch"
                             )
                         else:
-                            await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                            await utils.random_crawl_sleep()
                             utils.logger.info(
                                 f"[XiaoHongShuCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}"
                             )
@@ -1457,7 +1461,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         note_id=note_id,
                     )
                 else:
-                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                    await utils.random_crawl_sleep()
                     utils.logger.info(
                         f"[get_note_detail_async_task] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after fetching note {note_id}"
                     )

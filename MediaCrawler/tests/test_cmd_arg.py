@@ -69,3 +69,19 @@ class TestFreshPreset:
         assert config.SORT_TYPE == "general"
         assert config.WEIBO_SEARCH_TYPE == "default"
         assert config.ZHIHU_SEARCH_SORT == ""
+
+
+class TestQueueFlags:
+    @pytest.mark.asyncio
+    async def test_from_queue_and_worker_parsed(self, restore_config):
+        config.CRAWL_FROM_QUEUE = False
+        config.CRAWL_WORKER_ID = ""
+        await parse_cmd(BASE_ARGS + ["--from-queue", "yes", "--worker", "member-A"])
+        assert config.CRAWL_FROM_QUEUE is True
+        assert config.CRAWL_WORKER_ID == "member-A"
+
+    @pytest.mark.asyncio
+    async def test_from_queue_defaults_off(self, restore_config):
+        config.CRAWL_FROM_QUEUE = True
+        await parse_cmd(BASE_ARGS)
+        assert config.CRAWL_FROM_QUEUE is False
