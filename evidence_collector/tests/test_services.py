@@ -108,6 +108,15 @@ class ScopePolicyTests(unittest.TestCase):
         )
         self.assertEqual(result.decision, "needs_review")
 
+    def test_empty_hostname_label_is_out_of_scope(self) -> None:
+        result = assess_scope(
+            "official",
+            "evil..sysu.edu.cn",
+            "中山大学通知",
+            "中山大学发布通知",
+        )
+        self.assertEqual(result.decision, "out_of_scope")
+
     def test_official_subdomain_uses_dot_boundary(self) -> None:
         result = assess_scope(
             "official",

@@ -23,6 +23,29 @@ _VALID_DECISIONS = frozenset({"in_scope", "out_of_scope", "needs_review"})
 _SOURCE_TYPE_ALIASES = {"official": "official", "official_notice": "official", "news": "news"}
 
 
+def _normalize_hostname(hostname: str | None) -> str:
+    """Return a lowercase DNS hostname or an empty string when malformed."""
+
+    if not isinstance(hostname, str):
+        return ""
+    value = hostname.strip().lower()
+    if value.endswith("."):
+        # A single DNS root terminator is harmless; multiple trailing dots
+        # indicate an empty label and are rejected below.
+        if value.endswith(".."):
+            return ""
+        value = value[:-1]
+    if not value or len(value) > 253:
+        return ""
+    labels = value.split(".")
+    if any(not label or len(label) > 63 for label in labels):
+        return ""
+    label_pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+    if any(label_pattern.fullmatch(label) is None for label in labels):
+        return ""
+    return value
+
+
 def _configured_domains(environment_key: str, defaults: Iterable[str]) -> set[str]:
     configured = os.getenv(environment_key)
     if configured is None:
@@ -158,14 +181,14 @@ def _normalize_domain(source_domain: str | None) -> str:
                 return ""
             # Accessing ``port`` validates malformed and out-of-range ports.
             _ = parsed.port
-            value = (parsed.hostname or "").lower().rstrip(".")
+            value = _normalize_hostname(parsed.hostname)
         except ValueError:
             return ""
         return value
 
     # Bare domains are intentionally strict: ports, paths, credentials, and
     # URL delimiters are not part of a source-domain value.
-    value = raw.lower().rstrip(".")
+    value = _normalize_hostname(raw)
     if any(character in value for character in "/?#@:"):
         return ""
     return value
