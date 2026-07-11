@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 
 from .normalizer import note_text
+from .platform_weights import note_ranking_score
 from .schemas import OpinionEvent, OpinionNote
 from .sentiment_risk import aggregate_risk_level, aggregate_sentiment
 
@@ -77,15 +78,18 @@ def _source_keywords(notes: list[OpinionNote]) -> list[str]:
     return [keyword for keyword, _ in counter.most_common()]
 
 
-def note_rank_key(note: OpinionNote) -> tuple[float, float]:
-    """帖子之间比大小的统一口径：先比平台内百分位，再用原始热度兜底。
+def note_rank_key(note: OpinionNote) -> tuple[float, float, float]:
+    """帖子之间比大小的统一口径：ranking_score -> heat_rank -> heat_score。
 
-    heat_score 跨平台不可比（xhs 中位 3924 / weibo 3），拿它挑代表帖会让代表帖永远来自
-    小红书。heat_rank 才是可比的。未归一化的老数据 heat_rank 全为 0，此时退回按
-    heat_score 比——不会因为改造把既有顺序打乱成随机。
+    - `ranking_score` = 平台先验权重 × 平台内百分位（见 platform_weights）。它是**唯一**
+      同时兼顾"平台内公平"和"跨平台真实触达"的量：heat_score 跨平台不可比（xhs 中位 3924 /
+      weibo 3，拿它挑代表帖等于代表帖永远来自小红书），而裸 heat_rank 又把量级全丢了
+      （3 赞的 weibo 95 分位帖 == 10 万赞的 xhs 95 分位帖）。
+    - 后两级是**老数据兜底**：未归一化的行 heat_rank 为 0，ranking_score 随之为 0，此时
+      退回 heat_rank、再退回 heat_score 比——不会因为改造把既有顺序打乱成随机。
     """
 
-    return (note.heat_rank, note.heat_score)
+    return (note_ranking_score(note), note.heat_rank, note.heat_score)
 
 
 def _summary(event_title: str, notes: list[OpinionNote]) -> str:
@@ -114,14 +118,16 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
     structurally identical events.
     """
 
-    # 代表帖是"选 top-N"，按可跨平台比较的 heat_rank 挑。
+    # 代表帖是"选 top-N"，按可跨平台比较的 ranking_score 挑。
     sorted_notes = sorted(group_notes, key=note_rank_key, reverse=True)
     first_seen, last_seen = _date_range(group_notes)
     risk_level, risk_score, risk_reasons, concerns = aggregate_risk_level(group_notes)
-    # heat_score 仍是成员原始热度之和（展示用，公式不动）；heat_rank 是成员百分位之和，
-    # 事件之间排序用它——同样保留"帖子越多越热"的语义，但不再被高互动量平台绑架。
+    # heat_score 仍是成员原始热度之和（展示用，公式不动）；heat_rank 是成员百分位之和；
+    # ranking_score 是成员加权排序分之和，事件之间排序用它——同样保留"帖子越多越热"的语义，
+    # 但既不被高互动量平台绑架（heat_score 的毛病），也不把量级抹平（裸 heat_rank 的毛病）。
     heat_score = round(sum(note.heat_score for note in group_notes), 2)
     heat_rank = round(sum(note.heat_rank for note in group_notes), 2)
+    ranking = round(sum(note_ranking_score(note) for note in group_notes), 2)
 
     return OpinionEvent(
         event_key=event_key,
@@ -132,6 +138,7 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
         sentiment=aggregate_sentiment(group_notes),
         heat_score=heat_score,
         heat_rank=heat_rank,
+        ranking_score=ranking,
         source_count=len(group_notes),
         risk_score=risk_score,
         first_seen_at=first_seen,
@@ -146,12 +153,20 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
 
 
 def sort_events(events: list[OpinionEvent]) -> list[OpinionEvent]:
-    """事件排序：风险优先，同风险按 heat_rank（跨平台可比）；老数据回退到 heat_score。"""
+    """事件排序：风险优先，同风险按 ranking_score（平台权重 × 平台内百分位）。
+
+    兜底链和帖子一致：ranking_score -> heat_rank -> heat_score，老数据不会退化成随机顺序。
+    """
 
     risk_rank = {"high": 3, "medium": 2, "low": 1}
     return sorted(
         events,
-        key=lambda event: (risk_rank.get(event.risk_level, 0), event.heat_rank, event.heat_score),
+        key=lambda event: (
+            risk_rank.get(event.risk_level, 0),
+            event.ranking_score,
+            event.heat_rank,
+            event.heat_score,
+        ),
         reverse=True,
     )
 

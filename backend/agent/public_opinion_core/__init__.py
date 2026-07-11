@@ -8,6 +8,13 @@ from .payload_builder import (
     build_event_post_link_payloads,
     build_public_event_payloads,
 )
+from .platform_weights import (
+    DEFAULT_PLATFORM_WEIGHTS,
+    note_ranking_score,
+    platform_weight,
+    platform_weights,
+    ranking_score,
+)
 from .scoring import calculate_heat_score, score_note, score_notes
 from .service import PublicOpinionAgentService
 from .sentiment_risk import analyze_note_sentiment_and_risk, analyze_notes_sentiment_and_risk
@@ -33,6 +40,7 @@ from .schemas import (
 )
 
 __all__ = [
+    "DEFAULT_PLATFORM_WEIGHTS",
     "AgentRunLogPayload",
     "AnalyzeRequest",
     "AnalyzeResult",
@@ -61,8 +69,12 @@ __all__ = [
     "calculate_heat_score",
     "classify_event",
     "cluster_notes",
+    "note_ranking_score",
+    "platform_weight",
+    "platform_weights",
     "processed_post_to_note",
     "processed_posts_to_notes",
+    "ranking_score",
     "score_note",
     "score_notes",
 ]

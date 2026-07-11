@@ -97,10 +97,12 @@ class OpinionChatService:
         events = self._events(keyword)
         return sorted(
             events,
-            # 同风险时按 heat_rank（跨平台可比）排；heat_rank 未归一化的老数据回退 heat_score。
+            # 同风险时按 ranking_score（平台先验权重 × 平台内百分位）排；
+            # 未归一化的老数据 ranking_score 为 0，依次回退 heat_rank -> heat_score。
             key=lambda event: (
                 _RISK_RANK.get(event.risk_level, 0),
                 event.risk_score,
+                event.ranking_score,
                 event.heat_rank,
                 event.heat_score,
             ),
@@ -108,10 +110,12 @@ class OpinionChatService:
         )
 
     def _search_ranked_notes(self, keyword: str = "", limit: int = 10) -> list[OpinionNote]:
-        """检索场景挑 top-N：按 heat_rank 排序（选择），返回的帖子本身仍带真实 heat_score（展示）。
+        """检索场景挑 top-N（chat 用 10 条、ReAct 的 search_notes 用 5 条）。
 
-        原来按 heat_score 排，等于把 weibo/zhihu/web 整体排到 xhs/ks 后面——微博头部帖的
-        原始热度（个位数）永远比不过小红书的长尾帖（几千）。
+        排序（选择）用 `note_rank_key` = ranking_score -> heat_rank -> heat_score；返回的帖子
+        本身仍带真实 heat_score（展示）。按 heat_score 排会把 weibo/zhihu/web 整体排到
+        xhs/ks 后面；按裸 heat_rank 排又会让一条 3 赞的微博帖和一条 10 万赞的小红书帖平起
+        平坐。ranking_score 两头都占。
         """
 
         return sorted(self._notes(keyword), key=note_rank_key, reverse=True)[: max(limit, 0)]

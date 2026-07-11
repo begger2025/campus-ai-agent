@@ -64,8 +64,12 @@ class OpinionEvent:
     sentiment: str
     heat_score: float
     source_count: int
-    # 成员帖 heat_rank 之和：事件之间排序用它（跨平台可比），heat_score 留给展示。
+    # 成员帖 heat_rank 之和（平台内百分位之和）。
     heat_rank: float = 0.0
+    # 成员帖 ranking_score 之和（平台先验权重 × 平台内百分位，见 platform_weights）。
+    # **事件之间排序用它**：既跨平台可比，又保留了各平台真实触达的差异。heat_score 留给展示。
+    # 不落库——权重要能不改数据库就调，所以它只是排序时现算的派生量。
+    ranking_score: float = 0.0
     risk_score: float = 0.0
     first_seen_at: str = ""
     last_seen_at: str = ""

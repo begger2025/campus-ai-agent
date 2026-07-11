@@ -180,5 +180,122 @@ class ChatServiceSortsByHeatRankTest(unittest.TestCase):
         self.assertEqual(notes[0].heat_score, 9.0)
 
 
+class ConsumersRankByRankingScoreTest(unittest.TestCase):
+    """调用点排的是 ranking_score = 平台权重 × 平台内百分位，不是裸 heat_rank。
+
+    裸 heat_rank 把量级整个丢了：一条 3 赞的 weibo 95 分位帖和一条 10 万赞的 xhs 95 分位帖
+    分数相同。平台权重（xhs 1.0 / zhihu 0.5 / weibo 0.4）把触达差异还回来。
+    """
+
+    def test_representative_note_prefers_reach_over_a_bare_percentile(self) -> None:
+        # 裸百分位下 weibo（95）赢 xhs（60）。加权后 weibo 0.4×95=38 输给 xhs 1.0×60=60——
+        # 一条 3 赞的微博帖不该只因为"它在微博里排前 5%"就当上代表帖。
+        weibo = _note("w1", platform="weibo", heat_score=9.0, heat_rank=95.0, title="微博头部帖")
+        xhs = _note("x1", platform="xhs", heat_score=12000.0, heat_rank=60.0, title="小红书中上帖")
+
+        event = build_event_from_group("dorm_life", "宿舍", "dorm_life", [weibo, xhs])
+
+        self.assertEqual(event.representative_notes[0].note_id, "x1")
+        # 展示口径一个字不动：heat_score 仍是成员原始热度之和，heat_rank 仍是百分位之和。
+        self.assertEqual(event.heat_score, 12009.0)
+        self.assertEqual(event.heat_rank, 155.0)
+        # 事件的跨平台排序分 = 成员 ranking_score 之和：0.4×95 + 1.0×60 = 98.0。
+        self.assertEqual(event.ranking_score, 98.0)
+
+    def test_a_top_zhihu_note_still_beats_an_xhs_long_tail_note(self) -> None:
+        # 权重压制不能压到"weibo/zhihu 永远出不来"——那是回到 heat_score 时代。
+        zhihu = _note("z1", platform="zhihu", heat_score=8.0, heat_rank=99.0, title="知乎头部帖")
+        xhs = _note("x1", platform="xhs", heat_score=3000.0, heat_rank=20.0, title="小红书长尾帖")
+
+        event = build_event_from_group("dorm_life", "宿舍", "dorm_life", [xhs, zhihu])
+
+        self.assertEqual(event.representative_notes[0].note_id, "z1")
+
+    def test_sort_events_ranks_by_ranking_score_within_the_same_risk_level(self) -> None:
+        weak = OpinionEvent(
+            event_key="weak", title="知乎聚合", summary="", category="c",
+            risk_level="low", sentiment="neutral", heat_score=18.0,
+            heat_rank=190.0, ranking_score=95.0, source_count=2,
+        )
+        strong = OpinionEvent(
+            event_key="strong", title="小红书聚合", summary="", category="c",
+            risk_level="low", sentiment="neutral", heat_score=24000.0,
+            heat_rank=120.0, ranking_score=120.0, source_count=2,
+        )
+
+        ordered = sort_events([weak, strong])
+
+        # heat_rank 之和更高的是 weak，但 ranking_score 更高的是 strong。
+        self.assertEqual([event.event_key for event in ordered], ["strong", "weak"])
+
+    def test_sort_events_falls_back_to_heat_rank_then_heat_score_for_legacy_rows(self) -> None:
+        # ranking_score 全为 0 的老数据不能退化成随机顺序：先退回 heat_rank，再退回 heat_score。
+        ranked_low = OpinionEvent(
+            event_key="ranked_low", title="a", summary="", category="c",
+            risk_level="low", sentiment="neutral", heat_score=90.0, heat_rank=10.0, source_count=1,
+        )
+        ranked_high = OpinionEvent(
+            event_key="ranked_high", title="b", summary="", category="c",
+            risk_level="low", sentiment="neutral", heat_score=10.0, heat_rank=80.0, source_count=1,
+        )
+        self.assertEqual(
+            [e.event_key for e in sort_events([ranked_low, ranked_high])],
+            ["ranked_high", "ranked_low"],
+        )
+
+
+class SentimentRiskStaysOnWithinPlatformHeatRankTest(unittest.TestCase):
+    """"综合热度较高"这条风险规则**不**乘平台权重，故意的。
+
+    它问的不是"这条帖子跨平台排第几"（那是选择/排序），而是"这条帖子在**它自己的社区里**
+    是不是烧起来了"——那是一个平台内属性，正是风险信号本身。乘上权重后 weibo（0.4）和
+    zhihu（0.5）的 ranking_score 最高只有 40/50，永远够不到 80 的门槛，这条规则对它们
+    又会像绝对阈值 150 时代那样彻底失效——恰恰是上一版要修的 bug。
+    """
+
+    def test_top_percentile_weibo_note_keeps_the_high_heat_bump_despite_a_low_platform_weight(self) -> None:
+        note = _note("w1", platform="weibo", heat_score=9.0, heat_rank=96.0)  # ranking_score = 38.4
+        analyze_notes_sentiment_and_risk([note])
+        self.assertIn("综合热度较高", note.risk_reasons)
+
+
+class ChatServiceRanksByRankingScoreTest(ChatServiceSortsByHeatRankTest):
+    """对话检索 top-N 的选择口径也换成 ranking_score。"""
+
+    def test_search_notes_prefer_reach_over_a_bare_percentile(self) -> None:
+        from backend.services.opinion_chat_service import OpinionChatService
+
+        # 裸 heat_rank 下 weibo(95) 赢 xhs(60)；加权后 38 < 60，xhs 上位。
+        self._add("weibo", 9.0, 95.0, "微博头部帖")
+        self._add("xhs", 12000.0, 60.0, "小红书中上帖")
+
+        service = OpinionChatService(self.db)
+        notes = service._search_ranked_notes("", limit=2)
+
+        self.assertEqual([note.title for note in notes], ["小红书中上帖", "微博头部帖"])
+        # 展示的仍是真实热度值，不是排序分。
+        self.assertEqual(notes[0].heat_score, 12000.0)
+
+    def test_risk_sorted_events_use_ranking_score_within_the_same_risk_level(self) -> None:
+        from backend.services.opinion_chat_service import OpinionChatService
+
+        service = OpinionChatService(self.db)
+        low_weight = OpinionEvent(
+            event_key="low_weight", title="a", summary="", category="c",
+            risk_level="low", sentiment="neutral", heat_score=1.0, risk_score=1.0,
+            heat_rank=99.0, ranking_score=49.5, source_count=1,
+        )
+        high_weight = OpinionEvent(
+            event_key="high_weight", title="b", summary="", category="c",
+            risk_level="low", sentiment="neutral", heat_score=1.0, risk_score=1.0,
+            heat_rank=90.0, ranking_score=90.0, source_count=1,
+        )
+        service._events = lambda keyword="": [low_weight, high_weight]  # type: ignore[assignment]
+
+        ordered = service._risk_sorted_events("")
+
+        self.assertEqual([event.event_key for event in ordered], ["high_weight", "low_weight"])
+
+
 if __name__ == "__main__":
     unittest.main()

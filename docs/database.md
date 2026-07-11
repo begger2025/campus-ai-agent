@@ -138,7 +138,20 @@ raw_post_id -> raw_posts.id
 UNIQUE(raw_post_id)
 ```
 
-#### 热度：heat_score（展示）与 heat_rank（排序）
+#### 热度三层：heat_score（展示）→ heat_rank（平台内百分位）→ ranking_score（排序）
+
+```text
+heat_score      原始加权互动量        —— 落库、展示给用户，公式不动
+  ↓ 平台内百分位（归一化 pass）
+heat_rank       0-100，该帖在自己平台内的位次  —— 落库，保平台内公平
+  ↓ × platform_weight[platform]
+ranking_score   跨平台排序分          —— 不落库，排序时现算（权重要能不改库就调）
+```
+
+**排序 / 选 top-N / 加权重要性一律用 `ranking_score`；展示给用户看的仍是 `heat_score`。**
+下面三小节依次说明每一层为什么存在。
+
+##### 第一层 heat_score：真实但跨平台不可比
 
 `heat_score` 是**原始互动量的加权和**，由 `scripts/process_raw_posts.py::calculate_heat_score` 计算：
 
@@ -160,6 +173,8 @@ heat_score = like*1.0 + collect*1.5 + comment*3.0 + share*2.5
 后果：任何按 `heat_score` 排序/取 top-N 的视图都会被 xhs/ks 占满，把 weibo（最重要的舆情
 平台）、zhihu 和人工审核过的 web 官方通知整个埋掉。
 
+##### 第二层 heat_rank：平台内百分位
+
 `heat_rank`（0-100 float）是修复：该行 `heat_score` 在**它自己平台内**的百分位。
 
 - **算在哪**：百分位是**语料相对**的（一行新增会改变同平台每一行的百分位），不是逐行函数。
@@ -170,16 +185,79 @@ heat_score = like*1.0 + collect*1.5 + comment*3.0 + share*2.5
 - **并列怎么处理**：**中位秩**（mid-rank）——`100 * (比它小的个数 + 并列个数/2) / 总数`。
   相同分数拿到完全相同的百分位，绝不靠 id 偷偷分先后。由此单条的平台得 50（中性）而不是
   0 或 100，且任何行的百分位都严格落在 (0, 100) 内，没有哪一行会被判 0 分沉底。
-- **谁用哪个**：**排序 / 选 top-N / 加权重要性一律用 `heat_rank`；展示给用户看的仍是
-  `heat_score`。** 已切换的调用点见 `backend/agent/public_opinion_core/`
-  （`clustering.note_rank_key`、`sort_events`、`semantic_clustering` 簇种子序、
-  `sentiment_risk._is_high_heat`）与 `backend/services/opinion_chat_service.py`
-  （`_search_ranked_notes`、`_risk_sorted_events`）。
-- **老数据兜底**：`heat_rank` 为 0 表示该行还没归一化，此时排序回退到 `heat_score`，
-  行为与改造前一致。
+- **它仍然只是中间量**：`heat_rank` 落库，但**不要直接拿它排序**——见下一层。
 
 `web` 平台的 `heat_score` 不来自互动量（网页没有赞/藏/评/转），而来自**来源权威度 + 核验
 强度**，见 `docs/evidence-collector.md`。
+
+##### 第三层 ranking_score：平台先验权重 × 平台内百分位
+
+纯百分位**矫枉过正**：它把**量级**整个丢了。一条 3 个赞、排在 weibo 95 分位的帖子，和一条
+10 万赞、排在 xhs 95 分位的帖子，`heat_rank` 完全相同——可它们的真实触达差了三个数量级。
+项目负责人人工审阅了抓取样本：对校园舆情这个场景，**xhs/ks 的触达和数据质量都明显高于
+weibo/zhihu**（这也和上表的中位数量级一致）。
+
+所以在百分位之上再乘一个**平台先验权重**：
+
+```text
+ranking_score = platform_weight[platform] × heat_rank
+```
+
+- **平台内公平**由百分位保住：权重是常数倍，不改变平台内的相对顺序，weibo 的头部帖依然稳赢
+  weibo 的长尾帖。
+- **跨平台触达**由权重还回来：zhihu 的 99 分位帖得 `0.5 × 99 = 49.5`，落在 xhs 的中位数
+  （`1.0 × 50 = 50`）附近——**它能冒头，但压不住 xhs 的头部帖**（`1.0 × 90 = 90`）。
+
+**默认权重**（`backend/agent/public_opinion_core/platform_weights.py::DEFAULT_PLATFORM_WEIGHTS`）：
+
+| platform | weight | 说明 |
+|---|---|---|
+| xhs | 1.0 | 触达与数据质量最高（基准） |
+| ks | 0.9 | 次高 |
+| web | 0.8 | 官方通知/新闻，人工核验过，质量高但非社交扩散 |
+| tieba | 0.6 | 受支持的爬虫平台，**库里尚无数据**，取中游默认值待实测重调 |
+| zhihu | 0.5 | 量级小、噪声大 |
+| weibo | 0.4 | 同上；仍是最重要的舆情平台，故权重压制而非排除 |
+
+- **未列出的平台 → 权重 1.0**（`UNKNOWN_PLATFORM_WEIGHT`）：新平台在被正式定权前以满权重参与
+  排序。**绝不**把未知平台默默打成 0 分沉底。
+- **怎么调（不需要迁移）**：`ranking_score` **不是数据库列**，而是 `(platform, heat_rank)` 的
+  纯函数，在排序发生的地方现算。调权重只要设环境变量 `HEAT_PLATFORM_WEIGHTS`（写进 `.env`，
+  与 `LLM_*` 等配置同一套约定），**增量覆盖**，未写到的平台保持默认；改完既不用迁移、也不用
+  重跑归一化 pass：
+
+  ```bash
+  # 两种写法都认；只写要改的平台
+  HEAT_PLATFORM_WEIGHTS={"weibo": 0.6, "zhihu": 0.7}
+  HEAT_PLATFORM_WEIGHTS=weibo=0.6,zhihu=0.7
+  ```
+
+  配置写坏（非法 JSON / 负数 / 非数字）时整体退回默认表，排序降级成"没调过"，不会让流水线炸掉。
+
+##### 谁用哪个
+
+| 用途 | 用哪个 |
+|---|---|
+| 展示给用户的热度数字 | `heat_score`（永远） |
+| 排序 / 选 top-N / 事件排序 | `ranking_score`，兜底链 `ranking_score → heat_rank → heat_score` |
+| 风险规则"综合热度较高" | **`heat_rank`**（裸百分位，见下） |
+| 跨次运行的热度变化 `heat_delta` | `heat_score`（`memory.py`：同一事件跟自己比，且是展示值） |
+
+已切换到 `ranking_score` 的调用点：`backend/agent/public_opinion_core/clustering.py`
+（`note_rank_key`、`build_event_from_group` 的代表帖与 `OpinionEvent.ranking_score` 聚合、
+`sort_events`）、`semantic_clustering.py`（簇种子序、`_new_key_and_title` 代表帖，均经由
+`note_rank_key`）、`backend/services/opinion_chat_service.py`（`_risk_sorted_events`、
+`_search_ranked_notes` → 对话检索 top-10 与 ReAct `search_notes` top-5）。
+
+**唯一的例外：`sentiment_risk._is_high_heat` 故意留在裸 `heat_rank >= 80` 上。** 它问的不是
+"这条帖子跨平台排第几"（那才是选择/排序），而是"这条帖子**在它自己的社区里**是不是烧起来
+了"——那是一个平台内属性，也正是风险信号本身的含义。而且若改用 `ranking_score >= 80`，
+weibo（权重 0.4）的 `ranking_score` 上限只有 40、zhihu（0.5）只有 50，**永远**够不到 80，
+这条风险规则对它们会像绝对阈值 150 时代一样彻底失效——恰恰是引入 `heat_rank` 要修的那个 bug
+原样复发。
+
+**老数据兜底**：`heat_rank` 为 0（未归一化）→ `ranking_score` 为 0 → 排序键依次回退到
+`heat_rank`、`heat_score`，行为与改造前一致，绝不退化成随机顺序。
 
 **迁移**：`create_all()` 不会 ALTER 已存在的表，新增 `heat_rank` 列必须跑
 `scripts/add_processed_posts_heat_rank.py`（幂等，支持 `--dry-run`；加列 + 回填存量行）。
