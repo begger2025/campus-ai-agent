@@ -19,9 +19,9 @@ from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import ConfigDict, Field, ValidationError, field_validator
 
-from ..config import SUPPORTED_PROVIDER_IDS as _SUPPORTED_PROVIDER_IDS
-from ..schemas import SearchHit as _SchemaSearchHit
-from ..schemas import SearchRequest as _SchemaSearchRequest
+from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS as _SUPPORTED_PROVIDER_IDS
+from backend.services.evidence.schemas import SearchHit as _SchemaSearchHit
+from backend.services.evidence.schemas import SearchRequest as _SchemaSearchRequest
 
 
 SUPPORTED_PROVIDER_IDS = tuple(_SUPPORTED_PROVIDER_IDS)
@@ -30,7 +30,7 @@ SUPPORTED_PROVIDER_IDS = tuple(_SUPPORTED_PROVIDER_IDS)
 class SearchRequest(_SchemaSearchRequest):
     """Immutable request value used by provider implementations.
 
-    The canonical schema remains in :mod:`evidence_collector.schemas`; this
+    The canonical schema remains in :mod:`backend.services.evidence.schemas`; this
     subclass adds immutability at the service boundary while retaining all of
     its validation and provider literals.
     """

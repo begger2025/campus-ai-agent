@@ -1,6 +1,11 @@
-"""Small, deterministic helpers used by the evidence collector."""
+"""Evidence collection: provider config, schemas, and deterministic helpers.
+
+This package owns only tables whose names begin with ``evidence_``; they are
+mapped on the backend's single ``backend.database.Base``.
+"""
 
 from .canonicalize import canonical_url_hash, canonicalize_url, stable_external_id
+from .config import SUPPORTED_PROVIDER_IDS, CollectorSettings, load_settings
 from .http_transport import (
     HttpTransportResponseError,
     HttpTransportUnavailableError,
@@ -18,6 +23,9 @@ from .review_delivery import (
 from .scope_policy import ScopeDecision, assess_scope
 
 __all__ = [
+    "SUPPORTED_PROVIDER_IDS",
+    "CollectorSettings",
+    "load_settings",
     "ScopeDecision",
     "assess_scope",
     "canonical_url_hash",

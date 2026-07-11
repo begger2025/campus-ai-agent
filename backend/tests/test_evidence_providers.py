@@ -7,7 +7,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from evidence_collector.services.providers import (
+from backend.services.evidence.providers import (
     DisabledProviderError,
     GenericProviderAdapter,
     InvalidSearchHitError,

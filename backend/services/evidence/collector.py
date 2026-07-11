@@ -20,15 +20,21 @@ from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
-from ..models import EvidenceDocument, EvidenceItem, EvidenceQuery, EvidenceRun, utcnow
-from .canonicalize import canonical_url_hash, canonicalize_url
-from .providers import (
+from backend.models_evidence import (
+    EvidenceDocument,
+    EvidenceItem,
+    EvidenceQuery,
+    EvidenceRun,
+    utcnow,
+)
+from backend.services.evidence.canonicalize import canonical_url_hash, canonicalize_url
+from backend.services.evidence.providers import (
     ProviderRegistry,
     SearchHit,
     SearchRequest,
     normalize_hits,
 )
-from .scope_policy import ScopeDecision, assess_scope
+from backend.services.evidence.scope_policy import ScopeDecision, assess_scope
 
 
 SYSU_QUERY_CONTEXT = (

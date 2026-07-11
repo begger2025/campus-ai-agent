@@ -4,7 +4,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from evidence_collector.schemas import SearchHit
+from backend.services.evidence.schemas import SearchHit
 
 
 class SearchHitTests(unittest.TestCase):

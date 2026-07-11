@@ -16,7 +16,7 @@ from typing import Iterable, Literal
 from urllib.parse import urlsplit
 
 
-# Keep these values aligned with ``evidence_collector.schemas.SCOPE_DECISIONS``
+# Keep these values aligned with ``backend.services.evidence.schemas.SCOPE_DECISIONS``
 # so service results can be stored without translation at call sites.
 Decision = Literal["in_scope", "out_of_scope", "needs_review"]
 _VALID_DECISIONS = frozenset({"in_scope", "out_of_scope", "needs_review"})

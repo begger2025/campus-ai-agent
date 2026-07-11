@@ -49,6 +49,6 @@ def uses_mysql() -> bool:
 
 
 def init_db():
-    from backend import admin_models, models  # noqa: F401
+    from backend import admin_models, models, models_evidence  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

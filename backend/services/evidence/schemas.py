@@ -6,7 +6,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
-from .config import SUPPORTED_PROVIDER_IDS
+from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS
 
 
 SOURCE_TYPES = ("web", "news", "official", "academic", "social", "other")

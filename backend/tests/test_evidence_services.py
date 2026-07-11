@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import unittest
 
-from evidence_collector.services.canonicalize import (
+from backend.services.evidence.canonicalize import (
     canonical_url_hash,
     canonicalize_url,
     stable_external_id,
 )
-from evidence_collector.services.scope_policy import assess_scope
+from backend.services.evidence.scope_policy import assess_scope
 
 
 class CanonicalizeTests(unittest.TestCase):
@@ -82,7 +82,7 @@ class ScopePolicyTests(unittest.TestCase):
         self.assertTrue(result.reasons)
 
     def test_scope_decision_rejects_invalid_state(self) -> None:
-        from evidence_collector.services.scope_policy import ScopeDecision
+        from backend.services.evidence.scope_policy import ScopeDecision
 
         with self.assertRaises(ValueError):
             ScopeDecision("accepted", ["invalid state"])  # type: ignore[arg-type]

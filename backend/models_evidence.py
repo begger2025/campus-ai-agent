@@ -9,7 +9,12 @@ from typing import Optional
 from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from .database import Base
+from backend.database import Base
+
+# EvidenceDeliveryBatch.raw_post_id is a real ForeignKey("raw_posts.id"), so the
+# RawPost mapping must be registered on Base.metadata before this module's
+# tables are created. Import it here so models_evidence is usable standalone.
+from backend.models import RawPost  # noqa: F401
 
 
 def utcnow() -> datetime:
@@ -171,7 +176,7 @@ class EvidenceDeliveryBatch(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("evidence_runs.id"), nullable=False, index=True)
-    raw_post_id: Mapped[Optional[int]] = mapped_column(index=True)
+    raw_post_id: Mapped[Optional[int]] = mapped_column(ForeignKey("raw_posts.id"), index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     error: Mapped[Optional[str]] = mapped_column(Text)
     approver: Mapped[Optional[str]] = mapped_column(String(255), index=True)

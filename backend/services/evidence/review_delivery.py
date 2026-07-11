@@ -15,15 +15,19 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models import (
+from backend.models_evidence import (
     EvidenceDeliveryBatch,
     EvidenceItem,
     EvidenceRun,
     EvidenceVerification,
     utcnow,
 )
-from ..schemas import DELIVERY_STATUSES, REVIEW_STATUSES, VERIFICATION_STATUSES
-from .collector import sanitize_error
+from backend.services.evidence.schemas import (
+    DELIVERY_STATUSES,
+    REVIEW_STATUSES,
+    VERIFICATION_STATUSES,
+)
+from backend.services.evidence.collector import sanitize_error
 
 
 _TERMINAL_VERIFICATION_STATUSES = frozenset({"verified", "rejected", "failed"})

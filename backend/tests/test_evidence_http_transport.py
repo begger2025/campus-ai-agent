@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import unittest
 
-from evidence_collector.services.http_transport import (
+from backend.services.evidence.http_transport import (
     HttpTransportUnavailableError,
     OpenAICompatibleTransport,
     build_http_transports,
     parse_citation_response,
 )
-from evidence_collector.services.providers import SearchRequest
+from backend.services.evidence.providers import SearchRequest
 
 
 class FakeResponse:

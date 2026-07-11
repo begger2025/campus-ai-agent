@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeAlias
 from urllib.parse import urlsplit
 
-from ..config import SUPPORTED_PROVIDER_IDS
-from .providers import SearchRequest, normalize_hits
+from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS
+from backend.services.evidence.providers import SearchRequest, normalize_hits
 
 
 class AsyncJsonClient(Protocol):

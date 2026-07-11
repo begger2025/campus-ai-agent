@@ -1,13 +1,14 @@
-"""Evidence database isolation and integrity tests."""
+"""Evidence model integrity tests (mapped on the backend's single Base)."""
 
 import hashlib
 import unittest
 
-from sqlalchemy import String, UniqueConstraint, create_engine, inspect
+from sqlalchemy import String, UniqueConstraint, create_engine
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
-from evidence_collector.database import create_session_factory, init_database
-from evidence_collector.models import (
+from backend.database import Base
+from backend.models_evidence import (
     EvidenceDeliveryBatch,
     EvidenceDocument,
     EvidenceItem,
@@ -16,13 +17,15 @@ from evidence_collector.models import (
 )
 
 
-class EvidenceDatabaseTests(unittest.TestCase):
+class EvidenceModelsTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:", connect_args={"check_same_thread": False}
         )
-        init_database(self.engine)
-        self.session = create_session_factory(self.engine)()
+        Base.metadata.create_all(self.engine)
+        self.session = sessionmaker(
+            bind=self.engine, autoflush=False, expire_on_commit=False
+        )()
 
     def tearDown(self):
         self.session.close()
@@ -53,11 +56,31 @@ class EvidenceDatabaseTests(unittest.TestCase):
         with self.assertRaises(IntegrityError):
             self.session.commit()
 
-    def test_init_creates_only_evidence_tables(self):
-        table_names = set(inspect(self.engine).get_table_names())
-        self.assertTrue(table_names)
-        self.assertTrue(all(name.startswith("evidence_") for name in table_names))
-        self.assertNotIn("raw_posts", table_names)
+    def test_evidence_tables_are_registered_on_the_backend_base(self):
+        # The collector no longer owns a private Base/engine: init_db() must
+        # provision every evidence_* table from backend.database.Base.
+        from backend import database
+
+        registered = set(Base.metadata.tables)
+        self.assertTrue(
+            {
+                "evidence_runs",
+                "evidence_queries",
+                "evidence_documents",
+                "evidence_items",
+                "evidence_verifications",
+                "evidence_delivery_batches",
+            }.issubset(registered)
+        )
+        self.assertIn("raw_posts", registered)
+        self.assertIs(EvidenceRun.metadata, database.Base.metadata)
+
+    def test_delivery_batch_raw_post_id_is_a_nullable_foreign_key(self):
+        column = EvidenceDeliveryBatch.__table__.c.raw_post_id
+        self.assertTrue(column.nullable)
+        self.assertEqual(
+            [fk.target_fullname for fk in column.foreign_keys], ["raw_posts.id"]
+        )
 
     def test_canonical_url_hash_is_mysql_safe_and_sole_unique_target(self):
         canonical_url_hash = EvidenceDocument.__table__.c.canonical_url_hash

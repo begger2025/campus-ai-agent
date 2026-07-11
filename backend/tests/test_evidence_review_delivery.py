@@ -5,17 +5,18 @@ from __future__ import annotations
 import unittest
 
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from evidence_collector.database import create_session_factory, init_database
-from evidence_collector.models import (
+from backend.database import Base
+from backend.models_evidence import (
     EvidenceDeliveryBatch,
     EvidenceDocument,
     EvidenceItem,
     EvidenceRun,
     EvidenceVerification,
 )
-from evidence_collector.services.canonicalize import canonical_url_hash, canonicalize_url
-from evidence_collector.services.review_delivery import (
+from backend.services.evidence.canonicalize import canonical_url_hash, canonicalize_url
+from backend.services.evidence.review_delivery import (
     build_delivery_payload,
     create_delivery_batch,
     mark_delivery,
@@ -27,8 +28,10 @@ from evidence_collector.services.review_delivery import (
 class ReviewDeliveryTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
-        init_database(self.engine)
-        self.session = create_session_factory(self.engine)()
+        Base.metadata.create_all(self.engine)
+        self.session = sessionmaker(
+            bind=self.engine, autoflush=False, expire_on_commit=False
+        )()
         self.run = EvidenceRun(topic="SYSU campus notice", status="completed")
         self.session.add(self.run)
         self.session.flush()

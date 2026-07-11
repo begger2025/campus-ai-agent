@@ -2,7 +2,7 @@
 
 import unittest
 
-from evidence_collector.config import SUPPORTED_PROVIDER_IDS, load_settings
+from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS, load_settings
 
 
 class CollectorSettingsTests(unittest.TestCase):

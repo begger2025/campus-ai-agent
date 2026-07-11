@@ -7,10 +7,17 @@ import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from evidence_collector.database import create_session_factory, init_database
-from evidence_collector.models import EvidenceDocument, EvidenceItem, EvidenceQuery
-from evidence_collector.services.collector import EvidenceCollector, sanitize_error
-from evidence_collector.services.providers import SearchHit
+from backend.database import Base
+from backend.models_evidence import EvidenceDocument, EvidenceItem, EvidenceQuery
+from backend.services.evidence.collector import EvidenceCollector, sanitize_error
+from backend.services.evidence.providers import SearchHit
+
+
+def make_evidence_session(engine):
+    """Create the backend schema and return a session over the given engine."""
+
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
 
 
 class FakeProvider:
@@ -50,8 +57,7 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.engine = create_engine(
             "sqlite+pysqlite:///:memory:", connect_args={"check_same_thread": False}
         )
-        init_database(self.engine)
-        self.session = create_session_factory(self.engine)()
+        self.session = make_evidence_session(self.engine)
 
         self.official = SearchHit(
             url="https://www.sysu.edu.cn/notice?id=7&utm_source=feed",
