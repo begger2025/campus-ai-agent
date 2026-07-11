@@ -32,6 +32,7 @@ from tools.async_file_writer import AsyncFileWriter
 
 import aiofiles
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 import config
 from base.base_crawler import AbstractStore
@@ -107,6 +108,23 @@ class KuaishouDbStoreImplement(AbstractStore):
                 content_item["add_ts"] = utils.get_current_timestamp()
                 new_content = KuaishouVideo(**content_item)
                 session.add(new_content)
+                try:
+                    # 立即 flush 让唯一约束冲突在 try/except 范围内抛出（仿 xhs/zhihu 自愈模式）
+                    await session.flush()
+                except IntegrityError:
+                    # 并发竞态：另一协程刚插入同一 video_id；唯一约束兜底，这里退化为更新
+                    await session.rollback()
+                    result = await session.execute(
+                        select(KuaishouVideo).where(KuaishouVideo.video_id == video_id)
+                    )
+                    video_detail = result.scalar_one_or_none()
+                    if video_detail:
+                        for key, value in content_item.items():
+                            if key == "add_ts":
+                                # 保留胜出方的首次入库时间，勿被竞态失败方覆盖
+                                continue
+                            if hasattr(video_detail, key):
+                                setattr(video_detail, key, value)
             else:
                 for key, value in content_item.items():
                     if hasattr(video_detail, key):
@@ -129,6 +147,23 @@ class KuaishouDbStoreImplement(AbstractStore):
                 comment_item["add_ts"] = utils.get_current_timestamp()
                 new_comment = KuaishouVideoComment(**comment_item)
                 session.add(new_comment)
+                try:
+                    # 立即 flush 让唯一约束冲突在 try/except 范围内抛出（仿 xhs/zhihu 自愈模式）
+                    await session.flush()
+                except IntegrityError:
+                    # 并发竞态：另一协程刚插入同一 comment_id；唯一约束兜底，这里退化为更新
+                    await session.rollback()
+                    result = await session.execute(
+                        select(KuaishouVideoComment).where(KuaishouVideoComment.comment_id == comment_id)
+                    )
+                    comment_detail = result.scalar_one_or_none()
+                    if comment_detail:
+                        for key, value in comment_item.items():
+                            if key == "add_ts":
+                                # 保留胜出方的首次入库时间，勿被竞态失败方覆盖
+                                continue
+                            if hasattr(comment_detail, key):
+                                setattr(comment_detail, key, value)
             else:
                 for key, value in comment_item.items():
                     if hasattr(comment_detail, key):

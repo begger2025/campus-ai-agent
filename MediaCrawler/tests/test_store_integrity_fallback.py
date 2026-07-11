@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from store.kuaishou._store_impl import KuaishouDbStoreImplement
 from store.tieba._store_impl import TieBaDbStoreImplement
 from store.weibo._store_impl import WeiboDbStoreImplement
 from store.xhs._store_impl import XhsDbStoreImplement
@@ -213,3 +214,75 @@ class TestTiebaIntegrityFallback:
         fake_session.commit.assert_awaited_once()
         fake_session.rollback.assert_awaited_once()
         warn_mock.assert_called_once()
+
+
+class TestKuaishouIntegrityFallback:
+    """ks：改造后走 zhihu 同构自愈——insert flush 冲突 → rollback → 重查 → 转 update。"""
+
+    @pytest.mark.asyncio
+    async def test_store_content_falls_back_to_update_on_integrity_error(self, monkeypatch):
+        existing_after_race = MagicMock(name="existing_video")
+        fake_session = MagicMock(name="fake_session")
+        # 第一次 select：不存在（走 insert）；冲突后第二次 select：竞态胜出方已在库
+        fake_session.execute = AsyncMock(
+            side_effect=[_select_result(None), _select_result(existing_after_race)]
+        )
+        fake_session.add = MagicMock()
+        fake_session.flush = AsyncMock(side_effect=IntegrityError("dup", None, None))
+        fake_session.rollback = AsyncMock()
+        fake_session.commit = AsyncMock()
+        monkeypatch.setattr(
+            "store.kuaishou._store_impl.get_session", _fake_get_session_factory(fake_session)
+        )
+
+        store = KuaishouDbStoreImplement()
+        # 关键断言：异常不逃逸，退化为对已有行的 update
+        await store.store_content({"video_id": "3xabc", "title": "t", "add_ts": 1})
+
+        fake_session.flush.assert_awaited_once()
+        fake_session.rollback.assert_awaited_once()
+        assert fake_session.execute.await_count == 2
+        fake_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_comment_falls_back_to_update_on_integrity_error(self, monkeypatch):
+        existing_after_race = MagicMock(name="existing_comment")
+        fake_session = MagicMock(name="fake_session")
+        fake_session.execute = AsyncMock(
+            side_effect=[_select_result(None), _select_result(existing_after_race)]
+        )
+        fake_session.add = MagicMock()
+        fake_session.flush = AsyncMock(side_effect=IntegrityError("dup", None, None))
+        fake_session.rollback = AsyncMock()
+        fake_session.commit = AsyncMock()
+        monkeypatch.setattr(
+            "store.kuaishou._store_impl.get_session", _fake_get_session_factory(fake_session)
+        )
+
+        store = KuaishouDbStoreImplement()
+        await store.store_comment({"comment_id": "777", "video_id": "3xabc"})
+
+        fake_session.flush.assert_awaited_once()
+        fake_session.rollback.assert_awaited_once()
+        assert fake_session.execute.await_count == 2
+        fake_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_content_normal_insert_does_not_flush_fallback(self, monkeypatch):
+        """反向对照：无冲突时正常 insert，一次 select、不 rollback。"""
+        fake_session = MagicMock(name="fake_session")
+        fake_session.execute = AsyncMock(return_value=_select_result(None))
+        fake_session.add = MagicMock()
+        fake_session.flush = AsyncMock()
+        fake_session.rollback = AsyncMock()
+        fake_session.commit = AsyncMock()
+        monkeypatch.setattr(
+            "store.kuaishou._store_impl.get_session", _fake_get_session_factory(fake_session)
+        )
+
+        store = KuaishouDbStoreImplement()
+        await store.store_content({"video_id": "3xabc"})
+
+        fake_session.add.assert_called_once()
+        fake_session.rollback.assert_not_awaited()
+        fake_session.commit.assert_awaited_once()
