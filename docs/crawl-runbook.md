@@ -226,6 +226,8 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 | 爬到了但面板看不到 | 只写了原生表，没同步/加工 | 补跑 §5 的 sync + process（注意用 `weibo` 而非 `wb`） |
 | 智能选题 404 | 后端进程是旧的、没有新路由 | 重启后端（`stop.bat` → `run.bat`） |
 | 微博采集到无关广告帖 | 蹭校名的 B 端营销 | 已由营销负面词表拦截大部分；纯「提及校名的无关帖」为已知技术权衡 |
+| 队列模式秒退「queue drained」 | 该平台队列没有 pending 任务 | 先 `seed_crawl_queue.py` 播种；或 `crawl_queue_status.py` 看是否都 done |
+| 任务卡在 claimed 不动 | 某成员机器中途崩了 | 等 30 分钟租约自动回收，或 `reset_crawl_queue.py --requeue-claimed` 手动打回 |
 
 ---
 
@@ -247,6 +249,63 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 .\.venv\Scripts\python.exe scripts\process_raw_posts.py --platform weibo
 
 # 3) 重启后端，去「数据管理 → 原始帖子」按微博筛选核对
+```
+
+---
+
+## 9. 多机协同爬取（多名成员同时跑、自动分工、不冲突）
+
+> 目标：N 名成员各自电脑同时跑，从共享库的**认领队列**里各领互不重叠的关键词，写库不冲突不重复。
+> 单机请求频率不变（风控风险不变），总吞吐近似 ×N。写库并发安全由既有唯一索引 + 自愈保证。
+
+**原理**：共享库有一张 `crawl_task_queue` 任务表（任务 = 平台 + 裸关键词）。成员用 `--from-queue yes`
+跑爬虫时，**登录一次后循环**：认领一个 pending 关键词 → 爬它 → 标 done → 认领下一个，直到该平台队列排空。
+认领用行级条件更新 + 30 分钟租约，两台机器绝不会领到同一个关键词；机器崩了任务租约到期自动回收。
+
+### 9.1 播种任务（一名成员做一次即可）
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main"
+# 手动关键词，平台 × 关键词笛卡尔积（平台码同 CLI：xhs/wb/tieba/zhihu/ks）
+.\.venv\Scripts\python.exe scripts\seed_crawl_queue.py --platform ks --keywords "宿舍,食堂,图书馆,体育馆"
+# 或从智能选题推荐取 top-N 灌单平台
+.\.venv\Scripts\python.exe scripts\seed_crawl_queue.py --platform ks --from-recommendations --top 20
+# 预览不写：加 --dry-run
+```
+> 播种对**当前 pending/claimed 的 (平台,关键词) 去重**，重复播种不会堆积；done/failed 过的可重新入队刷新。
+
+### 9.2 各成员开跑（每台机各自，先做 §1.2 关代理 + 扫码登录）
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main\MediaCrawler"
+.\.venv\Scripts\python.exe main.py --platform ks --from-queue yes --get_comment yes
+# 可选 --worker 张三 标识本机（监控里显示谁在爬哪个；默认取主机名）
+```
+> 各成员登录自己的平台账号即可。`--from-queue yes` 时忽略 `--keywords`，关键词全从队列认领。
+
+### 9.3 监控与重置（任一成员随时）
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main"
+# 看进度：按平台 pending/claimed/done/failed + 谁在爬哪个 + 卡死提示
+.\.venv\Scripts\python.exe scripts\crawl_queue_status.py --platform ks
+# 回收卡死的 claimed（机器崩了没自动回收时手动打回 pending）
+.\.venv\Scripts\python.exe scripts\reset_crawl_queue.py --requeue-claimed --platform ks --dry-run
+# 失败任务重排 / 清完成行：--requeue-failed / --clear-done
+```
+
+### 9.4 限速抖动（已默认开启，降风控指纹）
+
+请求间隔从「固定 18 秒」改为在 `[CRAWLER_MIN_SLEEP_SEC, CRAWLER_MAX_SLEEP_SEC]`（默认 8~18 秒）
+**随机取值**——固定间隔更像机器人，随机抖动更安全。两个值在 `MediaCrawler/config/base_config.py`，
+想更快可调小 MIN（风控雷区，谨慎）。
+
+### 9.5 前置：建队列表（首次用，需连共享库）
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main"
+.\.venv\Scripts\python.exe scripts\create_crawl_task_queue.py --dry-run   # 预览
+.\.venv\Scripts\python.exe scripts\create_crawl_task_queue.py             # 执行（幂等，可重复跑）
 ```
 
 ---
