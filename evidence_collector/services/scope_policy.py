@@ -16,7 +16,11 @@ from typing import Iterable, Literal
 from urllib.parse import urlsplit
 
 
-Decision = Literal["accepted", "uncertain", "rejected"]
+# Keep these values aligned with ``evidence_collector.schemas.SCOPE_DECISIONS``
+# so service results can be stored without translation at call sites.
+Decision = Literal["in_scope", "out_of_scope", "needs_review"]
+_VALID_DECISIONS = frozenset({"in_scope", "out_of_scope", "needs_review"})
+_SOURCE_TYPE_ALIASES = {"official": "official", "official_notice": "official", "news": "news"}
 
 
 def _configured_domains(environment_key: str, defaults: Iterable[str]) -> set[str]:
@@ -78,7 +82,15 @@ class ScopeDecision:
     reasons: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        cleaned = [reason.strip() for reason in self.reasons if isinstance(reason, str)]
+        if self.decision not in _VALID_DECISIONS:
+            raise ValueError(
+                "decision must be one of: in_scope, out_of_scope, needs_review"
+            )
+        cleaned = [
+            reason.strip()
+            for reason in self.reasons
+            if isinstance(reason, str) and reason.strip()
+        ]
         if not cleaned:
             raise ValueError("scope decisions require at least one non-empty reason")
         object.__setattr__(self, "reasons", cleaned)
@@ -129,22 +141,33 @@ def _clean_domains(domains: Iterable[str]) -> set[str]:
 def _normalize_domain(source_domain: str | None) -> str:
     if not isinstance(source_domain, str):
         return ""
-    value = source_domain.strip().lower().rstrip(".")
-    if not value:
+    raw = source_domain.strip()
+    if not raw or any(character.isspace() for character in raw):
         return ""
-    # Accept either a bare domain or a URL-shaped value for convenience.
-    if "://" in value:
+    # URL-shaped values are accepted only as valid HTTP(S) URLs.  In
+    # particular, do not let ``file://sysu.edu.cn`` or a bad port collapse to
+    # the hostname and accidentally pass the official-domain policy.
+    if "://" in raw:
         try:
-            value = (urlsplit(value).hostname or "").lower().rstrip(".")
+            parsed = urlsplit(raw)
+            if parsed.scheme.lower() not in {"http", "https"}:
+                return ""
+            if not parsed.netloc or parsed.username is not None or parsed.password is not None:
+                return ""
+            if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+                return ""
+            # Accessing ``port`` validates malformed and out-of-range ports.
+            _ = parsed.port
+            value = (parsed.hostname or "").lower().rstrip(".")
         except ValueError:
             return ""
-    # A source_domain may include a port, but it must not contain a path.
-    if "/" in value:
+        return value
+
+    # Bare domains are intentionally strict: ports, paths, credentials, and
+    # URL delimiters are not part of a source-domain value.
+    value = raw.lower().rstrip(".")
+    if any(character in value for character in "/?#@:"):
         return ""
-    if value.startswith("[") and "]" in value:
-        value = value[1 : value.index("]")]
-    elif ":" in value:
-        value = value.split(":", 1)[0]
     return value
 
 
@@ -154,11 +177,11 @@ def _domain_allowed(domain: str, allowlist: Iterable[str]) -> bool:
         if not value:
             continue
         if value.startswith("*."):
-            if domain == value[2:] or domain.endswith(value[1:]):
+            if domain == value[2:] or domain.endswith(f".{value[2:]}"):
                 return True
-        # A configured registrable domain covers its ordinary subdomains,
-        # while the dot boundary prevents lookalikes such as
-        # ``notpeople.com.cn`` from matching ``people.com.cn``.
+        # Bare entries cover ordinary subdomains at a dot boundary, while
+        # preventing lookalikes such as ``evil-sysu.edu.cn`` from matching
+        # ``sysu.edu.cn``.
         elif domain == value or domain.endswith(f".{value}"):
             return True
     return False
@@ -180,26 +203,28 @@ def assess_scope(
     title: str | None,
     evidence_quote: str | None,
 ) -> ScopeDecision:
-    """Classify a candidate as ``accepted``, ``uncertain`` or ``rejected``.
+    """Classify a candidate as ``in_scope``, ``needs_review`` or ``out_of_scope``.
 
     Full ``中山大学``/``Sun Yat-sen University`` evidence is required.  A
-    record mentioning only the ambiguous shorthand ``中大`` is ``uncertain``;
-    missing evidence, entities, domains, or unsupported source types are
-    rejected.  Accepted official notices and news must also match their
-    respective allowlists.
+    record mentioning only the ambiguous shorthand ``中大`` is
+    ``needs_review``; missing evidence, entities, domains, or unsupported
+    source types are ``out_of_scope``.  In-scope official notices and news must also match their
+    respective allowlists.  ``official_notice`` is accepted as a compatibility
+    alias and normalized to the canonical ``official`` source type first.
     """
 
-    normalized_type = source_type.strip().lower() if isinstance(source_type, str) else ""
-    if normalized_type not in {"official_notice", "news"}:
-        return ScopeDecision("rejected", ["unsupported source type"])
+    raw_type = source_type.strip().lower() if isinstance(source_type, str) else ""
+    normalized_type = _SOURCE_TYPE_ALIASES.get(raw_type, "")
+    if not normalized_type:
+        return ScopeDecision("out_of_scope", ["unsupported source type"])
 
     quote = evidence_quote.strip() if isinstance(evidence_quote, str) else ""
     if not quote:
-        return ScopeDecision("rejected", ["evidence quote is required"])
+        return ScopeDecision("out_of_scope", ["evidence quote is required"])
 
     domain = _normalize_domain(source_domain)
     if not domain:
-        return ScopeDecision("rejected", ["source domain is required"])
+        return ScopeDecision("out_of_scope", ["source domain is missing or malformed"])
 
     combined_text = " ".join(
         part.strip() for part in (title or "", quote) if isinstance(part, str) and part.strip()
@@ -207,22 +232,22 @@ def assess_scope(
     if not _has_explicit_entity(combined_text):
         if "中大" in combined_text:
             return ScopeDecision(
-                "uncertain",
+                "needs_review",
                 ["ambiguous 中大 reference lacks the full SYSU entity"],
             )
         return ScopeDecision(
-            "rejected",
+            "out_of_scope",
             ["title/evidence quote lacks an explicit SYSU entity"],
         )
 
-    if normalized_type == "official_notice":
+    if normalized_type == "official":
         if _domain_allowed(domain, SYSU_OFFICIAL_DOMAIN_ALLOWLIST):
-            return ScopeDecision("accepted", ["explicit SYSU entity on an allowlisted official domain"])
-        return ScopeDecision("uncertain", ["official source domain is not in the SYSU allowlist"])
+            return ScopeDecision("in_scope", ["explicit SYSU entity on an allowlisted official domain"])
+        return ScopeDecision("needs_review", ["official source domain is not in the SYSU allowlist"])
 
     if _domain_allowed(domain, NEWS_DOMAIN_ALLOWLIST):
-        return ScopeDecision("accepted", ["explicit SYSU entity on an allowlisted news domain"])
-    return ScopeDecision("uncertain", ["news source domain is not in the allowed news list"])
+        return ScopeDecision("in_scope", ["explicit SYSU entity on an allowlisted news domain"])
+    return ScopeDecision("needs_review", ["news source domain is not in the allowed news list"])
 
 
 __all__ = [

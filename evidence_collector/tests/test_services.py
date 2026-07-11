@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import unittest
 
 from evidence_collector.services.canonicalize import (
@@ -38,40 +37,94 @@ class CanonicalizeTests(unittest.TestCase):
 
 
 class ScopePolicyTests(unittest.TestCase):
-    def test_official_notice_is_accepted(self) -> None:
+    def test_official_is_in_scope(self) -> None:
+        result = assess_scope(
+            "official",
+            "www.sysu.edu.cn",
+            "中山大学关于暑期安排的通知",
+            "中山大学发布暑期安排通知。",
+        )
+        self.assertEqual(result.decision, "in_scope")
+        self.assertTrue(result.reasons)
+
+    def test_official_notice_alias_is_normalized(self) -> None:
         result = assess_scope(
             "official_notice",
             "www.sysu.edu.cn",
             "中山大学关于暑期安排的通知",
             "中山大学发布暑期安排通知。",
         )
-        self.assertEqual(result.decision, "accepted")
-        self.assertTrue(result.reasons)
+        self.assertEqual(result.decision, "in_scope")
 
-    def test_allowlisted_news_is_accepted(self) -> None:
+    def test_allowlisted_news_is_in_scope(self) -> None:
         result = assess_scope(
             "news",
             "people.com.cn",
             "高校新闻",
             "Sun Yat-sen University announced the new program.",
         )
-        self.assertEqual(result.decision, "accepted")
+        self.assertEqual(result.decision, "in_scope")
         self.assertTrue(result.reasons)
 
-    def test_ambiguous_zhongda_is_uncertain(self) -> None:
+    def test_ambiguous_zhongda_needs_review(self) -> None:
         result = assess_scope("official_notice", "www.sysu.edu.cn", "中大通知", "中大公布安排")
-        self.assertEqual(result.decision, "uncertain")
+        self.assertEqual(result.decision, "needs_review")
         self.assertTrue(result.reasons)
 
-    def test_missing_quote_is_rejected(self) -> None:
+    def test_missing_quote_is_out_of_scope(self) -> None:
         result = assess_scope("official_notice", "www.sysu.edu.cn", "中山大学通知", "  ")
-        self.assertEqual(result.decision, "rejected")
+        self.assertEqual(result.decision, "out_of_scope")
         self.assertTrue(result.reasons)
 
-    def test_unsupported_source_is_rejected(self) -> None:
+    def test_unsupported_source_is_out_of_scope(self) -> None:
         result = assess_scope("web", "www.sysu.edu.cn", "中山大学通知", "中山大学发布通知")
-        self.assertEqual(result.decision, "rejected")
+        self.assertEqual(result.decision, "out_of_scope")
         self.assertTrue(result.reasons)
+
+    def test_scope_decision_rejects_invalid_state(self) -> None:
+        from evidence_collector.services.scope_policy import ScopeDecision
+
+        with self.assertRaises(ValueError):
+            ScopeDecision("accepted", ["invalid state"])  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            ScopeDecision("in_scope", ["  "])
+
+    def test_malformed_domain_url_is_rejected(self) -> None:
+        for malformed in ("file://sysu.edu.cn", "http://sysu.edu.cn:bad", "ftp://sysu.edu.cn"):
+            result = assess_scope(
+                "official",
+                malformed,
+                "中山大学通知",
+                "中山大学发布通知",
+            )
+            self.assertEqual(result.decision, "out_of_scope")
+
+    def test_lookalike_domain_is_not_allowlisted(self) -> None:
+        result = assess_scope(
+            "official",
+            "evil-sysu.edu.cn",
+            "中山大学通知",
+            "中山大学发布通知",
+        )
+        self.assertEqual(result.decision, "needs_review")
+
+    def test_official_subdomain_uses_dot_boundary(self) -> None:
+        result = assess_scope(
+            "official",
+            "notice.sysu.edu.cn",
+            "中山大学通知",
+            "中山大学发布通知",
+        )
+        self.assertEqual(result.decision, "in_scope")
+
+    def test_unknown_news_domain_needs_review(self) -> None:
+        result = assess_scope(
+            "news",
+            "untrusted.example",
+            "高校新闻",
+            "Sun Yat-sen University announced the new program.",
+        )
+        self.assertEqual(result.decision, "needs_review")
 
 
 if __name__ == "__main__":
