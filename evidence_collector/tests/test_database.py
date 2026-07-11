@@ -63,6 +63,10 @@ class EvidenceDatabaseTests(unittest.TestCase):
         canonical_url_hash = EvidenceDocument.__table__.c.canonical_url_hash
         self.assertIsInstance(canonical_url_hash.type, String)
         self.assertEqual(canonical_url_hash.type.length, 64)
+        self.assertFalse(canonical_url_hash.nullable)
+
+        item_canonical_url_hash = EvidenceItem.__table__.c.canonical_url_hash
+        self.assertFalse(item_canonical_url_hash.nullable)
 
         unique_constraints = [
             constraint
