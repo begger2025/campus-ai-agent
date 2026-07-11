@@ -12,6 +12,7 @@ const SEARCH_BUILDERS = {
   xhs: (kw) => `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(kw)}`,
   weibo: (kw) => `https://s.weibo.com/weibo?q=${encodeURIComponent(kw)}`,
   tieba: (kw) => `https://tieba.baidu.com/f/search/res?qw=${encodeURIComponent(kw)}`,
+  ks: (kw) => `https://www.kuaishou.com/search/video?searchKey=${encodeURIComponent(kw)}`,
 }
 
 /** 生成平台站内搜索链接；平台未知或无关键词时返回空串（调用方隐藏入口） */

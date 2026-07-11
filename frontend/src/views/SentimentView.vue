@@ -277,7 +277,7 @@ function riskLabel(risk) {
 }
 
 function platformTagType(platform) {
-  const map = { '微博': 'warning', '知乎': 'primary', '贴吧': 'success', '小红书': 'danger' }
+  const map = { '微博': 'warning', '知乎': 'primary', '贴吧': 'success', '小红书': 'danger', '快手': 'info' }
   return map[platform] || 'info'
 }
 
