@@ -295,8 +295,9 @@
         <el-radio-button value="manual">人工判定</el-radio-button>
       </el-radio-group>
       <p v-if="verify.mode === 'fetch'" class="dialog-note">
-        后端会真的访问该证据链接并在页面正文中查找这段引用：链接打不开（编造的链接通常如此）判为「核验驳回」；
-        页面可访问但找不到原文判为「需复核」；找到原文才判为「已核验」。核验方式记录为 fetch_url。
+        后端会真的访问该证据链接并在页面正文中查找这段引用：找到原文判为「已核验」；域名不存在或页面 404/410
+        判为「核验驳回」；页面可访问但找不到原文、被反爬拦截（403 等）、或本机网络/代理不通导致抓取超时，
+        都只判为「需复核」——抓取失败不代表链接是编造的，请按结论里的说明人工打开链接确认。核验方式记录为 fetch_url。
       </p>
       <template v-else>
         <el-select v-model="verify.status" class="dialog-select">

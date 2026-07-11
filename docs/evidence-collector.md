@@ -255,7 +255,55 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 
 ---
 
-## 9. 故障排查
+## 9. 抓取核验（`services/evidence/verification.py`）
+
+核验就是**真的把 `canonical_url` GET 下来**，在页面正文里找那段引用（去标签、去空白后比对，
+允许供应商截断，命中前 16 个字符即算命中）。
+
+### 9.1 结论映射：结论必须与证据强度匹配
+
+**"抓不到"不等于"是假的"。** 早先的实现把任何抓取异常都判成 `rejected` + "可能是编造的链接"，
+结果本机代理一出问题，**真实可达的中大信息公开网通知**（`https://xxgk.sysu.edu.cn/...`）被扣上
+"AI 幻觉"的帽子，审核员照着那句话把真证据丢掉——核验器把真的变成了假的，比不核验更糟。
+现在的映射：
+
+| 抓取结果 | 结论 | 理由 |
+| --- | --- | --- |
+| 2xx 且正文命中引用 | `verified` | 引用确实存在于原页面。 |
+| 2xx 但正文找不到引用 | `needs_review` | 可能被供应商改写/截断，需人工比对原文。 |
+| **DNS 解析失败**（NXDOMAIN） | `rejected` | 主机名根本不存在——伪造的硬证据。 |
+| **HTTP 404 / 410** | `rejected` | 页面确实不存在（死链或编造链接）。 |
+| 其他非 2xx（401/403/429/5xx） | `needs_review` | 403 多半是**真实页面**上的反爬保护；据此驳回等于销毁真证据。原因里会带上状态码。 |
+| 连接超时 / 读取超时 / 连接被拒 / 网络不可达 / TLS 失败 / 代理故障 | `needs_review` | **我们没能完成这次核验**，这对引用真伪一无所知。原因里明说"不能据此认定该链接是编造的，请人工打开链接确认"。 |
+
+DNS 失败与连接超时的区分**按异常类型沿 `__cause__` 链判断**（`socket.gaierror` 在
+`httpx.ConnectError` 的因果链上），不匹配错误文案——文案随平台和语言变。见
+`verification.classify_fetch_error`。
+
+### 9.2 `trust_env`：httpx 会偷偷走系统代理（Clash 用户必看）
+
+`httpx.AsyncClient` 默认 `trust_env=True`。在 Windows 上它不只读 `HTTP_PROXY`/`HTTPS_PROXY`，
+**还会读注册表里的系统代理**——Clash 一类工具正是写在那里。所以"我已经清空环境变量了"救不回来：
+
+```text
+httpx.AsyncClient(timeout=10)                  -> ConnectTimeout   （环境变量已全部清空）
+httpx.AsyncClient(timeout=10, trust_env=False) -> HTTP 200, 20785 chars
+curl --max-time 30 https://xxgk.sysu.edu.cn/   -> HTTP 200, 4.8s
+```
+
+因此证据侧的两个客户端（`admin_evidence.get_evidence_verifier` 的核验客户端、
+`get_evidence_collector` 的检索传输客户端）**一律 `trust_env=False`，默认直连**。
+确实需要靠代理才能上网的人，在 `.env` 里显式打开：
+
+```env
+EVIDENCE_HTTP_TRUST_ENV=true
+```
+
+（`config.http_trust_env()`，只有字面量 `true` 才算开；其他值一律直连。）
+
+---
+
+## 10. 故障排查
 
 | 现象 | 原因与处理 |
 | --- | --- |
@@ -267,10 +315,13 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 | 条目是 `needs_review` | 域名不在白名单，或正文只出现"中大"。可人工判断后审核通过，或扩充白名单（§3）。 |
 | 交付按钮说没有可交付条目 | 三道闸门（in_scope + verified + approved）没有同时满足。页面会逐条说明缺哪一项。 |
 | 交付后 `raw_posts` 没增加 | 该证据之前已交付过。唯一约束保证幂等，返回结果里的"已存在"计数即为此。 |
+| 核验结论是"未能完成核验：连接/读取该链接超时" | **本机**上不去这个站点：多半是系统代理（Clash）拦截，或校园网/断网。这条**不是**说链接是假的——请自己在浏览器里打开确认。要走代理就设 `EVIDENCE_HTTP_TRUST_ENV=true`（§9.2）。 |
+| 核验结论是"未能完成核验：证据链接返回 HTTP 403" | 对方站点的反爬保护把我们的 UA 挡了，真实页面也会这样。人工打开链接确认后可直接人工判定。 |
+| 核验把明明能打开的官网页面判成 `rejected` | 如果原因里写的是"域名无法解析"或"HTTP 404/410"，那是真的死链；若是别的文案，说明代码退回了旧行为——见 §9.1，这是必须修的 bug。 |
 
 ---
 
-## 10. 已知限制
+## 11. 已知限制
 
 - **run 是同步的**：`POST /runs` 会一直等到采集结束。前端把该请求的超时放宽到 180 秒。
   若单次 run 可能超过 3 分钟，正确做法是改成后台任务 + 轮询，目前未实现。

@@ -25,7 +25,11 @@ from backend.models_evidence import EvidenceItem, EvidenceQuery, EvidenceRun
 from backend.schemas import ok
 from backend.services.auth_service import require_admin
 from backend.services.evidence.collector import EvidenceCollector
-from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS, load_settings
+from backend.services.evidence.config import (
+    SUPPORTED_PROVIDER_IDS,
+    http_trust_env,
+    load_settings,
+)
 from backend.services.evidence.http_transport import build_search_transports
 from backend.services.evidence.providers import create_provider_registry
 from backend.services.evidence.review_delivery import deliver_batch, review_item, verify_item
@@ -58,9 +62,13 @@ async def get_evidence_collector(db: Session = Depends(get_db)) -> AsyncIterator
     Without this wiring every provider raises ``ProviderTransportUnavailableError``
     and a run collects nothing.  Tests override this dependency and never touch
     the network.
+
+    ``trust_env=False`` by default: see ``get_evidence_verifier``.
     """
 
-    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(
+        timeout=SEARCH_TIMEOUT_SECONDS, trust_env=http_trust_env()
+    ) as client:
         registry = create_provider_registry(transports=build_search_transports(client=client))
         yield EvidenceCollector(db, registry)
 
@@ -72,12 +80,18 @@ async def get_evidence_verifier() -> AsyncIterator[UrlFetchVerifier]:
     does not override this dependency cannot reach the network — and a verifier
     without a client is *unavailable* rather than a no-op that marks fabricated
     citations verified.
+
+    ``trust_env=False`` 是刻意的：httpx 默认 ``trust_env=True``，在 Windows 上会读**注册表
+    里的系统代理**（开发机上的 Clash 就写在那里），于是抓真实可达的 ``xxgk.sysu.edu.cn``
+    直接 ConnectTimeout——清空 ``HTTPS_PROXY`` 环境变量都救不回来。默认直连；确实要走代理
+    的人显式设 ``EVIDENCE_HTTP_TRUST_ENV=true``。
     """
 
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=DEFAULT_TIMEOUT_SECONDS,
         headers={"User-Agent": DEFAULT_USER_AGENT},
+        trust_env=http_trust_env(),
     ) as client:
         yield UrlFetchVerifier(client=client)
 

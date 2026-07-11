@@ -6,8 +6,11 @@
 
 from __future__ import annotations
 
+import socket
+import ssl
 import unittest
 
+import httpx
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -49,6 +52,22 @@ class FakeHttpClient:
 QUOTE = "中山大学发布关于暑期作息安排的通知。"
 
 
+def with_cause(error: Exception, cause: BaseException) -> Exception:
+    """还原 httpx 真实抛出的异常形状：传输层异常包着底层 OSError。"""
+
+    error.__cause__ = cause
+    return error
+
+
+def dns_failure() -> httpx.ConnectError:
+    """httpx 在 NXDOMAIN 时抛 ConnectError，__cause__ 链上挂着 socket.gaierror。"""
+
+    return with_cause(
+        httpx.ConnectError("[Errno 11001] getaddrinfo failed"),
+        socket.gaierror(socket.EAI_NONAME, "Name or service not known"),
+    )
+
+
 class FetchVerifierTests(unittest.IsolatedAsyncioTestCase):
     async def test_without_client_the_verifier_is_unavailable(self) -> None:
         verifier = UrlFetchVerifier()
@@ -88,17 +107,75 @@ class FetchVerifierTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(result.status, VERIFICATION_STATUSES)
         self.assertTrue(any("引用" in reason or "quote" in reason for reason in result.reasons))
 
-    async def test_non_2xx_is_rejected(self) -> None:
-        verifier = UrlFetchVerifier(client=FakeHttpClient(FakeResponse(404, "not found")))
-        result = await verifier.check("https://news.sysu.edu.cn/fabricated", QUOTE)
-        self.assertEqual(result.status, "rejected")
-        self.assertTrue(any("404" in reason for reason in result.reasons))
+    async def test_404_and_410_are_rejected(self) -> None:
+        for status_code in (404, 410):
+            with self.subTest(status_code=status_code):
+                verifier = UrlFetchVerifier(
+                    client=FakeHttpClient(FakeResponse(status_code, "not found"))
+                )
+                result = await verifier.check("https://news.sysu.edu.cn/fabricated", QUOTE)
+                self.assertEqual(result.status, "rejected")
+                self.assertEqual(result.http_status, status_code)
+                self.assertTrue(any(str(status_code) in reason for reason in result.reasons))
 
-    async def test_dns_failure_or_timeout_is_rejected(self) -> None:
-        verifier = UrlFetchVerifier(client=FakeHttpClient(error=OSError("dns lookup failed")))
+    async def test_other_non_2xx_is_needs_review_not_rejected(self) -> None:
+        # 403 多半是真实页面上的反爬保护；把它判成"编造"会毁掉真证据。
+        for status_code in (401, 403, 429, 500, 503):
+            with self.subTest(status_code=status_code):
+                verifier = UrlFetchVerifier(client=FakeHttpClient(FakeResponse(status_code, "")))
+                result = await verifier.check("https://xxgk.sysu.edu.cn/info/1", QUOTE)
+                self.assertEqual(result.status, "needs_review")
+                self.assertIn(result.status, VERIFICATION_STATUSES)
+                self.assertEqual(result.http_status, status_code)
+                self.assertTrue(any(str(status_code) in reason for reason in result.reasons))
+                self.assertFalse(any("可能是编造的链接" in reason for reason in result.reasons))
+                self.assertTrue(
+                    any("不能据此认定该链接是编造的" in reason for reason in result.reasons)
+                )
+
+    async def test_dns_nxdomain_is_rejected_as_a_fabricated_host(self) -> None:
+        verifier = UrlFetchVerifier(client=FakeHttpClient(error=dns_failure()))
         result = await verifier.check("https://news.sysu.edu.cn/fabricated", QUOTE)
         self.assertEqual(result.status, "rejected")
-        self.assertTrue(result.reasons)
+        self.assertTrue(any("域名" in reason for reason in result.reasons))
+
+    async def test_bare_gaierror_is_also_treated_as_dns_failure(self) -> None:
+        verifier = UrlFetchVerifier(
+            client=FakeHttpClient(error=socket.gaierror(socket.EAI_NONAME, "Name or service not known"))
+        )
+        result = await verifier.check("https://news.sysu.edu.cn/fabricated", QUOTE)
+        self.assertEqual(result.status, "rejected")
+
+    async def test_network_failures_do_not_accuse_the_link_of_being_fabricated(self) -> None:
+        # 本机代理/网络不通时，真实的中大官网页面曾被判成"编造"——这条测试锁死那个 bug。
+        errors = {
+            "connect_timeout": httpx.ConnectTimeout("timed out"),
+            "read_timeout": httpx.ReadTimeout("read timed out"),
+            "connection_refused": with_cause(
+                httpx.ConnectError("connection refused"), ConnectionRefusedError(111, "refused")
+            ),
+            "network_unreachable": with_cause(
+                httpx.ConnectError("network unreachable"), OSError(101, "Network is unreachable")
+            ),
+            "tls_failure": with_cause(
+                httpx.ConnectError("ssl handshake failed"), ssl.SSLError("handshake failure")
+            ),
+            "proxy_error": httpx.ProxyError("proxy refused the connection"),
+            "unexpected": RuntimeError("something else went wrong"),
+        }
+        for label, error in errors.items():
+            with self.subTest(case=label):
+                verifier = UrlFetchVerifier(client=FakeHttpClient(error=error))
+                result = await verifier.check("https://xxgk.sysu.edu.cn/zwgk/1.htm", QUOTE)
+                self.assertEqual(result.status, "needs_review")
+                self.assertIn(result.status, VERIFICATION_STATUSES)
+                self.assertTrue(result.reasons)
+                self.assertFalse(any("可能是编造的链接" in reason for reason in result.reasons))
+                self.assertTrue(
+                    any("不能据此认定该链接是编造的" in reason for reason in result.reasons)
+                )
+                self.assertTrue(any("未能完成核验" in reason for reason in result.reasons))
+                self.assertTrue(any("人工" in reason or "请打开" in reason for reason in result.reasons))
 
     async def test_non_http_url_is_rejected_without_a_request(self) -> None:
         client = FakeHttpClient(FakeResponse(200, QUOTE))
@@ -171,6 +248,26 @@ class VerifyItemByFetchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(verification.status, "rejected")
         self.assertEqual(self.session.get(EvidenceItem, item_id).verification_status, "rejected")
         self.assertIn("404", verification.reasons or "")
+
+    async def test_unresolvable_host_is_rejected(self) -> None:
+        item_id = self._item("https://news.sysu.edu.cn/info/fabricated")
+        verifier = UrlFetchVerifier(client=FakeHttpClient(error=dns_failure()))
+        verification = await verify_item_by_fetch(self.session, item_id, verifier)
+        self.session.commit()
+        self.assertEqual(verification.status, "rejected")
+        self.assertEqual(self.session.get(EvidenceItem, item_id).verification_status, "rejected")
+
+    async def test_a_local_network_failure_never_marks_real_evidence_rejected(self) -> None:
+        item_id = self._item()
+        verifier = UrlFetchVerifier(client=FakeHttpClient(error=httpx.ConnectTimeout("timed out")))
+        verification = await verify_item_by_fetch(self.session, item_id, verifier)
+        self.session.commit()
+        self.assertEqual(verification.status, "needs_review")
+        self.assertEqual(
+            self.session.get(EvidenceItem, item_id).verification_status, "needs_review"
+        )
+        self.assertNotIn("可能是编造的链接", verification.reasons or "")
+        self.assertIn("未能完成核验", verification.reasons or "")
 
     async def test_live_page_missing_the_quote_needs_review(self) -> None:
         item_id = self._item()

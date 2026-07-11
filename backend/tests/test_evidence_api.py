@@ -542,5 +542,60 @@ class EvidenceDeliveryApiTest(EvidenceApiTestBase):
         db.close()
 
 
+class RecordingAsyncClient:
+    """替身 httpx.AsyncClient：只记录构造参数，绝不联网。"""
+
+    instances: list[dict] = []
+
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.trust_env = kwargs.get("trust_env")
+        RecordingAsyncClient.instances.append(kwargs)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+
+class EvidenceHttpClientWiringTests(unittest.IsolatedAsyncioTestCase):
+    """httpx 默认 trust_env=True，会读 Windows 注册表里的系统代理（Clash），
+    让真实可达的中大官网连接超时。证据侧的两个客户端默认必须直连。"""
+
+    def setUp(self) -> None:
+        RecordingAsyncClient.instances = []
+        self.session_factory = make_session_factory()
+
+    async def _build_clients(self) -> list[dict]:
+        from backend.routers import admin_evidence
+
+        with mock.patch.object(admin_evidence.httpx, "AsyncClient", RecordingAsyncClient):
+            db = self.session_factory()
+            try:
+                async for _collector in admin_evidence.get_evidence_collector(db):
+                    break
+            finally:
+                db.close()
+            async for _verifier in admin_evidence.get_evidence_verifier():
+                break
+        return RecordingAsyncClient.instances
+
+    async def test_evidence_clients_ignore_the_system_proxy_by_default(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EVIDENCE_HTTP_TRUST_ENV", None)
+            instances = await self._build_clients()
+        self.assertEqual(len(instances), 2)
+        for kwargs in instances:
+            self.assertIs(kwargs.get("trust_env"), False)
+
+    async def test_trust_env_can_be_switched_on_by_configuration(self) -> None:
+        with mock.patch.dict(os.environ, {"EVIDENCE_HTTP_TRUST_ENV": "true"}):
+            instances = await self._build_clients()
+        self.assertEqual(len(instances), 2)
+        for kwargs in instances:
+            self.assertIs(kwargs.get("trust_env"), True)
+
+
 if __name__ == "__main__":
     unittest.main()

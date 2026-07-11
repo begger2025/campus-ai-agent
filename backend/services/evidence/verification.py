@@ -7,6 +7,12 @@
 
 HTTP 客户端一律由调用方注入，与本包"没有注入客户端 = 不上网"的纪律一致：
 没有客户端时核验器是**不可用**（抛异常），而不是静默通过。
+
+**但"抓不到"不等于"是假的"。** 早期实现把任何抓取异常都判成 ``rejected`` +
+"可能是编造的链接"，结果本机代理配置一出问题，真实的中大信息公开网通知就被扣上"AI 幻觉"
+的帽子，审核员照着那句话把真证据丢掉——核验器把真的变成了假的，比不核验更糟。所以结论
+必须与证据强度匹配（见 ``_classify_transport_error`` 与 ``check``）：
+只有**域名不存在**和 **404/410** 才是伪造的硬证据；超时/连接失败/403 一律是"核验未完成"。
 """
 
 from __future__ import annotations
@@ -14,11 +20,14 @@ from __future__ import annotations
 import html as html_module
 import json
 import re
-from collections.abc import Sequence
+import socket
+import ssl
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+import httpx
 from sqlalchemy.orm import Session
 
 from backend.models_evidence import EvidenceItem, EvidenceVerification
@@ -43,6 +52,14 @@ _MIN_MATCH_CHARS = 8
 _SCRIPT_STYLE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
 _TAG = re.compile(r"(?s)<[^>]+>")
 _WHITESPACE = re.compile(r"\s+")
+
+
+# 页面明确不存在，这是死链/编造链接的硬证据（410 Gone 同理）。其余非 2xx（401/403/429/5xx）
+# 多半是反爬保护或服务端故障，真实页面天天返回 403——据此驳回等于销毁真证据。
+_DEAD_PAGE_STATUSES = frozenset({404, 410})
+
+# 审核员会一字不差地读到这句话，所以必须写清楚"这不是对链接真伪的判断"。
+_NOT_A_FABRICATION_VERDICT = "不能据此认定该链接是编造的，请人工打开链接确认"
 
 
 class AsyncHttpClient(Protocol):
@@ -91,6 +108,61 @@ def quote_found(html: str, quote: str) -> bool:
     return len(prefix) >= _MIN_MATCH_CHARS and prefix in text
 
 
+def _cause_chain(error: BaseException) -> Iterator[BaseException]:
+    """异常本身 + 它的 ``__cause__`` / ``__context__`` 链（防环）。"""
+
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _chain_contains(error: BaseException, kind: type[BaseException]) -> bool:
+    return any(isinstance(exc, kind) for exc in _cause_chain(error))
+
+
+def classify_fetch_error(error: BaseException) -> FetchVerificationResult:
+    """把一次抓取失败翻译成"证据强度匹配"的结论。
+
+    只有 **DNS 解析失败** 才是伪造的硬证据：主机名压根不存在。httpx 会把它包成
+    ``httpx.ConnectError``，真正的 ``socket.gaierror`` 挂在 ``__cause__`` 链上，因此这里
+    按**异常类型沿因果链判断**，而不是匹配错误文案（文案随平台/语言变）。
+
+    超时、连接被拒、网络不可达、TLS 失败、代理故障——这些只说明**我们没能完成这次核验**，
+    对引用的真伪一无所知。把它们判成 ``rejected`` 曾让真实的中大官网通知被当成 AI 幻觉丢掉。
+    """
+
+    detail = sanitize_error(error, limit=300)
+    if _chain_contains(error, socket.gaierror):
+        return FetchVerificationResult(
+            status="rejected",
+            reasons=[
+                f"证据链接的域名无法解析（DNS 中不存在该主机名），该站点根本不存在，"
+                f"判定为编造的链接：{detail}"
+            ],
+        )
+
+    if isinstance(error, httpx.TimeoutException):
+        cause = "连接/读取该链接超时"
+    elif _chain_contains(error, ssl.SSLError):
+        cause = "与该站点的 TLS 握手失败"
+    elif isinstance(error, httpx.ProxyError):
+        cause = "本机代理不可用"
+    elif isinstance(error, httpx.TransportError) or _chain_contains(error, OSError):
+        cause = "无法连接到该链接（网络不可达或连接被拒）"
+    else:
+        cause = "抓取过程出现异常"
+    return FetchVerificationResult(
+        status="needs_review",
+        reasons=[
+            f"未能完成核验：{cause}，通常是本机网络不通或系统代理（如 Clash）拦截所致；"
+            f"{_NOT_A_FABRICATION_VERDICT}。（详情：{detail}）"
+        ],
+    )
+
+
 class UrlFetchVerifier:
     """GET 证据的 canonical_url，用页面正文验证引用是否真实存在。"""
 
@@ -132,19 +204,31 @@ class UrlFetchVerifier:
                 follow_redirects=True,
                 timeout=self._timeout,
             )
-        except Exception as error:  # 域名不存在 / 超时 / 连接被拒
-            # 编造出来的链接通常死在这里——这正是我们要的。
-            return FetchVerificationResult(
-                status="rejected",
-                reasons=[f"抓取证据链接失败（可能是编造的链接）：{sanitize_error(error, limit=300)}"],
-            )
+        except Exception as error:  # 域名不存在 / 超时 / 连接被拒 / TLS / 代理
+            # 只有"域名不存在"才是编造的证据；其余失败只说明这次核验没做成。
+            return classify_fetch_error(error)
 
         status_code = getattr(response, "status_code", None)
-        if not isinstance(status_code, int) or not 200 <= status_code < 300:
+        if not isinstance(status_code, int):
+            return FetchVerificationResult(
+                status="needs_review",
+                reasons=[f"未能完成核验：无法识别响应的 HTTP 状态码；{_NOT_A_FABRICATION_VERDICT}。"],
+            )
+        if status_code in _DEAD_PAGE_STATUSES:
             return FetchVerificationResult(
                 status="rejected",
-                reasons=[f"证据链接返回 HTTP {status_code}，页面不可访问"],
-                http_status=status_code if isinstance(status_code, int) else None,
+                reasons=[f"证据链接返回 HTTP {status_code}，该页面确实不存在（死链或编造的链接）"],
+                http_status=status_code,
+            )
+        if not 200 <= status_code < 300:
+            return FetchVerificationResult(
+                status="needs_review",
+                reasons=[
+                    f"未能完成核验：证据链接返回 HTTP {status_code}，"
+                    "常见于反爬保护、限流或服务端临时故障（真实页面同样会这样返回）；"
+                    f"{_NOT_A_FABRICATION_VERDICT}。"
+                ],
+                http_status=status_code,
             )
 
         body = getattr(response, "text", "") or ""
@@ -217,6 +301,7 @@ __all__ = [
     "FetchVerificationResult",
     "UrlFetchVerifier",
     "VerifierUnavailableError",
+    "classify_fetch_error",
     "page_text",
     "quote_found",
     "verification_reasons",

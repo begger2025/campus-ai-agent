@@ -60,6 +60,19 @@ def _is_true(value: str | None) -> bool:
     return (value or "").strip().lower() == "true"
 
 
+def http_trust_env(environ: Mapping[str, str] | None = None) -> bool:
+    """证据侧的 httpx 客户端是否允许继承环境/系统代理配置。**默认 False（直连）。**
+
+    ``httpx.AsyncClient`` 默认 ``trust_env=True``，在 Windows 上它不只读
+    ``HTTP_PROXY``/``HTTPS_PROXY``，还会读**注册表里的系统代理**（Clash 一类工具会写
+    这里）。结果是：清空环境变量也没用，抓取真实可达的 ``https://xxgk.sysu.edu.cn/``
+    会 ConnectTimeout——而校验器曾把这种失败报成"可能是编造的链接"，真证据被当成幻觉。
+    所以默认直连；确实需要走代理才能上网的人，显式设 ``EVIDENCE_HTTP_TRUST_ENV=true``。
+    """
+
+    return _is_true(_environment(environ).get("EVIDENCE_HTTP_TRUST_ENV"))
+
+
 def load_settings(environ: Mapping[str, str] | None = None) -> CollectorSettings:
     """Load non-sensitive provider settings without requiring API keys."""
 
@@ -80,5 +93,6 @@ __all__ = [
     "SUPPORTED_PROVIDER_IDS",
     "CollectorSettings",
     "ProviderSettings",
+    "http_trust_env",
     "load_settings",
 ]
