@@ -139,6 +139,23 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("test-secret", rendered)
         self.assertNotIn("test-secret", repr(registry.settings["deepseek"].safe_dict))
 
+    def test_registry_converts_legacy_settings_objects_and_enabled_alias(self) -> None:
+        class LegacySettings:
+            def __init__(self, provider_id: str) -> None:
+                self.provider_id = provider_id
+                self.api_key = "legacy-secret"
+                self.model = f"{provider_id}-model"
+                self.base_url = "https://api.invalid"
+                # Legacy config exposed ``enabled`` instead of the explicit
+                # web_search_enabled flag.
+                self.enabled = True
+
+        class LegacyCollector:
+            providers = {provider_id: LegacySettings(provider_id) for provider_id in IDS}
+
+        registry = ProviderRegistry.from_config(LegacyCollector())
+        self.assertEqual(registry.enabled_provider_ids, IDS)
+
 
 if __name__ == "__main__":
     unittest.main()
