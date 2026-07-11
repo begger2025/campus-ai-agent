@@ -193,6 +193,8 @@ STOP_WORDS_FILE = "./docs/hit_stopwords.txt"
 FONT_PATH = "./docs/STZHONGS.TTF"
 
 # Crawl interval
+# 请求间随机抖动下界（秒）：间隔在 [MIN, MAX] 均匀取；固定间隔更像机器人，抖动降风险
+CRAWLER_MIN_SLEEP_SEC = 8
 CRAWLER_MAX_SLEEP_SEC = 18
 
 # ==================== 发布时间窗口与防饥饿策略 ====================
@@ -260,3 +262,13 @@ from .ks_config import *
 from .weibo_config import *
 from .tieba_config import *
 from .zhihu_config import *
+
+# ==================== 分布式协同爬取（认领队列） ====================
+# 队列模式：多成员各自机器同时跑、从共享库认领互不重叠关键词（--from-queue yes 开启）
+CRAWL_FROM_QUEUE = False
+# worker 标识（空 → 运行时取主机名）；监控里显示谁在爬哪个
+CRAWL_WORKER_ID = ""
+# 认领租约（秒）：认领后 N 秒内没完成即视为卡死，可被其他机器回收重认领
+CRAWL_QUEUE_LEASE_SEC = 1800
+# 认领乐观重试次数（候选被别人抢先时换下一个候选的最大尝试数）
+CRAWL_QUEUE_CLAIM_RETRY = 5
