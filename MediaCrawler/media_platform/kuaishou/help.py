@@ -76,6 +76,20 @@ def parse_creator_info_from_url(url: str) -> CreatorUrlInfo:
     raise ValueError(f"Unable to parse creator ID from URL: {url}")
 
 
+def resolve_next_pcursor(response_pcursor, next_page: int):
+    """决定下一页游标：优先服务端真实 pcursor；"no_more" → None（停止翻页）；缺失回退页码。
+
+    上游原实现把页码当游标传（服务端兼容数字页码），但丢弃了响应里的真实 pcursor，
+    也不识别 "no_more" 终止信号。这里两者兼得：有真游标用真游标，没有退回页码。
+    """
+    value = str(response_pcursor or "").strip()
+    if value == "no_more":
+        return None
+    if value:
+        return value
+    return str(next_page)
+
+
 if __name__ == '__main__':
     # Test video URL parsing
     print("=== Video URL Parsing Test ===")
@@ -106,17 +120,3 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"✗ URL: {url}")
             print(f"  Error: {e}\n")
-
-
-def resolve_next_pcursor(response_pcursor, next_page: int):
-    """决定下一页游标：优先服务端真实 pcursor；"no_more" → None（停止翻页）；缺失回退页码。
-
-    上游原实现把页码当游标传（服务端兼容数字页码），但丢弃了响应里的真实 pcursor，
-    也不识别 "no_more" 终止信号。这里两者兼得：有真游标用真游标，没有退回页码。
-    """
-    value = str(response_pcursor or "").strip()
-    if value == "no_more":
-        return None
-    if value:
-        return value
-    return str(next_page)
