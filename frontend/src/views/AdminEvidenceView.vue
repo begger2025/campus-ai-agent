@@ -290,21 +290,36 @@
     <!-- 核验对话框 -->
     <el-dialog v-model="verify.visible" :title="`核验证据 #${verify.item?.id ?? ''}`" width="480px">
       <p class="dialog-quote">{{ verify.item?.evidence_quote }}</p>
-      <el-select v-model="verify.status" class="dialog-select">
-        <el-option v-for="v in VERIFICATION_STATUSES" :key="v" :label="VERIFICATION_LABELS[v]" :value="v" />
-      </el-select>
-      <el-input
-        v-model="verify.reason"
-        type="textarea"
-        :rows="3"
-        maxlength="200"
-        show-word-limit
-        placeholder="核验依据（选填），例如：已在来源页核对原文"
-      />
-      <p class="dialog-note">核验方式记录为 manual_review（管理员人工核验）。</p>
+      <el-radio-group v-model="verify.mode" class="dialog-select">
+        <el-radio-button value="fetch">抓取核验（推荐）</el-radio-button>
+        <el-radio-button value="manual">人工判定</el-radio-button>
+      </el-radio-group>
+      <p v-if="verify.mode === 'fetch'" class="dialog-note">
+        后端会真的访问该证据链接并在页面正文中查找这段引用：链接打不开（编造的链接通常如此）判为「核验驳回」；
+        页面可访问但找不到原文判为「需复核」；找到原文才判为「已核验」。核验方式记录为 fetch_url。
+      </p>
+      <template v-else>
+        <el-select v-model="verify.status" class="dialog-select">
+          <el-option v-for="v in VERIFICATION_STATUSES" :key="v" :label="VERIFICATION_LABELS[v]" :value="v" />
+        </el-select>
+        <el-input
+          v-model="verify.reason"
+          type="textarea"
+          :rows="3"
+          maxlength="200"
+          show-word-limit
+          placeholder="核验依据（选填），例如：已在来源页核对原文"
+        />
+        <p class="dialog-note">核验方式记录为 manual_review（管理员人工核验）。</p>
+      </template>
+      <p v-if="verify.item?.verification_reasons?.length" class="dialog-note">
+        上次核验（{{ verify.item.verification_method || '—' }}）：{{ verify.item.verification_reasons.join('；') }}
+      </p>
       <template #footer>
         <el-button @click="verify.visible = false">取消</el-button>
-        <el-button type="primary" :loading="verify.submitting" @click="submitVerify">确认核验</el-button>
+        <el-button type="primary" :loading="verify.submitting" @click="submitVerify">
+          {{ verify.mode === 'fetch' ? '开始抓取核验' : '确认核验' }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -341,6 +356,9 @@
         </div>
         <p class="detail-quote">{{ detail.item.evidence_quote }}</p>
         <p v-if="detail.item.scope_reasons" class="dialog-note">范围判定依据：{{ detail.item.scope_reasons }}</p>
+        <p v-if="detail.item.verification_reasons?.length" class="dialog-note">
+          核验结论（{{ detail.item.verification_method || '—' }}）：{{ detail.item.verification_reasons.join('；') }}
+        </p>
         <p v-if="detail.item.review_note" class="dialog-note">
           审核备注（{{ detail.item.reviewed_by || '—' }}）：{{ detail.item.review_note }}
         </p>
@@ -435,7 +453,15 @@ const filters = reactive({ scope_decision: '', verification_status: '', review_s
 const selectedRunId = ref(null)
 
 const review = reactive({ visible: false, item: null, target: '', note: '', submitting: false })
-const verify = reactive({ visible: false, item: null, status: 'verified', reason: '', submitting: false })
+// mode='fetch'：抓取核验（后端真的 GET 证据链接）；mode='manual'：管理员人工判定。
+const verify = reactive({
+  visible: false,
+  item: null,
+  mode: 'fetch',
+  status: 'verified',
+  reason: '',
+  submitting: false,
+})
 const deliver = reactive({ visible: false, run: null, submitting: false })
 const detail = reactive({ visible: false, item: null })
 
@@ -461,7 +487,12 @@ function blockers(item, { ignoreReview = false } = {}) {
     reasons.push(`范围判定为「${SCOPE_LABELS[item.scope_decision] || item.scope_decision}」`)
   }
   if (item.verification_status !== 'verified') {
-    reasons.push(`核验状态为「${VERIFICATION_LABELS[item.verification_status] || item.verification_status}」`)
+    // 抓取核验失败的原因（例如「证据链接返回 HTTP 404，页面不可访问」）必须让审核员看见：
+    // 这正是识别模型编造引用的依据。
+    const why = (item.verification_reasons || [])[0]
+    reasons.push(
+      `核验状态为「${VERIFICATION_LABELS[item.verification_status] || item.verification_status}」${why ? `：${why}` : ''}`,
+    )
   }
   if (!ignoreReview && item.review_status !== 'approved') {
     reasons.push(`人工审核为「${REVIEW_LABELS[item.review_status] || item.review_status}」`)
@@ -632,6 +663,7 @@ async function submitReview() {
 
 function openVerify(item) {
   verify.item = item
+  verify.mode = 'fetch'
   verify.status = 'verified'
   verify.reason = ''
   verify.visible = true
@@ -641,13 +673,27 @@ async function submitVerify() {
   verify.submitting = true
   try {
     const reason = verify.reason.trim()
-    const updated = await verifyEvidenceItem(verify.item.id, {
-      method: 'manual_review',
-      status: verify.status,
-      reasons: reason ? [reason] : undefined,
-    })
+    // 抓取核验：后端真的去 GET 证据链接。模型可能编造出一个看起来完全合理的
+    // news.sysu.edu.cn 链接（还会被自动判为 official + in_scope），只有真的把页面
+    // 抓下来比对原文，才能在人工审核之前把假引用拦掉。
+    const updated = await verifyEvidenceItem(
+      verify.item.id,
+      verify.mode === 'fetch'
+        ? { method: 'fetch_url' }
+        : {
+            method: 'manual_review',
+            status: verify.status,
+            reasons: reason ? [reason] : undefined,
+          },
+    )
     replaceItem(updated)
-    ElMessage.success(`证据 #${updated.id} 核验状态已更新为「${VERIFICATION_LABELS[updated.verification_status]}」`)
+    const detail = (updated.verification?.reasons || [])[0]
+    const message = `证据 #${updated.id} 核验状态已更新为「${VERIFICATION_LABELS[updated.verification_status]}」`
+    if (updated.verification_status === 'verified') {
+      ElMessage.success(detail ? `${message}：${detail}` : message)
+    } else {
+      ElMessage.warning(detail ? `${message}：${detail}` : message)
+    }
     verify.visible = false
   } catch (error) {
     ElMessage.error(error.message || '核验失败')

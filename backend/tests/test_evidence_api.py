@@ -19,10 +19,12 @@ from backend.database import Base, get_db
 from backend.main import app
 from backend.models import RawPost
 from backend.models_evidence import EvidenceDocument, EvidenceItem, EvidenceQuery, EvidenceRun
-from backend.routers.admin_evidence import get_evidence_collector
+from backend.routers.admin_evidence import get_evidence_collector, get_evidence_verifier
 from backend.services.auth_service import create_access_token, ensure_user
 from backend.services.evidence.canonicalize import canonical_url_hash, canonicalize_url
 from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS
+from backend.services.evidence.verification import FETCH_VERIFICATION_METHOD, UrlFetchVerifier
+from backend.tests.test_evidence_verification import FakeHttpClient, FakeResponse
 
 
 def make_session_factory():
@@ -376,6 +378,65 @@ class EvidenceItemApiTest(EvidenceApiTestBase):
         self.assertEqual(response.json()["data"]["verification_status"], "verified")
         db = self.session_factory()
         self.assertEqual(db.get(EvidenceItem, item_id).verification_status, "verified")
+        db.close()
+
+    def test_verify_without_status_fetches_the_url_and_rejects_a_dead_link(self) -> None:
+        _, item_id = self.seed_item()
+        app.dependency_overrides[get_evidence_verifier] = lambda: UrlFetchVerifier(
+            client=FakeHttpClient(FakeResponse(404, ""))
+        )
+
+        response = self.client.post(
+            f"/api/admin/evidence/items/{item_id}/verify",
+            json={},
+            headers=self.admin_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["verification_status"], "rejected")
+        self.assertEqual(data["verification"]["method"], FETCH_VERIFICATION_METHOD)
+        self.assertTrue(any("404" in reason for reason in data["verification"]["reasons"]))
+        db = self.session_factory()
+        self.assertEqual(db.get(EvidenceItem, item_id).verification_status, "rejected")
+        db.close()
+
+    def test_verify_by_fetch_verifies_a_live_page_and_exposes_the_reason(self) -> None:
+        run_id, item_id = self.seed_item()
+        app.dependency_overrides[get_evidence_verifier] = lambda: UrlFetchVerifier(
+            client=FakeHttpClient(FakeResponse(200, "<p>中山大学发布了一则校园通知。</p>"))
+        )
+
+        response = self.client.post(
+            f"/api/admin/evidence/items/{item_id}/verify",
+            json={"method": FETCH_VERIFICATION_METHOD},
+            headers=self.admin_headers(),
+        )
+
+        data = response.json()["data"]
+        self.assertEqual(data["verification_status"], "verified")
+        self.assertTrue(data["verification_reasons"])
+
+        listed = self.client.get(
+            "/api/admin/evidence/items", params={"run_id": run_id}, headers=self.admin_headers()
+        ).json()["data"]["items"][0]
+        self.assertEqual(listed["verification_status"], "verified")
+        self.assertEqual(listed["verification_method"], FETCH_VERIFICATION_METHOD)
+        self.assertTrue(listed["verification_reasons"])
+
+    def test_verify_without_an_http_client_is_unavailable_not_a_silent_pass(self) -> None:
+        _, item_id = self.seed_item()
+        app.dependency_overrides[get_evidence_verifier] = lambda: UrlFetchVerifier()
+
+        response = self.client.post(
+            f"/api/admin/evidence/items/{item_id}/verify",
+            json={},
+            headers=self.admin_headers(),
+        )
+
+        self.assertEqual(response.status_code, 503)
+        db = self.session_factory()
+        self.assertEqual(db.get(EvidenceItem, item_id).verification_status, "pending")
         db.close()
 
     def test_review_endpoint_records_current_admin_as_reviewer(self) -> None:

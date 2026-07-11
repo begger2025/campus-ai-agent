@@ -106,11 +106,14 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
             quote="中山大学发布校园公共服务安排。",
             source_type="official",
         )
+        # 明确的 out_of_scope：新闻来源却没有点名中山大学。
+        # （source_type="web" 现在会落到 needs_review：未识别的来源类型交人工判断，
+        #   而不是被静默丢弃。）
         self.out_scope = SearchHit(
             url="https://example.invalid/post",
             title="其他高校通知",
-            quote="这条信息没有明确的中山大学实体。",
-            source_type="web",
+            quote="这条信息没有明确的实体指向。",
+            source_type="news",
         )
         self.review = SearchHit(
             url="https://untrusted.example/news",

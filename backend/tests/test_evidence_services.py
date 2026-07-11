@@ -148,10 +148,26 @@ class ScopePolicyTests(unittest.TestCase):
         self.assertEqual(result.decision, "out_of_scope")
         self.assertTrue(result.reasons)
 
-    def test_unsupported_source_is_out_of_scope(self) -> None:
-        result = assess_scope("web", "www.sysu.edu.cn", "中山大学通知", "中山大学发布通知")
-        self.assertEqual(result.decision, "out_of_scope")
+    def test_unrecognized_source_type_needs_review(self) -> None:
+        # A real web-search hit on an unknown domain keeps the default "web"
+        # type.  Dropping it silently hid genuine evidence from reviewers, so it
+        # goes to the human queue instead.
+        result = assess_scope("web", "blog.example.com", "中山大学通知", "中山大学发布通知")
+        self.assertEqual(result.decision, "needs_review")
         self.assertTrue(result.reasons)
+
+    def test_missing_source_type_is_out_of_scope(self) -> None:
+        for missing in (None, "", "   "):
+            result = assess_scope(missing, "www.sysu.edu.cn", "中山大学通知", "中山大学发布通知")
+            self.assertEqual(result.decision, "out_of_scope", missing)
+
+    def test_unrecognized_source_type_without_quote_is_out_of_scope(self) -> None:
+        result = assess_scope("web", "blog.example.com", "中山大学通知", "   ")
+        self.assertEqual(result.decision, "out_of_scope")
+
+    def test_unrecognized_source_type_with_malformed_domain_is_out_of_scope(self) -> None:
+        result = assess_scope("web", "evil..sysu.edu.cn", "中山大学通知", "中山大学发布通知")
+        self.assertEqual(result.decision, "out_of_scope")
 
     def test_scope_decision_rejects_invalid_state(self) -> None:
         from backend.services.evidence.scope_policy import ScopeDecision

@@ -43,8 +43,17 @@ export function reviewEvidenceItem(itemId, { status, note = null }) {
   return http.patch(`/admin/evidence/items/${itemId}/review`, { status, note })
 }
 
-export function verifyEvidenceItem(itemId, { method, status, reasons = undefined }) {
-  return http.post(`/admin/evidence/items/${itemId}/verify`, { method, status, reasons })
+// 核验：不传 status 时后端执行「抓取核验」——真的 GET 证据链接，
+// 用页面正文判定 verified / needs_review / rejected（编造的链接会在这一步被驳回）。
+// 抓取要等真实网络往返，比普通请求慢，单独放宽超时。
+const VERIFY_TIMEOUT_MS = 30_000
+
+export function verifyEvidenceItem(itemId, { method = 'fetch_url', status = undefined, reasons = undefined }) {
+  return http.post(
+    `/admin/evidence/items/${itemId}/verify`,
+    { method, status, reasons },
+    { timeout: VERIFY_TIMEOUT_MS },
+  )
 }
 
 // —— 交付入库 ——

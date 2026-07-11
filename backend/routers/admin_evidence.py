@@ -9,13 +9,15 @@ scheme.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.admin_models import User
 from backend.database import get_db
@@ -24,6 +26,7 @@ from backend.schemas import ok
 from backend.services.auth_service import require_admin
 from backend.services.evidence.collector import EvidenceCollector
 from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS, load_settings
+from backend.services.evidence.http_transport import build_search_transports
 from backend.services.evidence.providers import create_provider_registry
 from backend.services.evidence.review_delivery import deliver_batch, review_item, verify_item
 from backend.services.evidence.schemas import (
@@ -31,18 +34,52 @@ from backend.services.evidence.schemas import (
     SCOPE_DECISIONS,
     VERIFICATION_STATUSES,
 )
+from backend.services.evidence.verification import (
+    DEFAULT_TIMEOUT_SECONDS,
+    DEFAULT_USER_AGENT,
+    FETCH_VERIFICATION_METHOD,
+    UrlFetchVerifier,
+    VerifierUnavailableError,
+    verification_reasons,
+    verify_item_by_fetch,
+)
 
 router = APIRouter(tags=["admin-evidence"])
 
+# 联网检索是一次真正的 web search + 生成，远超普通 API 的超时预算。
+SEARCH_TIMEOUT_SECONDS = 120.0
 
-def get_evidence_collector(db: Session = Depends(get_db)) -> EvidenceCollector:
-    """Build a collector bound to the request session.
 
-    Exposed as a dependency so tests can inject a provider-free collector and
-    never touch the network.
+async def get_evidence_collector(db: Session = Depends(get_db)) -> AsyncIterator[EvidenceCollector]:
+    """Build a collector bound to the request session and a real HTTP client.
+
+    The provider registry only makes network calls through an explicitly injected
+    transport, so the client is created here (and closed with the request).
+    Without this wiring every provider raises ``ProviderTransportUnavailableError``
+    and a run collects nothing.  Tests override this dependency and never touch
+    the network.
     """
 
-    return EvidenceCollector(db, create_provider_registry())
+    async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT_SECONDS) as client:
+        registry = create_provider_registry(transports=build_search_transports(client=client))
+        yield EvidenceCollector(db, registry)
+
+
+async def get_evidence_verifier() -> AsyncIterator[UrlFetchVerifier]:
+    """The fetch-based citation verifier used by the 核验 endpoint.
+
+    Same discipline as the collector: the HTTP client is injected, so a test that
+    does not override this dependency cannot reach the network — and a verifier
+    without a client is *unavailable* rather than a no-op that marks fabricated
+    citations verified.
+    """
+
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+        headers={"User-Agent": DEFAULT_USER_AGENT},
+    ) as client:
+        yield UrlFetchVerifier(client=client)
 
 
 class RunCreate(BaseModel):
@@ -73,8 +110,15 @@ class ItemReviewPatch(BaseModel):
 
 
 class ItemVerifyRequest(BaseModel):
-    method: str = Field(min_length=1, max_length=64)
-    status: Literal[VERIFICATION_STATUSES]  # type: ignore[valid-type]
+    """核验请求。
+
+    ``status`` 省略时走**抓取核验**：后端真的去 GET 证据链接，用页面正文判定
+    verified / needs_review / rejected。显式传 ``status`` 仍是管理员人工判定，
+    保留原有语义。
+    """
+
+    method: str = Field(default=FETCH_VERIFICATION_METHOD, min_length=1, max_length=64)
+    status: Literal[VERIFICATION_STATUSES] | None = None  # type: ignore[valid-type]
     reasons: list[str] | None = None
     verification_version: str | None = Field(default=None, max_length=64)
     model_version: str | None = Field(default=None, max_length=128)
@@ -115,9 +159,23 @@ def _query_item(query: EvidenceQuery) -> dict[str, Any]:
     }
 
 
+def _latest_verification(item: EvidenceItem):
+    """最近一次核验（按 id 递增追加），用于把"为什么没通过"呈现到前端。"""
+
+    verifications = list(item.verifications or ())
+    if not verifications:
+        return None
+    return max(verifications, key=lambda row: row.id or 0)
+
+
 def _item_row(item: EvidenceItem) -> dict[str, Any]:
     document = item.document
+    verification = _latest_verification(item)
     return {
+        "verification_method": verification.method if verification is not None else None,
+        "verification_reasons": (
+            verification_reasons(verification.reasons) if verification is not None else []
+        ),
         "id": item.id,
         "run_id": item.run_id,
         "source_url": item.source_url,
@@ -281,7 +339,9 @@ def list_evidence_items(
         if value is not None and value not in allowed:
             raise HTTPException(status_code=400, detail=f"invalid {label}")
 
-    query = db.query(EvidenceItem)
+    # 核验结论要随列表一起呈现（前端的"可交付性"列会展示驳回原因），
+    # 预加载避免每行一次懒加载。
+    query = db.query(EvidenceItem).options(selectinload(EvidenceItem.verifications))
     if run_id is not None:
         query = query.filter(EvidenceItem.run_id == run_id)
     if scope_decision:
@@ -331,32 +391,58 @@ def review_evidence_item(
 
 
 @router.post("/admin/evidence/items/{item_id}/verify")
-def verify_evidence_item(
+async def verify_evidence_item(
     item_id: int,
     payload: ItemVerifyRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
+    verifier: UrlFetchVerifier = Depends(get_evidence_verifier),
 ):
+    """核验一条证据。
+
+    默认（未显式给出 ``status``）执行**抓取核验**：真的 GET 证据链接。模型是会编造
+    引用的，而一个编造出来的 ``news.sysu.edu.cn/...`` 链接会自动被判为 official 且
+    in_scope——人工审核员看到的将是一条毫无破绽的假证据。所以这一步必须真的联网核对，
+    链接打不开就直接 rejected。
+    """
+
     try:
-        verify_item(
-            db,
-            item_id,
-            method=payload.method,
-            status=payload.status,
-            reasons=payload.reasons,
-            verification_version=payload.verification_version,
-            model_version=payload.model_version,
-            conflict_reason=payload.conflict_reason,
-        )
+        if payload.status is None:
+            verification = await verify_item_by_fetch(db, item_id, verifier)
+        else:
+            verification = verify_item(
+                db,
+                item_id,
+                method=payload.method,
+                status=payload.status,
+                reasons=payload.reasons,
+                verification_version=payload.verification_version,
+                model_version=payload.model_version,
+                conflict_reason=payload.conflict_reason,
+            )
+    except VerifierUnavailableError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="证据核验不可用：未注入 HTTP 客户端，无法抓取原页面",
+        ) from exc
     except LookupError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="evidence item not found") from exc
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    reasons = verification_reasons(verification.reasons)
+    method = verification.method
+    status = verification.status
     db.commit()
     item = db.get(EvidenceItem, item_id)
-    return ok(_item_row(item))
+    return ok(
+        {
+            **_item_row(item),
+            "verification": {"method": method, "status": status, "reasons": reasons},
+        }
+    )
 
 
 @router.post("/admin/evidence/runs/{run_id}/deliver")

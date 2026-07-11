@@ -6,6 +6,8 @@ beautifulsoup4
 playwright
 pandas
 python-dotenv
+# 证据采集的联网检索与引用抓取校验直接依赖 httpx（此前只是随 openai 传递进来）
+httpx
 sqlalchemy
 pymysql
 openai

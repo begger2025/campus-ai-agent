@@ -233,17 +233,19 @@ def assess_scope(
     quote) or, for ``official`` sources only, by publication on an allowlisted
     SYSU domain.  ``news`` sources must always name the university in the text.
     A record mentioning only the ambiguous shorthand ``中大`` is
-    ``needs_review``; missing evidence, entities, domains, or unsupported
-    source types are ``out_of_scope``.  In-scope official notices and news must
+    ``needs_review``; so is a recognized-but-unmapped source type such as the
+    default ``web`` that real web-search hits carry.  Missing evidence,
+    entities, domains, or a missing/blank source type are ``out_of_scope``.
+    In-scope official notices and news must
     also match their respective allowlists.  ``official_notice`` is accepted as
     a compatibility alias and normalized to the canonical ``official`` source
     type first.
     """
 
     raw_type = source_type.strip().lower() if isinstance(source_type, str) else ""
+    if not raw_type:
+        return ScopeDecision("out_of_scope", ["source type is required"])
     normalized_type = _SOURCE_TYPE_ALIASES.get(raw_type, "")
-    if not normalized_type:
-        return ScopeDecision("out_of_scope", ["unsupported source type"])
 
     quote = evidence_quote.strip() if isinstance(evidence_quote, str) else ""
     if not quote:
@@ -252,6 +254,17 @@ def assess_scope(
     domain = _normalize_domain(source_domain)
     if not domain:
         return ScopeDecision("out_of_scope", ["source domain is missing or malformed"])
+
+    if not normalized_type:
+        # A real web-search hit on a domain we do not recognize keeps its default
+        # ``web`` type.  Dropping it as out_of_scope made it invisible: the
+        # reviewer never saw a candidate that might well be genuine.  Send it to
+        # the human queue instead — a missing type, a blank quote, and a
+        # malformed domain above remain hard out_of_scope.
+        return ScopeDecision(
+            "needs_review",
+            [f"unrecognized source type '{raw_type}' requires human review"],
+        )
 
     combined_text = " ".join(
         part.strip() for part in (title or "", quote) if isinstance(part, str) and part.strip()

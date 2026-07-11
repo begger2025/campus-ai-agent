@@ -108,6 +108,104 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HttpTransportUnavailableError):
             await transport(request)
 
+    async def test_glm_request_enables_the_web_search_tool(self):
+        client = FakeClient({"choices": []})
+        transport = OpenAICompatibleTransport(
+            "glm",
+            "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            "glm-4-plus",
+            "secret-key",
+            client,
+        )
+        request = SearchRequest(
+            provider="glm", model="glm-4-plus", query="中山大学 校园通知", max_results=3
+        )
+        await transport(request)
+        body = client.calls[0][2]
+        self.assertEqual(
+            body["tools"],
+            [{"type": "web_search", "web_search": {"enable": True, "search_result": True}}],
+        )
+
+    async def test_generic_provider_keeps_the_plain_chat_body(self):
+        client = FakeClient({"choices": []})
+        transport = OpenAICompatibleTransport(
+            "deepseek", "https://api.example/v1/chat/completions", "model-a", "secret-key", client
+        )
+        await transport(SearchRequest(provider="deepseek", model="model-a", query="SYSU"))
+        self.assertNotIn("tools", client.calls[0][2])
+
+    def test_glm_tool_call_search_results_become_hits(self):
+        payload = {
+            "id": "req-9",
+            "model": "glm-4-plus",
+            "choices": [
+                {
+                    "message": {
+                        "content": "中山大学发布了通知[1]",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "web_search",
+                                "search_result": [
+                                    {
+                                        "media": "中山大学新闻网",
+                                        "title": "关于暑期安排的通知",
+                                        "link": "https://news.sysu.edu.cn/info/1",
+                                        "content": "中山大学发布暑期安排通知正文摘录。",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                }
+            ],
+        }
+        hits = parse_citation_response(payload, provider_id="glm")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(str(hits[0].url), "https://news.sysu.edu.cn/info/1")
+        self.assertEqual(hits[0].quote, "中山大学发布暑期安排通知正文摘录。")
+        self.assertEqual(hits[0].request_id, "req-9")
+
+    def test_source_type_is_derived_from_the_domain(self):
+        official, news, unknown = (
+            parse_citation_response(
+                {
+                    "citations": [
+                        {
+                            "link": url,
+                            "title": "中山大学通知",
+                            "content": "中山大学发布通知。",
+                        }
+                    ]
+                },
+                provider_id="glm",
+            )[0]
+            for url in (
+                "https://news.sysu.edu.cn/info/1",
+                "https://www.thepaper.cn/news/1",
+                "https://blog.example.com/post/1",
+            )
+        )
+        self.assertEqual(official.source_type, "official")
+        self.assertEqual(news.source_type, "news")
+        self.assertEqual(unknown.source_type, "web")
+
+    def test_explicit_source_type_from_the_provider_is_preserved(self):
+        hits = parse_citation_response(
+            {
+                "citations": [
+                    {
+                        "url": "https://news.sysu.edu.cn/info/1",
+                        "quote": "中山大学发布通知。",
+                        "source_type": "news",
+                    }
+                ]
+            },
+            provider_id="glm",
+        )
+        self.assertEqual(hits[0].source_type, "news")
+
     def test_environment_factory_requires_all_gates_and_injected_client(self):
         env = {
             "EVIDENCE_DEEPSEEK_API_KEY": "key",

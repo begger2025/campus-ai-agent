@@ -11,7 +11,14 @@ from .http_transport import (
     HttpTransportUnavailableError,
     OpenAICompatibleTransport,
     build_http_transports,
+    build_search_transports,
     parse_citation_response,
+)
+from .provider_adapters import (
+    PROVIDER_WEB_SEARCH_ADAPTERS,
+    ProviderWebSearchAdapter,
+    adapter_for,
+    derive_source_type,
 )
 from .review_delivery import (
     DELIVERY_PLATFORM,
@@ -24,6 +31,12 @@ from .review_delivery import (
     verify_item,
 )
 from .scope_policy import ScopeDecision, assess_scope
+from .verification import (
+    FETCH_VERIFICATION_METHOD,
+    UrlFetchVerifier,
+    VerifierUnavailableError,
+    verify_item_by_fetch,
+)
 
 __all__ = [
     "SUPPORTED_PROVIDER_IDS",
@@ -38,7 +51,16 @@ __all__ = [
     "HttpTransportUnavailableError",
     "OpenAICompatibleTransport",
     "build_http_transports",
+    "build_search_transports",
     "parse_citation_response",
+    "PROVIDER_WEB_SEARCH_ADAPTERS",
+    "ProviderWebSearchAdapter",
+    "adapter_for",
+    "derive_source_type",
+    "FETCH_VERIFICATION_METHOD",
+    "UrlFetchVerifier",
+    "VerifierUnavailableError",
+    "verify_item_by_fetch",
     "DELIVERY_PLATFORM",
     "build_delivery_payload",
     "create_delivery_batch",

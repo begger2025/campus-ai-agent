@@ -19,6 +19,12 @@ from typing import Any, Protocol, TypeAlias
 from urllib.parse import urlsplit
 
 from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS
+from backend.services.evidence.provider_adapters import (
+    ProviderWebSearchAdapter,
+    TransportContext,
+    adapter_for,
+    derive_source_type,
+)
 from backend.services.evidence.providers import SearchRequest, normalize_hits
 
 
@@ -71,14 +77,26 @@ def _citation_rows(value: Any) -> list[dict[str, Any]]:
         if item is None:
             continue
         url = item.get("url", item.get("link", item.get("source")))
-        quote = item.get("quote", item.get("evidence_quote", item.get("snippet", item.get("text"))))
+        # ``content`` is where 智谱 GLM's search_result entries carry the page
+        # excerpt; without it every real search hit was dropped below.
+        quote = item.get(
+            "quote",
+            item.get(
+                "evidence_quote",
+                item.get("snippet", item.get("text", item.get("content"))),
+            ),
+        )
         if url and quote:
             rows.append(
                 {
                     "url": str(url),
                     "quote": str(quote),
                     "title": item.get("title", item.get("name")),
-                    "source_type": item.get("source_type", "web"),
+                    # Web-search hits never label themselves official/news, and
+                    # the scope policy only understands those two.  Derive the
+                    # label from the domain, and only fall back to the provider's
+                    # own value when it supplied one.
+                    "source_type": item.get("source_type") or derive_source_type(str(url)),
                     "publisher": item.get("publisher"),
                     "published_at": item.get("published_at"),
                     "metadata": dict(item),
@@ -115,7 +133,9 @@ def _json_candidates(text: str) -> list[Any]:
 def _markdown_rows(text: str) -> list[dict[str, Any]]:
     rows = []
     for title, url in re.findall(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", text):
-        rows.append({"url": url, "quote": text, "title": title, "source_type": "web"})
+        rows.append(
+            {"url": url, "quote": text, "title": title, "source_type": derive_source_type(url)}
+        )
     return rows
 
 
@@ -136,6 +156,10 @@ def parse_citation_response(
     rows: list[dict[str, Any]] = []
     for key in ("hits", "results", "items", "citations", "sources"):
         rows.extend(_citation_rows(root.get(key)))
+
+    # Vendor-shaped citations first: GLM puts them in a web_search tool call,
+    # which none of the generic locations below can see.
+    rows.extend(_citation_rows(adapter_for(provider_id).extract_citations(root)))
 
     choices = _as_list(root.get("choices"))
     for choice in choices:
@@ -211,28 +235,52 @@ class OpenAICompatibleTransport:
             f"endpoint={self.endpoint!r}, model={self.model!r}, client_injected={self.client is not None})"
         )
 
+    @property
+    def adapter(self) -> ProviderWebSearchAdapter:
+        """The provider's web-search seam (generic when none is registered)."""
+
+        return adapter_for(self.provider_id)
+
+    def _context(self) -> TransportContext:
+        return TransportContext(
+            provider_id=self.provider_id,
+            endpoint=self.endpoint,
+            model=self.model,
+            api_key=self.api_key,
+            system_prompt=self.system_prompt,
+        )
+
     async def __call__(self, request: SearchRequest, _safe_settings: Mapping[str, Any] | None = None) -> Any:
+        """POST the provider's own request shape and return its raw JSON."""
+
         if request.provider != self.provider_id:
             raise ValueError("request provider does not match transport provider")
         if self.client is None:
             raise HttpTransportUnavailableError(
                 f"provider '{self.provider_id}' has no injected HTTP client; network access is disabled"
             )
-        body = {
-            "model": request.model or self.model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": request.query},
-            ],
-            "temperature": 0,
-            "max_tokens": max(256, request.max_results * 256),
-        }
+        http_request = self.adapter.build_request(request, self._context())
         response = await self.client.post(
-            self.endpoint,
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json=body,
+            http_request.url,
+            headers=http_request.headers,
+            json=http_request.body,
         )
         return await _response_json(response)
+
+    async def search(self, request: SearchRequest, _safe_settings: Mapping[str, Any] | None = None) -> list[Any]:
+        """Call the provider and return normalized citation-bearing hits.
+
+        This is the callable a ``ProviderRegistry`` wants: the generic adapter in
+        ``providers`` only understands hit lists, so handing it a raw
+        chat-completions payload would silently yield nothing.
+        """
+
+        payload = await self(request)
+        return parse_citation_response(
+            payload,
+            provider_id=self.provider_id,
+            model=request.model or self.model,
+        )
 
 
 def build_http_transports(
@@ -267,11 +315,30 @@ def build_http_transports(
     return result
 
 
+def build_search_transports(
+    environ: Mapping[str, str] | None = None,
+    *,
+    client: AsyncJsonClient | Mapping[str, AsyncJsonClient] | None = None,
+) -> dict[str, Any]:
+    """Registry-ready transports that return parsed hits instead of raw JSON.
+
+    ``ProviderRegistry(transports=...)`` calls each transport and hands the
+    result to the hit normalizer, so the callable must already have applied the
+    provider's citation extraction.
+    """
+
+    return {
+        provider_id: transport.search
+        for provider_id, transport in build_http_transports(environ, client=client).items()
+    }
+
+
 __all__ = [
     "AsyncJsonClient",
     "HttpTransportUnavailableError",
     "HttpTransportResponseError",
     "OpenAICompatibleTransport",
     "build_http_transports",
+    "build_search_transports",
     "parse_citation_response",
 ]
