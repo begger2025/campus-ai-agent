@@ -15,6 +15,7 @@
         <el-option label="平台：贴吧" value="tieba" />
         <el-option label="平台：知乎" value="zhihu" />
         <el-option label="平台：快手" value="ks" />
+        <el-option label="平台：网页证据" value="web" />
       </el-select>
       <el-date-picker
         v-model="filters.dateRange"
@@ -130,7 +131,7 @@ const pageSize = 15
 const filters = reactive({ keyword: '', platform: '', dateRange: null })
 const detail = reactive({ visible: false, post: null })
 
-const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手' }
+const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
 
 function platformLabel(platform) {
   return PLATFORM_LABELS[platform] || platform || '—'
@@ -210,6 +211,7 @@ onMounted(() => reload(1))
 .source-tieba { background: #eff6ff; color: #1d4ed8; }
 .source-zhihu { background: #f0f9ff; color: #0369a1; }
 .source-ks { background: #fefce8; color: #a16207; }
+.source-web { background: #ecfdf5; color: #047857; }
 
 .post-detail {
   display: flex;

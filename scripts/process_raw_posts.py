@@ -25,6 +25,11 @@ from backend.services.log_service import create_crawl_task, finish_crawl_task, w
 from scripts.ensure_wp4_schema import ensure_wp4_schema  # noqa: E402
 
 
+# 可定向处理的平台码。五个爬虫平台之外，"web" 是证据采集交付写入 raw_posts 的
+# 平台码：不加进来的话 --platform web 会被 argparse 直接拒掉，证据行就无法定向入库。
+PLATFORM_CHOICES = ["xhs", "weibo", "tieba", "zhihu", "ks", "web"]
+
+
 @dataclass
 class ProcessResult:
     scanned: int = 0
@@ -354,7 +359,7 @@ def _print_result(result: ProcessResult, dry_run: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Process raw_posts into processed_posts")
     parser.add_argument("--limit", type=int, default=100)
-    parser.add_argument("--platform", action="append", choices=["xhs", "weibo", "tieba", "zhihu", "ks"])
+    parser.add_argument("--platform", action="append", choices=PLATFORM_CHOICES)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--refresh",

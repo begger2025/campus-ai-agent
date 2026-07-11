@@ -31,6 +31,28 @@ class NormalizePlatformTest(unittest.TestCase):
         self.assertEqual(_normalize_platform("kuaishou"), "ks")
         self.assertEqual(_normalize_platform("快手"), "ks")
 
+    def test_web_variants(self):
+        # 证据交付写入 raw_posts 时用的平台码
+        self.assertEqual(_normalize_platform("web"), "web")
+        self.assertEqual(_normalize_platform("WEB"), "web")
+        self.assertEqual(_normalize_platform("网页"), "web")
+
+    def test_web_alias_does_not_shadow_weibo(self):
+        # "web" 是 "weibo" 的前缀：子串匹配写反了会把微博误判成 web
+        self.assertEqual(_normalize_platform("weibo"), "weibo")
+        self.assertEqual(_normalize_platform("微博"), "weibo")
+
+
+class ProcessRawPostsPlatformChoicesTest(unittest.TestCase):
+    """raw_posts -> processed_posts 必须能按 web 平台定向处理证据交付的行。"""
+
+    def test_web_is_selectable(self) -> None:
+        from scripts.process_raw_posts import PLATFORM_CHOICES
+
+        self.assertIn("web", PLATFORM_CHOICES)
+        for platform in ("xhs", "weibo", "tieba", "zhihu", "ks"):
+            self.assertIn(platform, PLATFORM_CHOICES)
+
 
 if __name__ == "__main__":
     unittest.main()

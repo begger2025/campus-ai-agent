@@ -20,6 +20,7 @@ from backend.database import SessionLocal, init_db, uses_mysql  # noqa: E402
 from backend.logging_setup import setup_logging  # noqa: E402
 from backend.routers.admin import router as admin_router  # noqa: E402
 from backend.routers.admin_events import router as admin_events_router  # noqa: E402
+from backend.routers.admin_evidence import router as admin_evidence_router  # noqa: E402
 from backend.routers.agent_public import router as agent_public_router  # noqa: E402
 from backend.routers.api import router as api_router  # noqa: E402
 from backend.routers.auth import router as auth_router  # noqa: E402
@@ -91,6 +92,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(agent_public_router, prefix="/api")
 app.include_router(admin_events_router, prefix="/api")
+app.include_router(admin_evidence_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
 app.include_router(api_router, prefix="/api")
 

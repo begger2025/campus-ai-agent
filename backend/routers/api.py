@@ -62,6 +62,10 @@ def _normalize_platform(platform: str | None) -> str:
         return "zhihu"
     if "kuaishou" in lower or lower == "ks" or "快手" in text:
         return "ks"
+    # 证据采集交付写入的平台码。必须放在 weibo 判断之后并用精确匹配：
+    # "web" 是 "weibo" 的前缀，子串匹配会把微博错判成 web。
+    if lower == "web" or "网页" in text:
+        return "web"
     return lower or text
 
 

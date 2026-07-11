@@ -463,7 +463,9 @@ function sourceShort(value) {
   if (value === 'xhs') return '红'
   if (value === 'zhihu') return '知'
   if (value === 'ks') return '快'
-  return '贴'
+  if (value === 'web') return '网'
+  if (value === 'tieba') return '贴'
+  return '源'
 }
 </script>
 
@@ -637,6 +639,7 @@ function sourceShort(value) {
 .source-xhs { color: #be123c; background: #fff1f2; border: 1px solid #fecdd3; }
 .source-tieba { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
 .source-zhihu { color: #0369a1; background: #f0f9ff; border: 1px solid #bae6fd; }
+.source-web { color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; }
 
 .published-dot { width: 6px; height: 6px; display: inline-block; margin-right: 6px; border-radius: 50%; background: var(--color-success); vertical-align: 1px; }
 .action-cell button { border: 0; background: transparent; color: var(--color-primary); font-weight: 600; font-family: inherit; cursor: pointer; padding: 0; transition: color var(--dur-fast) var(--ease-out); }
@@ -723,6 +726,7 @@ function sourceShort(value) {
 .source-icon-xhs { background: #f43f5e; }
 .source-icon-tieba { background: #3b82f6; }
 .source-icon-zhihu { background: #0284c7; }
+.source-icon-web { background: #10b981; }
 
 .event-footnote { height: 34px; display: flex; align-items: center; justify-content: center; color: var(--color-text-secondary); font-size: 13px; }
 .event-footnote button { border: 0; background: transparent; color: var(--color-primary); font-weight: 600; font-family: inherit; cursor: pointer; padding: 0 2px; }

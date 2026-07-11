@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.database import Base
+from backend.models import RawPost
 from backend.models_evidence import (
     EvidenceDeliveryBatch,
     EvidenceDocument,
@@ -19,13 +20,16 @@ from backend.services.evidence.canonicalize import canonical_url_hash, canonical
 from backend.services.evidence.review_delivery import (
     build_delivery_payload,
     create_delivery_batch,
+    deliver_batch,
     mark_delivery,
     review_item,
     verify_item,
 )
 
 
-class ReviewDeliveryTests(unittest.TestCase):
+class EvidenceFixture(unittest.TestCase):
+    """共享夹具：一条 in_scope 证据 + 一条 needs_review 证据，同属一个 run。"""
+
     def setUp(self):
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
         Base.metadata.create_all(self.engine)
@@ -76,6 +80,8 @@ class ReviewDeliveryTests(unittest.TestCase):
         self.session.flush()
         return item
 
+
+class ReviewDeliveryTests(EvidenceFixture):
     def test_verify_appends_audit_record_and_syncs_item(self):
         record = verify_item(
             self.session,
@@ -145,6 +151,91 @@ class ReviewDeliveryTests(unittest.TestCase):
         self.assertNotIn("super-secret", failed.error or "")
         self.assertNotIn("hidden", failed.error or "")
         self.assertIn("redacted", failed.error or "")
+
+
+class DeliverBatchTests(EvidenceFixture):
+    """交付最后一公里：合格证据必须真正写入 raw_posts（舆情管线的入口表）。"""
+
+    def _approve(self, item: EvidenceItem) -> None:
+        verify_item(self.session, item.id, "manual", "verified")
+        review_item(self.session, item.id, "reviewer", "approved")
+
+    def test_delivery_inserts_eligible_evidence_into_raw_posts(self):
+        self._approve(self.item)
+
+        result = deliver_batch(self.session, self.run.id, "approver")
+
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["existing"], 0)
+        post = self.session.query(RawPost).one()
+        self.assertEqual(post.platform, "web")
+        self.assertEqual(post.external_id, self.item.canonical_url_hash)
+        self.assertEqual(post.content, self.item.evidence_quote)
+        self.assertEqual(post.url, self.item.canonical_url)
+        self.assertEqual(post.raw_url, self.item.canonical_url)
+        self.assertEqual(post.title, "SYSU campus notice")
+        self.assertEqual(post.author, "Sun Yat-sen University")
+        self.assertEqual(post.source_table, "evidence_items")
+        self.assertEqual(post.source_raw_id, str(self.item.id))
+        self.assertEqual(post.source_keyword, self.run.topic)
+        self.assertIsNotNone(post.crawl_time)
+
+    def test_delivery_only_moves_eligible_items(self):
+        # self.pending 是 needs_review + 未验证 + 未审核：一条都不许进 raw_posts
+        self._approve(self.item)
+
+        deliver_batch(self.session, self.run.id, "approver")
+
+        posts = self.session.query(RawPost).all()
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0].external_id, self.item.canonical_url_hash)
+
+    def test_redelivery_is_idempotent_and_creates_no_duplicate_raw_posts(self):
+        self._approve(self.item)
+        first = deliver_batch(self.session, self.run.id, "approver")
+
+        second = deliver_batch(self.session, self.run.id, "approver")
+
+        self.assertEqual(first["created"], 1)
+        self.assertEqual(second["created"], 0)
+        self.assertEqual(second["existing"], 1)
+        self.assertEqual(self.session.query(RawPost).count(), 1)
+
+    def test_delivery_links_raw_post_id_and_marks_batch_delivered(self):
+        self._approve(self.item)
+
+        result = deliver_batch(self.session, self.run.id, "approver")
+
+        post = self.session.query(RawPost).one()
+        batch = self.session.query(EvidenceDeliveryBatch).one()
+        self.assertEqual(batch.raw_post_id, post.id)
+        self.assertEqual(batch.status, "delivered")
+        self.assertIsNotNone(batch.delivered_at)
+        self.assertIsNone(batch.error)
+        self.assertEqual(result["batch_ids"], [batch.id])
+
+    def test_delivery_without_eligible_evidence_raises(self):
+        with self.assertRaises(ValueError):
+            deliver_batch(self.session, self.run.id, "approver")
+        self.assertEqual(self.session.query(RawPost).count(), 0)
+
+    def test_delivery_reuses_raw_post_inserted_by_a_concurrent_writer(self):
+        # 并发写入者已抢先插入同一 (platform, external_id)：必须自愈复用，不得抛 IntegrityError
+        self._approve(self.item)
+        self.session.add(
+            RawPost(
+                platform="web",
+                external_id=self.item.canonical_url_hash,
+                title="already there",
+            )
+        )
+        self.session.commit()
+
+        result = deliver_batch(self.session, self.run.id, "approver")
+
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["existing"], 1)
+        self.assertEqual(self.session.query(RawPost).count(), 1)
 
 
 if __name__ == "__main__":

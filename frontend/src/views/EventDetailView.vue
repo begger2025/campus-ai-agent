@@ -255,7 +255,7 @@ function navigateToImpact() {
 }
 
 function sourceLabel(val) {
-  const map = { weibo: '微博', xhs: '小红书', tieba: '贴吧', zhihu: '知乎', ks: '快手' }
+  const map = { weibo: '微博', xhs: '小红书', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
   return map[val] || val
 }
 
@@ -432,6 +432,7 @@ function postSearchUrl(post) {
 .source-xhs { color: #be123c; background: #fff1f2; border: 1px solid #fecdd3; }
 .source-tieba { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
 .source-zhihu { color: #0369a1; background: #f0f9ff; border: 1px solid #bae6fd; }
+.source-web { color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; }
 
 /* ——— 标签 ——— */
 .tag-list { display: flex; gap: 6px; flex-wrap: wrap; }

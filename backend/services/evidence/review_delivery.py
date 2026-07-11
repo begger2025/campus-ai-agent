@@ -9,12 +9,15 @@ back the surrounding transaction.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timezone
 import json
+import logging
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.models import RawPost
 from backend.models_evidence import (
     EvidenceDeliveryBatch,
     EvidenceItem,
@@ -30,8 +33,19 @@ from backend.services.evidence.schemas import (
 from backend.services.evidence.collector import sanitize_error
 
 
+logger = logging.getLogger(__name__)
+
+
 _TERMINAL_VERIFICATION_STATUSES = frozenset({"verified", "rejected", "failed"})
 _MARKABLE_DELIVERY_STATUSES = frozenset({"delivered", "failed"})
+
+# Evidence enters the 舆情 pipeline as a first-class platform of its own: it is
+# not crawled from a MediaCrawler native table, so it needs a platform code that
+# no crawler owns.  ``raw_posts`` is UNIQUE on (platform, external_id), and the
+# evidence canonical URL digest is already a stable per-URL identity, so using it
+# as ``external_id`` makes redelivery idempotent without a separate ledger.
+DELIVERY_PLATFORM = "web"
+DELIVERY_SOURCE_TABLE = "evidence_items"
 
 
 def _text(value: Any, field: str, *, required: bool = True, limit: int | None = None) -> str | None:
@@ -158,17 +172,17 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def build_delivery_payload(session: Session, run_id: int) -> dict[str, Any]:
-    """Return only reviewed, in-scope, verified evidence for a run.
+def eligible_items(session: Session, run_id: int) -> list[EvidenceItem]:
+    """Return the run's deliverable evidence: in-scope AND verified AND approved.
 
-    The payload intentionally omits database credentials, internal errors,
-    reviewer identities, prompts, and raw provider responses.
+    This is the single delivery gate.  ``build_delivery_payload`` and
+    ``deliver_batch`` both go through it so the export view and the rows that
+    actually reach ``raw_posts`` can never drift apart.
     """
 
-    run = session.get(EvidenceRun, run_id)
-    if run is None:
+    if session.get(EvidenceRun, run_id) is None:
         raise LookupError("evidence run was not found")
-    eligible = (
+    return (
         session.query(EvidenceItem)
         .filter(
             EvidenceItem.run_id == run_id,
@@ -179,6 +193,18 @@ def build_delivery_payload(session: Session, run_id: int) -> dict[str, Any]:
         .order_by(EvidenceItem.id)
         .all()
     )
+
+
+def build_delivery_payload(session: Session, run_id: int) -> dict[str, Any]:
+    """Return only reviewed, in-scope, verified evidence for a run.
+
+    The payload intentionally omits database credentials, internal errors,
+    reviewer identities, prompts, and raw provider responses.
+    """
+
+    eligible = eligible_items(session, run_id)
+    run = session.get(EvidenceRun, run_id)
+    assert run is not None  # eligible_items raises LookupError when it is missing
     items: list[dict[str, Any]] = []
     for item in eligible:
         document = item.document
@@ -255,9 +281,161 @@ def mark_delivery(
     return batch
 
 
+def _naive_utc(value: datetime | None) -> datetime | None:
+    """Drop the tzinfo after normalizing to UTC.
+
+    Evidence timestamps are timezone-aware; ``raw_posts`` stores naive DateTime
+    (MySQL DATETIME carries no offset).  Converting first, then dropping tzinfo,
+    keeps the instant correct instead of silently reinterpreting it as local time.
+    """
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _clip(value: str | None, limit: int) -> str:
+    """Fit a value into its column without raising on over-long provider text."""
+
+    return (value or "").strip()[:limit]
+
+
+def _raw_post_for(session: Session, item: EvidenceItem, topic: str) -> tuple[RawPost, bool]:
+    """Return ``(raw_post, created)`` for one evidence item, inserting it once.
+
+    Redelivery of a run, and two runs that independently found the same URL, both
+    land on the same ``(platform, external_id)``.  A plain SELECT-then-INSERT
+    loses that race and the resulting ``IntegrityError`` would poison the whole
+    session, so the insert runs inside a SAVEPOINT: on conflict we roll back only
+    that savepoint and re-read the row the winner committed.  This mirrors
+    ``collector._document_for``.
+    """
+
+    digest = item.canonical_url_hash
+    existing = (
+        session.query(RawPost)
+        .filter(RawPost.platform == DELIVERY_PLATFORM, RawPost.external_id == digest)
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing, False
+
+    document = item.document
+    domain = item.source_domain or ""
+    # title is NOT NULL: fall back to the domain, then to the canonical URL, so a
+    # provider that omitted a title can never drop an approved item.
+    title = _clip(
+        (document.title if document is not None else None) or domain or item.canonical_url,
+        500,
+    )
+    publisher = (document.publisher if document is not None else None) or domain
+    post = RawPost(
+        platform=DELIVERY_PLATFORM,
+        external_id=digest,
+        source_table=DELIVERY_SOURCE_TABLE,
+        source_raw_id=str(item.id),
+        source_keyword=_clip(topic, 255),
+        title=title,
+        content=item.evidence_quote or "",
+        author=_clip(publisher, 100),
+        publish_time=_naive_utc(item.published_at),
+        url=_clip(item.canonical_url, 500),
+        raw_url=_clip(item.canonical_url, 500),
+        crawl_time=_naive_utc(item.retrieved_at),
+    )
+    try:
+        with session.begin_nested():
+            session.add(post)
+            session.flush()
+        return post, True
+    except IntegrityError:
+        existing = (
+            session.query(RawPost)
+            .filter(RawPost.platform == DELIVERY_PLATFORM, RawPost.external_id == digest)
+            .one_or_none()
+        )
+        if existing is None:
+            logger.warning(
+                "raw_post for evidence digest %s conflicted on insert but could "
+                "not be re-read",
+                digest,
+            )
+            raise
+        return existing, False
+
+
+def deliver_batch(session: Session, run_id: int, approver: str) -> dict[str, Any]:
+    """Insert a run's eligible evidence into ``raw_posts`` and record the batches.
+
+    This is the delivery last mile: ``raw_posts`` is the table the 舆情 pipeline
+    consumes, so evidence only becomes a second data entrance once it lands here.
+    One :class:`EvidenceDeliveryBatch` is written per delivered row — the model
+    carries a single ``raw_post_id`` FK, so a batch is the audit fact "this run's
+    evidence became this raw post".
+
+    Redelivery is idempotent: already-present rows are reported as ``existing``
+    and no duplicate ``raw_posts`` row is written.  The caller commits.
+    """
+
+    items = eligible_items(session, run_id)
+    if not items:
+        raise ValueError("no approved in-scope verified evidence is available for delivery")
+    run = session.get(EvidenceRun, run_id)
+    assert run is not None
+    normalized_approver = _text(approver, "approver", limit=255)
+    assert normalized_approver is not None
+
+    created = 0
+    existing = 0
+    batch_ids: list[int] = []
+    raw_post_ids: list[int] = []
+    for item in items:
+        batch = EvidenceDeliveryBatch(
+            run_id=run_id,
+            status="pending",
+            approver=normalized_approver,
+            approved_at=utcnow(),
+        )
+        session.add(batch)
+        session.flush()
+        try:
+            post, was_created = _raw_post_for(session, item, run.topic)
+        except Exception as error:  # delivery failure is audit data, not a crash
+            batch.status = "failed"
+            batch.error = sanitize_error(error)
+            batch.delivered_at = None
+            session.flush()
+            raise
+        batch.raw_post_id = post.id
+        batch.status = "delivered"
+        batch.error = None
+        batch.delivered_at = utcnow()
+        session.flush()
+        batch_ids.append(batch.id)
+        raw_post_ids.append(post.id)
+        if was_created:
+            created += 1
+        else:
+            existing += 1
+
+    return {
+        "run_id": run_id,
+        "created": created,
+        "existing": existing,
+        "delivered": created + existing,
+        "batch_ids": batch_ids,
+        "raw_post_ids": raw_post_ids,
+    }
+
+
 __all__ = [
+    "DELIVERY_PLATFORM",
     "build_delivery_payload",
     "create_delivery_batch",
+    "deliver_batch",
+    "eligible_items",
     "mark_delivery",
     "review_item",
     "verify_item",

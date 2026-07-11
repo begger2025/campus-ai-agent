@@ -14,8 +14,11 @@ from .http_transport import (
     parse_citation_response,
 )
 from .review_delivery import (
+    DELIVERY_PLATFORM,
     build_delivery_payload,
     create_delivery_batch,
+    deliver_batch,
+    eligible_items,
     mark_delivery,
     review_item,
     verify_item,
@@ -36,8 +39,11 @@ __all__ = [
     "OpenAICompatibleTransport",
     "build_http_transports",
     "parse_citation_response",
+    "DELIVERY_PLATFORM",
     "build_delivery_payload",
     "create_delivery_batch",
+    "deliver_batch",
+    "eligible_items",
     "mark_delivery",
     "review_item",
     "verify_item",
