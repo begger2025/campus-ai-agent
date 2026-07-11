@@ -35,6 +35,12 @@ class PlanUniqueIndexesTest(unittest.TestCase):
                 ("tieba_comment", "comment_id", "uk_tieba_comment_comment_id"),
                 ("zhihu_content", "content_id", "uk_zhihu_content_content_id"),
                 ("zhihu_comment", "comment_id", "uk_zhihu_comment_comment_id"),
+                ("kuaishou_video", "video_id", "uk_kuaishou_video_video_id"),
+                (
+                    "kuaishou_video_comment",
+                    "comment_id",
+                    "uk_kuaishou_video_comment_comment_id",
+                ),
             ],
         )
 
@@ -110,13 +116,20 @@ class PlanUniqueIndexesTest(unittest.TestCase):
         plan = next(p for p in plans if p.table == table)
         self.assertEqual(plan.action, "create")
 
-    def test_all_eight_targets_planned_in_order(self) -> None:
+    def test_ks_targets_present(self):
+        self.assertIn(("kuaishou_video", "video_id", "uk_kuaishou_video_video_id"), TARGETS)
+        self.assertIn(
+            ("kuaishou_video_comment", "comment_id", "uk_kuaishou_video_comment_comment_id"),
+            TARGETS,
+        )
+
+    def test_all_targets_planned_in_order(self) -> None:
         plans = plan_unique_indexes(
             existing_tables={t for t, _, _ in TARGETS},
             index_map={},
             duplicate_counter=lambda t, c: [],
         )
-        self.assertEqual(len(plans), 8)
+        self.assertEqual(len(plans), len(TARGETS))
         self.assertEqual(
             [(p.table, p.column, p.index_name) for p in plans],
             list(TARGETS),
