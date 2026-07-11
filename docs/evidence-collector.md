@@ -133,11 +133,77 @@ EVIDENCE_DEEPSEEK_WEB_SEARCH_ENABLED=true
 占位模板见根目录 `.env.example`。
 
 `BASE_URL` 被当作**实际 POST endpoint** 使用，不会自动拼接路径——请填供应商官方文档给出的
-OpenAI 兼容 chat-completions 完整地址。
+OpenAI 兼容 chat-completions 完整地址（GLM 例外，见 §5.1）。
 
 配好后可以在管理端页面直接看到该供应商出现在下拉框里，或调
 `GET /api/admin/evidence/providers` 确认（该接口只返回 provider id 和 enabled 布尔值，
 不会回显任何凭证）。
+
+### 5.1 智谱 GLM：走的是独立 web_search 接口，不是 chat 接口
+
+以下契约是**用真实 key 打线上接口实测**得到的，与官方文档/模型转述冲突时以此为准。
+
+```env
+EVIDENCE_GLM_API_KEY=<your-api-key>
+EVIDENCE_GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4/web_search
+EVIDENCE_GLM_WEB_SEARCH_ENABLED=true
+EVIDENCE_GLM_SEARCH_ENGINE=search_pro_bing
+```
+
+请求：
+
+```http
+POST https://open.bigmodel.cn/api/paas/v4/web_search
+Authorization: Bearer <key>
+Content-Type: application/json
+
+{"search_engine": "search_pro_bing", "search_query": "中山大学 校测安排"}
+```
+
+响应（顶层，**不套 `choices`**）：
+
+```json
+{"id": "...", "request_id": "...", "search_intent": [...],
+ "search_result": [
+   {"title": "...", "content": "<页面正文抽取>", "link": "https://zwc.sysu.edu.cn/inform",
+    "media": "", "icon": "", "refer": "ref_1", "publish_date": "2026-07-08"}
+ ]}
+```
+
+字段映射（`provider_adapters.extract_glm_citations`）：
+`url ← link`、`quote ← content`、`title ← title`、`publisher ← media`、`published_at ← publish_date`。
+**`link` 为空或非 HTTP(S) 的条目直接丢弃**——没有归属 URL 的结果不是证据。
+
+**为什么不用 chat/completions**：之前的实现 POST `chat/completions` 并带
+`tools:[{"type":"web_search"}]`，从 `choices[].message.tool_calls[].search_result[]` 取引用。
+实测线上响应里**根本没有 `tool_calls` 字段**（`message` 只有 `content` 和 `role`）：联网检索确实
+发生了（答案含最新信息），但**不回传任何来源 URL**；再要求模型输出引用，它就开始**编造**
+（实测产出过 `https://example.com/reference1`）。所以代码里对残留的
+`.../chat/completions` 配置有两种处理：能推导出 `/web_search` 就迁移，否则**直接报错**并告诉运维改哪里
+——绝不把检索请求体 POST 到 chat 接口（那会返回 HTTP 200 + 无用 payload，正是这种"静默成功"制造了伪造 URL）。
+
+**引擎档位（同一 query 实测，各返回 10 条）**：
+
+| engine | 带真实 `link` 的条目 | 可用于证据 |
+| --- | --- | --- |
+| `search_std` | 0（`link` 全为 `""`） | 否 |
+| `search_pro` | 0（`link` 全为 `""`） | 否 |
+| `search_pro_sogou` | 10 | 是 |
+| `search_pro_bing` | 10 | 是（默认，官方域名结果最干净） |
+| `search_pro_quark` | 10 | 是 |
+| `search_pro_jina` | 10 | 是（官方域名结果同样干净） |
+
+基础档位有正文没链接，无法做可审计证据；`search_pro_*` 档位按次计费、单价更高。
+
+**`EVIDENCE_GLM_MODEL` 对 GLM 已不再需要**：检索接口不接受 `model`。适配器上有
+`requires_model=False`，`build_http_transports()` 因此不再用"缺 model"把 GLM 悄悄跳过；
+配了这个变量也只是被忽略。
+
+**引用的来源变了**：GLM 的引用现在直接来自**搜索引擎索引**，而不是模型生成的文本，
+因此在引用层面伪造来源 URL 结构上不可能发生。`verification.py` 的抓取校验仍然保留，
+但职责从"抓模型幻觉"变成"抓死链与引文漂移"——纵深防御。
+
+`deepseek` / `kimi` / `doubao` / `qwen` 仍走原来的通用 chat-completions 行为，等各自的契约实测确认后再改。
 
 ---
 
@@ -210,9 +276,11 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
   若单次 run 可能超过 3 分钟，正确做法是改成后台任务 + 轮询，目前未实现。
 - **`load_settings()` 只校验 API key 与 `WEB_SEARCH_ENABLED`**，不校验 `MODEL` / `BASE_URL`。
   因此配了 key 和开关但漏配模型/地址的供应商，会被报告为 `enabled: true` 却在运行时失败。
+  （GLM 不需要 `MODEL`；但它的 `BASE_URL` 若既不是 `/web_search` 也无法从 `/chat/completions`
+  推导，`build_request` 会直接抛 `ValueError` 而不是静默发出无效请求。）
 - **`http_transport.py` 与主项目的 `backend/services/llm_client.py` 仍是两套 HTTP 调用栈**。
   前者是异步、无缓存、无用量统计；后者是同步、有重试/缓存/token 统计。合并二者需要处理
-  同步/异步差异与各家不同的联网检索开关（GLM 用 `tools`、Qwen 用 `enable_search`），
+  同步/异步差异与各家完全不同的检索契约（GLM 根本不是 chat 接口、Qwen 用 `enable_search`），
   故暂未合并。后果：证据采集的 token 消耗不会出现在现有的用量面板里。
 - **`EvidenceDeliveryBatch.raw_post_id` 是单数外键**，因此一次交付会为每一行 `raw_posts`
   生成一条 batch 记录（batch = "这个 run 的这条证据变成了这条 raw_post" 的审计事实）。

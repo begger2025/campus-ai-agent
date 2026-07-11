@@ -53,6 +53,7 @@ class TransportContext:
     model: str | None = None
     api_key: str = field(default="", repr=False)
     system_prompt: str = ""
+    search_engine: str | None = None
 
 
 def _mapping(value: Any) -> Mapping[str, Any] | None:
@@ -111,50 +112,100 @@ def extract_generic_citations(payload: Mapping[str, Any]) -> list[Any]:
 
 
 # —— 智谱 GLM ————————————————————————————————————————————————
-# 契约（官方文档）：
-#   POST https://open.bigmodel.cn/api/paas/v4/chat/completions
-#   body.tools = [{"type": "web_search",
-#                  "web_search": {"enable": true, "search_result": true}}]
-#   引用回传在 choices[].message.tool_calls[] 中 type == "web_search" 的
-#   search_result[] 数组里，正文在 content 字段、链接在 link 字段。
-GLM_WEB_SEARCH_TOOL: dict[str, Any] = {
-    "type": "web_search",
-    "web_search": {"enable": True, "search_result": True},
-}
+# 实测契约（用真实 key 打过线上接口，以此为准，勿信文档/模型的转述）：
+#   POST https://open.bigmodel.cn/api/paas/v4/web_search
+#   headers: Authorization: Bearer <key>
+#   body:    {"search_engine": "<engine>", "search_query": "<query>"}
+#   response（顶层，不套 choices）：
+#     {"id": ..., "request_id": ..., "search_intent": [...],
+#      "search_result": [{"title", "content", "link", "media", "icon",
+#                         "refer", "publish_date"}]}
+#
+# 这不是 chat 接口。之前的实现打的是 chat/completions 并从
+# choices[].message.tool_calls[].search_result[] 里取引用——线上响应里根本
+# 没有 tool_calls 字段：联网检索确实发生了（答案含最新信息），但**不回传任何
+# 来源 URL**；再要求模型给出引用，它就会编造（实测出现过
+# https://example.com/reference1）。
+#
+# 设计收益：引用现在直接来自搜索引擎索引，而不是模型生成的文本，因此在引用层
+# 面伪造来源 URL 结构上不可能发生。verification.py 的抓取校验仍然保留，但职责
+# 从“抓模型幻觉”变成“抓死链与引文漂移”——纵深防御。
+#
+# 引擎档位（同一 query 实测）：
+#   search_std / search_pro          → 10 条结果，link 全为 ""（无来源 URL）
+#   search_pro_sogou / _bing / _quark / _jina → 10 条结果，link 全部真实可用
+# 基础档位没有归属 URL，无法做可审计证据，因此只用 search_pro_* 档位。
+DEFAULT_GLM_SEARCH_ENGINE = "search_pro_bing"
+GLM_SEARCH_PATH = "/web_search"
+_CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
+
+
+def glm_search_url(endpoint: str | None) -> str:
+    """Resolve the 智谱 web-search endpoint from whatever is configured.
+
+    A leftover ``.../chat/completions`` base URL is migrated to the search
+    endpoint rather than posted to: the chat endpoint answers a search body with
+    HTTP 200 and a useless payload, and that silent success is exactly what
+    produced the fabricated citation URLs.  Anything else fails loudly.
+    """
+
+    url = (endpoint or "").strip().rstrip("/")
+    if url.endswith(GLM_SEARCH_PATH):
+        return url
+    if url.endswith(_CHAT_COMPLETIONS_SUFFIX):
+        return url[: -len(_CHAT_COMPLETIONS_SUFFIX)] + GLM_SEARCH_PATH
+    raise ValueError(
+        "EVIDENCE_GLM_BASE_URL must point at 智谱的独立检索接口 "
+        "https://open.bigmodel.cn/api/paas/v4/web_search "
+        f"(configured: {url or '<empty>'!r}); the chat/completions endpoint returns "
+        "no source URLs and must not be used for evidence"
+    )
 
 
 def build_glm_request(request: SearchRequest, context: TransportContext) -> ProviderHttpRequest:
-    """A chat body that actually turns 联网检索 on.
+    """The standalone web-search call: no model, no messages, just a query."""
 
-    Without ``tools`` the model never searches: it answers from memory and
-    invents plausible-looking citation URLs.
-    """
+    engine = (context.search_engine or "").strip() or DEFAULT_GLM_SEARCH_ENGINE
+    return ProviderHttpRequest(
+        url=glm_search_url(context.endpoint),
+        headers=bearer_headers(context),
+        body={"search_engine": engine, "search_query": request.query},
+    )
 
-    generic = build_generic_request(request, context)
-    body = dict(generic.body)
-    body["tools"] = [dict(GLM_WEB_SEARCH_TOOL)]
-    return ProviderHttpRequest(url=generic.url, headers=generic.headers, body=body)
+
+def _http_link(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    link = value.strip()
+    return link if urlsplit(link).scheme.lower() in {"http", "https"} else ""
 
 
 def extract_glm_citations(payload: Mapping[str, Any]) -> list[Any]:
-    """Return GLM's ``search_result`` entries from the web_search tool call."""
+    """Map the top-level ``search_result`` entries onto citation rows.
+
+    Entries without a usable HTTP(S) ``link`` are dropped: the basic engine tiers
+    return content with an empty ``link``, and an un-attributed result is not
+    evidence.
+    """
 
     rows: list[Any] = []
-    for choice in _sequence(payload.get("choices")):
-        choice_map = _mapping(choice)
-        if choice_map is None:
+    for result in _sequence(payload.get("search_result")):
+        result_map = _mapping(result)
+        if result_map is None:
             continue
-        message = _mapping(choice_map.get("message")) or {}
-        for call in _sequence(message.get("tool_calls")):
-            call_map = _mapping(call)
-            if call_map is None:
-                continue
-            if str(call_map.get("type", "")).strip().lower() != "web_search":
-                continue
-            for result in _sequence(call_map.get("search_result")):
-                result_map = _mapping(result)
-                if result_map is not None:
-                    rows.append(dict(result_map))
+        link = _http_link(result_map.get("link"))
+        if not link:
+            continue
+        rows.append(
+            {
+                "url": link,
+                "quote": result_map.get("content"),
+                "title": result_map.get("title"),
+                "publisher": result_map.get("media") or None,
+                "published_at": result_map.get("publish_date") or None,
+                "refer": result_map.get("refer"),
+            }
+        )
     return rows
 
 
@@ -165,6 +216,9 @@ class ProviderWebSearchAdapter:
     provider_id: str
     build_request: Callable[[SearchRequest, TransportContext], ProviderHttpRequest]
     extract_citations: Callable[[Mapping[str, Any]], list[Any]]
+    # Chat providers cannot be called without a model; 智谱的 web_search 接口不接受
+    # model，所以它不能因为 EVIDENCE_GLM_MODEL 为空就被工厂悄悄跳过。
+    requires_model: bool = True
 
 
 GENERIC_ADAPTER = ProviderWebSearchAdapter(
@@ -177,6 +231,7 @@ GLM_ADAPTER = ProviderWebSearchAdapter(
     provider_id="glm",
     build_request=build_glm_request,
     extract_citations=extract_glm_citations,
+    requires_model=False,
 )
 
 # deepseek / kimi / doubao / qwen intentionally fall through to GENERIC_ADAPTER
@@ -218,10 +273,11 @@ def derive_source_type(url: Any, default: str = DEFAULT_SOURCE_TYPE) -> str:
 
 
 __all__ = [
+    "DEFAULT_GLM_SEARCH_ENGINE",
     "DEFAULT_SOURCE_TYPE",
     "GENERIC_ADAPTER",
     "GLM_ADAPTER",
-    "GLM_WEB_SEARCH_TOOL",
+    "GLM_SEARCH_PATH",
     "PROVIDER_WEB_SEARCH_ADAPTERS",
     "ProviderHttpRequest",
     "ProviderWebSearchAdapter",
@@ -234,4 +290,5 @@ __all__ = [
     "derive_source_type",
     "extract_generic_citations",
     "extract_glm_citations",
+    "glm_search_url",
 ]

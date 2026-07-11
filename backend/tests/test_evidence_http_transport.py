@@ -108,8 +108,39 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HttpTransportUnavailableError):
             await transport(request)
 
-    async def test_glm_request_enables_the_web_search_tool(self):
-        client = FakeClient({"choices": []})
+    async def test_glm_posts_the_standalone_web_search_contract(self):
+        client = FakeClient({"search_result": []})
+        transport = OpenAICompatibleTransport(
+            "glm",
+            "https://open.bigmodel.cn/api/paas/v4/web_search",
+            None,
+            "secret-key",
+            client,
+        )
+        request = SearchRequest(provider="glm", query="中山大学 校园通知", max_results=3)
+        await transport(request)
+        url, headers, body = client.calls[0]
+        self.assertEqual(url, "https://open.bigmodel.cn/api/paas/v4/web_search")
+        self.assertEqual(headers["Authorization"], "Bearer secret-key")
+        self.assertEqual(
+            body, {"search_engine": "search_pro_bing", "search_query": "中山大学 校园通知"}
+        )
+
+    async def test_glm_search_engine_is_configurable(self):
+        client = FakeClient({"search_result": []})
+        transport = OpenAICompatibleTransport(
+            "glm",
+            "https://open.bigmodel.cn/api/paas/v4/web_search",
+            None,
+            "secret-key",
+            client,
+            search_engine="search_pro_jina",
+        )
+        await transport(SearchRequest(provider="glm", query="中山大学"))
+        self.assertEqual(client.calls[0][2]["search_engine"], "search_pro_jina")
+
+    async def test_glm_chat_completions_base_url_is_migrated_not_posted_to(self):
+        client = FakeClient({"search_result": []})
         transport = OpenAICompatibleTransport(
             "glm",
             "https://open.bigmodel.cn/api/paas/v4/chat/completions",
@@ -117,15 +148,20 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
             "secret-key",
             client,
         )
-        request = SearchRequest(
-            provider="glm", model="glm-4-plus", query="中山大学 校园通知", max_results=3
+        await transport(SearchRequest(provider="glm", query="中山大学"))
+        self.assertEqual(client.calls[0][0], "https://open.bigmodel.cn/api/paas/v4/web_search")
+        self.assertNotIn("messages", client.calls[0][2])
+
+    async def test_glm_unknown_base_url_fails_loudly(self):
+        client = FakeClient({"search_result": []})
+        transport = OpenAICompatibleTransport(
+            "glm", "https://api.example/v1/responses", None, "secret-key", client
         )
-        await transport(request)
-        body = client.calls[0][2]
-        self.assertEqual(
-            body["tools"],
-            [{"type": "web_search", "web_search": {"enable": True, "search_result": True}}],
-        )
+        with self.assertRaises(ValueError) as caught:
+            await transport(SearchRequest(provider="glm", query="中山大学"))
+        self.assertIn("EVIDENCE_GLM_BASE_URL", str(caught.exception))
+        self.assertIn("web_search", str(caught.exception))
+        self.assertEqual(client.calls, [])
 
     async def test_generic_provider_keeps_the_plain_chat_body(self):
         client = FakeClient({"choices": []})
@@ -135,29 +171,19 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
         await transport(SearchRequest(provider="deepseek", model="model-a", query="SYSU"))
         self.assertNotIn("tools", client.calls[0][2])
 
-    def test_glm_tool_call_search_results_become_hits(self):
+    def test_glm_web_search_results_become_hits(self):
         payload = {
             "id": "req-9",
-            "model": "glm-4-plus",
-            "choices": [
+            "request_id": "rid-9",
+            "search_intent": [{"query": "中山大学 通知"}],
+            "search_result": [
                 {
-                    "message": {
-                        "content": "中山大学发布了通知[1]",
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "type": "web_search",
-                                "search_result": [
-                                    {
-                                        "media": "中山大学新闻网",
-                                        "title": "关于暑期安排的通知",
-                                        "link": "https://news.sysu.edu.cn/info/1",
-                                        "content": "中山大学发布暑期安排通知正文摘录。",
-                                    }
-                                ],
-                            }
-                        ],
-                    }
+                    "media": "中山大学新闻网",
+                    "title": "关于暑期安排的通知",
+                    "link": "https://news.sysu.edu.cn/info/1",
+                    "content": "中山大学发布暑期安排通知正文摘录。",
+                    "refer": "ref_1",
+                    "publish_date": "2026-07-08",
                 }
             ],
         }
@@ -165,7 +191,29 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(str(hits[0].url), "https://news.sysu.edu.cn/info/1")
         self.assertEqual(hits[0].quote, "中山大学发布暑期安排通知正文摘录。")
+        self.assertEqual(hits[0].title, "关于暑期安排的通知")
+        self.assertEqual(hits[0].source_type, "official")
         self.assertEqual(hits[0].request_id, "req-9")
+        self.assertEqual(hits[0].metadata["publisher"], "中山大学新闻网")
+        self.assertEqual(hits[0].metadata["published_at"], "2026-07-08")
+
+    def test_glm_results_without_a_usable_link_are_dropped(self):
+        # search_std / search_pro return content with an empty ``link``; an
+        # un-attributed result is not evidence and must never become a row.
+        payload = {
+            "id": "req-10",
+            "search_result": [
+                {"title": "无链接", "link": "", "content": "中山大学发布通知。"},
+                {"title": "非 HTTP", "link": "ftp://x/y", "content": "中山大学发布通知。"},
+                {
+                    "title": "可用",
+                    "link": "https://news.sysu.edu.cn/info/2",
+                    "content": "中山大学发布通知正文。",
+                },
+            ],
+        }
+        hits = parse_citation_response(payload, provider_id="glm")
+        self.assertEqual([str(hit.url) for hit in hits], ["https://news.sysu.edu.cn/info/2"])
 
     def test_source_type_is_derived_from_the_domain(self):
         official, news, unknown = (
@@ -222,6 +270,23 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(transports), {"deepseek"})
         self.assertNotIn("key", repr(transports["deepseek"]))
         self.assertEqual(build_http_transports(env), {})
+
+    def test_glm_is_built_without_a_model_and_takes_its_engine_from_the_env(self):
+        # 智谱的 web_search 接口不接受 model，缺少 EVIDENCE_GLM_MODEL 也不能让
+        # GLM 悄悄消失；而 EVIDENCE_DEEPSEEK_* 仍然需要 model。
+        env = {
+            "EVIDENCE_GLM_API_KEY": "key",
+            "EVIDENCE_GLM_BASE_URL": "https://open.bigmodel.cn/api/paas/v4/web_search",
+            "EVIDENCE_GLM_WEB_SEARCH_ENABLED": "true",
+            "EVIDENCE_GLM_SEARCH_ENGINE": "search_pro_sogou",
+            "EVIDENCE_DEEPSEEK_API_KEY": "key",
+            "EVIDENCE_DEEPSEEK_BASE_URL": "https://api.example/v1/chat/completions",
+            "EVIDENCE_DEEPSEEK_WEB_SEARCH_ENABLED": "true",
+        }
+        transports = build_http_transports(env, client=FakeClient({"search_result": []}))
+        self.assertEqual(set(transports), {"glm"})
+        self.assertIsNone(transports["glm"].model)
+        self.assertEqual(transports["glm"].search_engine, "search_pro_sogou")
 
 
 if __name__ == "__main__":

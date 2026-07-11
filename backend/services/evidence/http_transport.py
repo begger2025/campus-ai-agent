@@ -157,8 +157,9 @@ def parse_citation_response(
     for key in ("hits", "results", "items", "citations", "sources"):
         rows.extend(_citation_rows(root.get(key)))
 
-    # Vendor-shaped citations first: GLM puts them in a web_search tool call,
-    # which none of the generic locations below can see.
+    # Vendor-shaped citations first: 智谱的 web_search 接口把结果放在顶层
+    # search_result[] 里（而且来自搜索引擎索引，不是模型生成的文本），下面那些
+    # 通用位置都看不到它。
     rows.extend(_citation_rows(adapter_for(provider_id).extract_citations(root)))
 
     choices = _as_list(root.get("choices"))
@@ -215,6 +216,9 @@ class OpenAICompatibleTransport:
     model: str | None = None
     api_key: str = field(default="", repr=False)
     client: AsyncJsonClient | None = field(default=None, repr=False)
+    # Only 智谱's standalone web_search endpoint uses this (search_pro_bing by
+    # default); chat providers ignore it.
+    search_engine: str | None = None
     system_prompt: str = (
         "Search the public internet for the requested SYSU information. "
         "Return only JSON with a citations array; every citation needs url, quote, and title."
@@ -248,6 +252,7 @@ class OpenAICompatibleTransport:
             model=self.model,
             api_key=self.api_key,
             system_prompt=self.system_prompt,
+            search_engine=self.search_engine,
         )
 
     async def __call__(self, request: SearchRequest, _safe_settings: Mapping[str, Any] | None = None) -> Any:
@@ -296,11 +301,17 @@ def build_http_transports(
     result: dict[str, OpenAICompatibleTransport] = {}
     for provider_id in SUPPORTED_PROVIDER_IDS:
         prefix = f"EVIDENCE_{provider_id.upper()}"
+        adapter = adapter_for(provider_id)
         key = (env.get(f"{prefix}_API_KEY") or "").strip()
         endpoint = (env.get(f"{prefix}_BASE_URL") or "").strip()
         model = (env.get(f"{prefix}_MODEL") or "").strip() or None
+        search_engine = (env.get(f"{prefix}_SEARCH_ENGINE") or "").strip() or None
         enabled = (env.get(f"{prefix}_WEB_SEARCH_ENABLED") or "").strip().lower() == "true"
-        if not (key and endpoint and model and enabled):
+        if not (key and endpoint and enabled):
+            continue
+        # A chat provider cannot be called without a model; 智谱的 web_search 接口
+        # 不接受 model，所以缺少 EVIDENCE_GLM_MODEL 不能让 GLM 悄悄消失。
+        if adapter.requires_model and not model:
             continue
         selected_client = client.get(provider_id) if isinstance(client, Mapping) else client
         if selected_client is None:
@@ -311,6 +322,7 @@ def build_http_transports(
             model=model,
             api_key=key,
             client=selected_client,
+            search_engine=search_engine,
         )
     return result
 
