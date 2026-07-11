@@ -125,6 +125,10 @@ class KuaishouDbStoreImplement(AbstractStore):
                                 continue
                             if hasattr(video_detail, key):
                                 setattr(video_detail, key, value)
+                    else:
+                        utils.logger.warning(
+                            f"[KuaishouDbStoreImplement.store_content] IntegrityError fallback found no existing row, item dropped, video_id={video_id}"
+                        )
             else:
                 for key, value in content_item.items():
                     if hasattr(video_detail, key):
@@ -164,6 +168,10 @@ class KuaishouDbStoreImplement(AbstractStore):
                                 continue
                             if hasattr(comment_detail, key):
                                 setattr(comment_detail, key, value)
+                    else:
+                        utils.logger.warning(
+                            f"[KuaishouDbStoreImplement.store_comment] IntegrityError fallback found no existing row, item dropped, comment_id={comment_id}"
+                        )
             else:
                 for key, value in comment_item.items():
                     if hasattr(comment_detail, key):

@@ -222,6 +222,7 @@ class TestKuaishouIntegrityFallback:
     @pytest.mark.asyncio
     async def test_store_content_falls_back_to_update_on_integrity_error(self, monkeypatch):
         existing_after_race = MagicMock(name="existing_video")
+        existing_after_race.add_ts = 999  # 胜出方的首次入库时间哨兵
         fake_session = MagicMock(name="fake_session")
         # 第一次 select：不存在（走 insert）；冲突后第二次 select：竞态胜出方已在库
         fake_session.execute = AsyncMock(
@@ -243,6 +244,8 @@ class TestKuaishouIntegrityFallback:
         fake_session.rollback.assert_awaited_once()
         assert fake_session.execute.await_count == 2
         fake_session.commit.assert_awaited_once()
+        assert existing_after_race.add_ts == 999  # 自愈更新不得覆盖首次入库时间
+        assert existing_after_race.title == "t"   # 其余字段正常更新
 
     @pytest.mark.asyncio
     async def test_store_comment_falls_back_to_update_on_integrity_error(self, monkeypatch):
@@ -285,4 +288,28 @@ class TestKuaishouIntegrityFallback:
 
         fake_session.add.assert_called_once()
         fake_session.rollback.assert_not_awaited()
+        fake_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_fallback_reselect_miss_drops_item_without_raising(self, monkeypatch):
+        """冲突后重查也落空（如异构约束冲突/胜出方回滚）：告警丢弃该条，不让异常逃逸。"""
+        fake_session = MagicMock(name="fake_session")
+        fake_session.execute = AsyncMock(
+            side_effect=[_select_result(None), _select_result(None)]
+        )
+        fake_session.add = MagicMock()
+        fake_session.flush = AsyncMock(side_effect=IntegrityError("dup", None, None))
+        fake_session.rollback = AsyncMock()
+        fake_session.commit = AsyncMock()
+        monkeypatch.setattr(
+            "store.kuaishou._store_impl.get_session", _fake_get_session_factory(fake_session)
+        )
+        warn_mock = MagicMock()
+        monkeypatch.setattr("store.kuaishou._store_impl.utils.logger.warning", warn_mock)
+
+        store = KuaishouDbStoreImplement()
+        await store.store_content({"video_id": "3xabc"})
+
+        fake_session.rollback.assert_awaited_once()
+        warn_mock.assert_called_once()
         fake_session.commit.assert_awaited_once()
