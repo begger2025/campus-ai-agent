@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from evidence_collector.database import create_session_factory, init_database
 from evidence_collector.models import EvidenceDocument, EvidenceItem, EvidenceQuery
-from evidence_collector.services.collector import EvidenceCollector
+from evidence_collector.services.collector import EvidenceCollector, sanitize_error
 from evidence_collector.services.providers import SearchHit
 
 
@@ -132,6 +132,14 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("supersecret", query.error or "")
         self.assertNotIn("secret-token", query.error or "")
         self.assertIn("redacted", query.error or "")
+
+    def test_sanitize_error_redacts_bearer_and_query_credentials(self):
+        rendered = sanitize_error(
+            "Authorization Bearer top-secret; https://api.invalid/search?api_key=url-secret"
+        )
+        self.assertNotIn("top-secret", rendered)
+        self.assertNotIn("url-secret", rendered)
+        self.assertIn("redacted", rendered)
 
     async def test_factory_with_default_expiration_returns_readable_run(self):
         provider = FakeProvider("deepseek", [self.official])
