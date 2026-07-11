@@ -16,6 +16,7 @@ import AdminOverviewView from '@/views/AdminOverviewView.vue'
 import AdminEventsView from '@/views/AdminEventsView.vue'
 import AdminRawPostsView from '@/views/AdminRawPostsView.vue'
 import AdminKeywordsView from '@/views/AdminKeywordsView.vue'
+import AdminEvidenceView from '@/views/AdminEvidenceView.vue'
 import AdminOpsView from '@/views/AdminOpsView.vue'
 
 const routes = [
@@ -97,6 +98,12 @@ const routes = [
         name: 'AdminKeywords',
         component: AdminKeywordsView,
         meta: { title: '智能选题', subtitle: '客观数据驱动的爬取关键词推荐', roles: ['admin'] },
+      },
+      {
+        path: 'admin/evidence',
+        name: 'AdminEvidence',
+        component: AdminEvidenceView,
+        meta: { title: '证据采集', subtitle: 'AI 联网检索证据采集与人工审核', roles: ['admin'] },
       },
       {
         path: 'admin/ops',
