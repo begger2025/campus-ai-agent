@@ -20,7 +20,7 @@
 
 import asyncio
 import os
-# import random  # Removed as we now use fixed config.CRAWLER_MAX_SLEEP_SEC intervals
+import random
 import time
 from asyncio import Task
 from typing import Dict, List, Optional, Tuple
@@ -38,13 +38,18 @@ from base.base_crawler import AbstractCrawler
 from model.m_kuaishou import VideoUrlInfo, CreatorUrlInfo
 from proxy.proxy_ip_pool import IpInfoModel, create_ip_pool
 from store import kuaishou as kuaishou_store
+from store import run_history as run_history_store
 from tools import utils
 from tools.cdp_browser import CDPBrowserManager
+from tools.crawl_quota import should_fetch_next_page
+from tools.publish_time_window import is_within_window, parse_window
+from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, RunState
+from tools.topic_scope import compose_topic_keyword, is_broad_keyword, is_marketing_noise, matches_topic
 from var import comment_tasks_var, crawler_type_var, source_keyword_var
 
 from .client import KuaiShouClient
 from .exception import DataFetchError
-from .help import parse_video_info_from_url, parse_creator_info_from_url
+from .help import parse_video_info_from_url, parse_creator_info_from_url, resolve_next_pcursor
 from .login import KuaishouLogin
 
 
@@ -127,60 +132,197 @@ class KuaishouCrawler(AbstractCrawler):
 
             utils.logger.info("[KuaishouCrawler.start] Kuaishou Crawler finished ...")
 
+    async def _filter_and_store_page(
+        self,
+        feeds: List[Dict],
+        window_lo: Optional[int],
+        window_hi: Optional[int],
+        window_enabled: bool,
+        run_state: RunState,
+    ) -> Tuple[List[str], List[int]]:
+        """单页搜索结果的过滤与入库：窗口 → 主题相关 → 营销负面 → 跳过已入库 → 逐条入库计数。
+
+        返回（本页实际入库成功的 video_id 列表, page_resolved_ts）；page_resolved_ts 在一切
+        跳过/过滤决策之外收集（快手结果非时间序，无整页早停，仅用于日志观测与口径一致）。
+        """
+        page_resolved_ts: List[int] = []
+        kept: List[Dict] = []
+        window_filtered = topic_filtered = marketing_filtered = 0
+        topic_terms = getattr(config, "TOPIC_RELEVANCE_TERMS", [])
+        for feed in feeds:
+            photo: Dict = feed.get("photo") or {}
+            if not photo.get("id"):
+                continue
+            # photo.timestamp 为毫秒 epoch（缺失/0 视为 unknown，按 PUBLISH_TIME_KEEP_UNKNOWN 处理）
+            ts_ms = int(photo.get("timestamp") or 0) or None
+            if ts_ms is not None:
+                page_resolved_ts.append(ts_ms)
+            if window_enabled and not is_within_window(
+                ts_ms, window_lo, window_hi, config.PUBLISH_TIME_KEEP_UNKNOWN
+            ):
+                window_filtered += 1
+                continue
+            # 快手搜索结果自带全文文案，主题/营销过滤共用同组文本
+            texts = [photo.get("caption", ""), photo.get("originCaption", "")]
+            if getattr(config, "ENABLE_TOPIC_RELEVANCE_FILTER", False) and not matches_topic(texts, topic_terms):
+                topic_filtered += 1
+                continue
+            # 营销内容负面词表（第三道防线）：命中负面词且无救回词的推广内容不入库
+            if getattr(config, "ENABLE_TOPIC_NEGATIVE_FILTER", False) and is_marketing_noise(
+                texts,
+                getattr(config, "TOPIC_NEGATIVE_TERMS", []),
+                getattr(config, "TOPIC_NEGATIVE_RESCUE_TERMS", []),
+            ):
+                marketing_filtered += 1
+                continue
+            kept.append(feed)
+
+        if window_filtered:
+            utils.logger.info(f"[KuaishouCrawler.search] 时间窗口过滤：跳过 {window_filtered} 条窗口外内容")
+        if topic_filtered:
+            utils.logger.info(f"[KuaishouCrawler.search] 主题过滤：跳过 {topic_filtered} 条与主题无关的内容")
+        if marketing_filtered:
+            utils.logger.info(f"[KuaishouCrawler.search] 营销内容过滤：跳过 {marketing_filtered} 条")
+
+        # 爬取阶段跳过已入库视频（省请求额度）：必须在过滤后、入库与评论抓取之前
+        if kept and bool(getattr(config, "KS_SKIP_EXISTING_NOTES", True)):
+            existing = await kuaishou_store.batch_get_existing_note_ids(
+                [str((feed.get("photo") or {}).get("id") or "").strip() for feed in kept]
+            )
+            if existing:
+                before = len(kept)
+                kept = [
+                    feed for feed in kept
+                    if str((feed.get("photo") or {}).get("id") or "").strip() not in existing
+                ]
+                if before - len(kept):
+                    utils.logger.info(f"[KuaishouCrawler.search] 跳过已入库 {before - len(kept)} 条")
+
+        stored_ids: List[str] = []
+        for feed in kept:
+            video_id = str((feed.get("photo") or {}).get("id"))
+            try:
+                await kuaishou_store.update_kuaishou_video(video_item=feed)
+                stored_ids.append(video_id)
+                run_state.add_stored(1)  # 真正入库条数（过滤/跳过后）
+            except Exception as ex:
+                utils.logger.error(
+                    f"[KuaishouCrawler.search] store failed video_id={video_id}: {ex}"
+                )
+        return stored_ids, page_resolved_ts
+
     async def search(self):
         utils.logger.info("[KuaishouCrawler.search] Begin search kuaishou keywords")
         ks_limit_count = 20  # kuaishou limit page fixed value
         if config.CRAWLER_MAX_NOTES_COUNT < ks_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = ks_limit_count
         start_page = config.START_PAGE
+        window_lo, window_hi = parse_window(config.CRAWL_PUBLISH_TIME_START, config.CRAWL_PUBLISH_TIME_END)
+        window_enabled = window_lo is not None or window_hi is not None
+
         for keyword in config.KEYWORDS.split(","):
-            search_session_id = ""
-            source_keyword_var.set(keyword)
-            utils.logger.info(
-                f"[KuaishouCrawler.search] Current search keyword: {keyword}"
+            # 宽泛词拦截（用原始词判定，需在主题限定组合之前）：裸主题词对过滤零区分力
+            if is_broad_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
+            ) and not getattr(config, "ALLOW_BROAD_KEYWORDS", False):
+                utils.logger.warning(
+                    f"[KuaishouCrawler.search] 宽泛词已跳过：{keyword.strip()}（设 ALLOW_BROAD_KEYWORDS=True 可放行）"
+                )
+                continue
+            composed_keyword = compose_topic_keyword(
+                keyword,
+                getattr(config, "CRAWL_TOPIC_QUALIFIER", ""),
+                getattr(config, "TOPIC_RELEVANCE_TERMS", []),
             )
-            page = 1
-            while (
-                page - start_page + 1
-            ) * ks_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
-                if page < start_page:
-                    utils.logger.info(f"[KuaishouCrawler.search] Skip page: {page}")
+            if composed_keyword != keyword.strip():
+                utils.logger.info(f"[KuaishouCrawler.search] 主题限定：{keyword} → {composed_keyword}")
+            keyword = composed_keyword
+            source_keyword_var.set(keyword)
+            utils.logger.info(f"[KuaishouCrawler.search] Current search keyword: {keyword}")
+
+            # 防饥饿：快手无排序参数（恒定综合排序），无条件参与起始页随机偏移；
+            # 游标兼容数字页码，偏移直接从偏移后的页码起步（跳过的页不发请求、不计数）
+            keyword_start_page = start_page
+            if random.random() < float(getattr(config, "SEARCH_START_PAGE_JITTER_PROB", 0.0)):
+                jitter = random.randint(1, int(getattr(config, "SEARCH_START_PAGE_JITTER_MAX", 1)))
+                keyword_start_page += jitter
+                utils.logger.info(f"[KuaishouCrawler.search] 防饥饿起始页偏移 +{jitter} → 从第 {keyword_start_page} 页开始")
+
+            # 通用爬取历史：本关键词一轮搜索写一行，try/except/finally 保证异常路径也落一行
+            run_state = RunState(
+                platform="ks",
+                source_keyword=keyword,
+                started_at=int(utils.get_current_timestamp()),
+            )
+            search_session_id = ""
+            page = keyword_start_page
+            pcursor: Optional[str] = str(keyword_start_page)
+            try:
+                # 配额按"新增入库条数"计（不再按页数），被过滤/跳过已入库的内容不烧配额；
+                # 页数保护上限防止贫瘠词无限翻页
+                while should_fetch_next_page(
+                    run_state.items_stored,
+                    run_state.pages_fetched,
+                    config.CRAWLER_MAX_NOTES_COUNT,
+                    int(getattr(config, "CRAWL_MAX_PAGES_PER_KEYWORD", 10)),
+                ):
+                    utils.logger.info(
+                        f"[KuaishouCrawler.search] search kuaishou keyword: {keyword}, page: {page}, pcursor: {pcursor}"
+                    )
+                    videos_res = await self.ks_client.search_info_by_keyword(
+                        keyword=keyword,
+                        pcursor=pcursor,
+                        search_session_id=search_session_id,
+                    )
+                    run_state.add_page()
+                    vision_search_photo: Dict = (videos_res or {}).get("visionSearchPhoto") or {}
+                    feeds = vision_search_photo.get("feeds") or []
+                    run_state.add_seen(len(feeds))
+                    if not videos_res or vision_search_photo.get("result") != 1 or not feeds:
+                        # 原实现此处 continue 且不翻页，是死循环隐患；空页/异常响应一律停止
+                        utils.logger.info("[KuaishouCrawler.search] Search result empty or abnormal, stop paging")
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
+                        break
+                    search_session_id = vision_search_photo.get("searchSessionId", "") or search_session_id
+
+                    stored_ids, _page_resolved_ts = await self._filter_and_store_page(
+                        feeds, window_lo, window_hi, window_enabled, run_state
+                    )
+
+                    # Sleep after page navigation
+                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                    utils.logger.info(
+                        f"[KuaishouCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page}"
+                    )
+
+                    # 评论只对本页新入库视频抓取（跟随全局 ENABLE_GET_COMMENTS）
+                    await self.batch_get_video_comments(stored_ids)
+
+                    # 游标推进：优先服务端真实 pcursor（"no_more" → 停止），缺失回退页码
                     page += 1
-                    continue
-                utils.logger.info(
-                    f"[KuaishouCrawler.search] search kuaishou keyword: {keyword}, page: {page}"
-                )
-                video_id_list: List[str] = []
-                videos_res = await self.ks_client.search_info_by_keyword(
-                    keyword=keyword,
-                    pcursor=str(page),
-                    search_session_id=search_session_id,
-                )
-                if not videos_res:
-                    utils.logger.error(
-                        f"[KuaishouCrawler.search] search info by keyword:{keyword} not found data"
-                    )
-                    continue
+                    next_cursor = resolve_next_pcursor(vision_search_photo.get("pcursor"), page)
+                    if next_cursor is None:
+                        utils.logger.info("[KuaishouCrawler.search] 服务端返回 no_more，无更多结果")
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
+                        break
+                    pcursor = next_cursor
 
-                vision_search_photo: Dict = videos_res.get("visionSearchPhoto")
-                if vision_search_photo.get("result") != 1:
-                    utils.logger.error(
-                        f"[KuaishouCrawler.search] search info by keyword:{keyword} not found data "
-                    )
-                    continue
-                search_session_id = vision_search_photo.get("searchSessionId", "")
-                for video_detail in vision_search_photo.get("feeds"):
-                    video_id_list.append(video_detail.get("photo", {}).get("id"))
-                    await kuaishou_store.update_kuaishou_video(video_item=video_detail)
-
-                # batch fetch video comments
-                page += 1
-
-                # Sleep after page navigation
-                await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-                utils.logger.info(f"[KuaishouCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
-
-                await self.batch_get_video_comments(video_id_list)
+                # 循环自然退出：入库配额达成归结 quota_reached（页保护上限触发则落 completed）
+                if run_state.items_stored >= config.CRAWLER_MAX_NOTES_COUNT:
+                    run_state.mark_stop(STOP_QUOTA_REACHED)
+            except DataFetchError as ex:
+                # 记 exception 落一行历史后继续下一关键词，不中断整场爬取
+                run_state.mark_stop(STOP_EXCEPTION)
+                utils.logger.error(f"[KuaishouCrawler.search] Search error, keyword: {keyword}, error: {ex}")
+            except Exception:
+                # 其他异常路径也落一行历史（stop_reason=exception），异常继续上抛
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
+            finally:
+                run_state.finish(int(utils.get_current_timestamp()))
+                await run_history_store.save_crawler_run_history(run_state.as_row())
 
     async def get_specified_videos(self):
         """Get the information and comments of the specified post"""
