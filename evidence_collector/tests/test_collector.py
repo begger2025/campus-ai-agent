@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from evidence_collector.database import create_session_factory, init_database
 from evidence_collector.models import EvidenceDocument, EvidenceItem, EvidenceQuery
@@ -36,6 +37,12 @@ class FakeRegistry:
 
     def get(self, provider_id):
         return self.providers[provider_id]
+
+
+class QualityScope:
+    decision = "in_scope"
+    reasons = ["test scope"]
+    quality_score = 0.87
 
 
 class CollectorTests(unittest.IsolatedAsyncioTestCase):
@@ -125,6 +132,53 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("supersecret", query.error or "")
         self.assertNotIn("secret-token", query.error or "")
         self.assertIn("redacted", query.error or "")
+
+    async def test_factory_with_default_expiration_returns_readable_run(self):
+        provider = FakeProvider("deepseek", [self.official])
+        collector = EvidenceCollector(
+            sessionmaker(bind=self.engine),
+            FakeRegistry({"deepseek": provider}),
+        )
+
+        run = await collector.collect("topic", ["q"], provider_ids=["deepseek"])
+
+        self.assertEqual(run.status, "completed")
+        self.assertIsNotNone(run.completed_at)
+
+    async def test_bad_provider_and_request_are_audited_per_query(self):
+        provider = FakeProvider("deepseek", [self.official])
+        collector = EvidenceCollector(
+            self.session,
+            FakeRegistry({"deepseek": provider}),
+        )
+
+        run = await collector.collect(
+            "topic",
+            [
+                {"provider": "not-a-provider", "query": "q"},
+                {"provider": "deepseek", "query": "q", "max_results": 0},
+            ],
+            provider_ids=["deepseek"],
+        )
+
+        self.assertEqual(run.status, "failed")
+        queries = self.session.query(EvidenceQuery).order_by(EvidenceQuery.id).all()
+        self.assertEqual(len(queries), 2)
+        self.assertTrue(all(query.status == "failed" for query in queries))
+        self.assertTrue(all(query.error for query in queries))
+
+    async def test_scope_quality_score_is_persisted(self):
+        provider = FakeProvider("deepseek", [self.official])
+        collector = EvidenceCollector(
+            self.session,
+            FakeRegistry({"deepseek": provider}),
+            scope_assessor=lambda *_args: QualityScope(),
+        )
+
+        await collector.collect("topic", ["q"], provider_ids=["deepseek"])
+
+        item = self.session.query(EvidenceItem).one()
+        self.assertEqual(item.quality_score, 0.87)
 
     async def test_existing_global_document_can_be_reused_by_a_later_run(self):
         provider = FakeProvider("deepseek", [self.official])

@@ -10,7 +10,6 @@ outside the ``evidence_*`` metadata owned by this package.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import re
 import time
@@ -57,6 +56,21 @@ def sanitize_error(error: BaseException | str, *, limit: int = 1024) -> str:
     message = re.sub(
         r"(?i)(api[_ -]?key|authorization|bearer|token|secret|password)\s*[:=]\s*[^\s,;]+",
         r"\1=<redacted>",
+        message,
+    )
+    message = re.sub(
+        r"(?i)\b(?:authorization|bearer)\s+(?:bearer\s+)?[^\s,;]+",
+        "authorization=<redacted>",
+        message,
+    )
+    message = re.sub(
+        r"(?i)\b(?:api[_ -]?key|access[_ -]?token|token|secret|password|key)\s+[^\s,;]+",
+        "credential=<redacted>",
+        message,
+    )
+    message = re.sub(
+        r"(?i)((?:api[_-]?key|access[_-]?token|token|secret|password|key)=)[^&\s,;]+",
+        r"\1<redacted>",
         message,
     )
     message = re.sub(r"(?i)\b(?:sk|ak|key)-[a-z0-9_-]{8,}\b", "<redacted>", message)
@@ -253,31 +267,38 @@ class EvidenceCollector:
         session.add(run)
         session.flush()
         failures = 0
-        processed_queries = 0
         seen_hashes: set[str] = set()
         try:
             for spec in specs:
-                provider_id = spec["provider"]
-                provider = self.registry.get(provider_id)
-                request_query = f"{self.query_context} 原始检索词：{spec['query']}"
-                request = SearchRequest(
-                    provider=provider_id,
-                    model=spec.get("model"),
-                    query=request_query,
-                    max_results=int(spec.get("max_results", max_results)),
-                    prompt_version=str(spec.get("prompt_version", prompt_version)),
-                )
+                provider_id = str(spec.get("provider", "")).strip().lower()
+                query_text = str(spec.get("query", "")).strip()
+                # Keep audit columns valid even when request construction is
+                # intentionally going to fail (for example, an empty or
+                # overlong prompt version).
+                prompt_value = str(spec.get("prompt_version", prompt_version)).strip()
+                audit_prompt = prompt_value[:64] or "invalid"
                 query_row = EvidenceQuery(
                     run_id=run.id,
                     provider=provider_id,
-                    model=request.model,
-                    prompt_version=request.prompt_version,
-                    query_text=spec["query"],
+                    model=(str(spec.get("model")).strip()[:128] if spec.get("model") else None),
+                    prompt_version=audit_prompt,
+                    query_text=query_text,
                     status="running",
                 )
                 session.add(query_row)
                 session.flush()
                 try:
+                    # Resolve and validate inside the query boundary so a bad
+                    # provider or request is retained as an auditable failure.
+                    provider = self.registry.get(provider_id)
+                    request_query = f"{self.query_context} 原始检索词：{query_text}"
+                    request = SearchRequest(
+                        provider=provider_id,
+                        model=spec.get("model"),
+                        query=request_query,
+                        max_results=int(spec.get("max_results", max_results)),
+                        prompt_version=prompt_value,
+                    )
                     raw_hits = await provider.search(request)
                     hits = normalize_hits(
                         raw_hits,
@@ -337,13 +358,13 @@ class EvidenceCollector:
                             prompt_version=request.prompt_version,
                             scope_decision=scope.decision,
                             scope_reasons=reasons,
+                            quality_score=getattr(scope, "quality_score", None),
                             verification_status="pending",
                             review_status="pending",
                         )
                         session.add(item)
                     query_row.status = "completed"
                     query_row.completed_at = utcnow()
-                    processed_queries += 1
                 except Exception as error:  # provider errors are audit data, not fatal to other providers
                     failures += 1
                     query_row.status = "failed"
@@ -357,6 +378,10 @@ class EvidenceCollector:
             run.completed_at = utcnow()
             run.duration_ms = max(0, int((time.monotonic() - started_clock) * 1000))
             session.commit()
+            # ``sessionmaker`` defaults to expire_on_commit=True.  Refreshing
+            # before returning keeps the committed run readable even when a
+            # factory-created session is closed in the finally block.
+            session.refresh(run)
             return run
         except Exception as error:
             session.rollback()
