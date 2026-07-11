@@ -255,7 +255,7 @@ function navigateToImpact() {
 }
 
 function sourceLabel(val) {
-  const map = { weibo: '微博', xhs: '小红书', tieba: '贴吧', zhihu: '知乎' }
+  const map = { weibo: '微博', xhs: '小红书', tieba: '贴吧', zhihu: '知乎', ks: '快手' }
   return map[val] || val
 }
 

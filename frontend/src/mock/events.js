@@ -16,6 +16,7 @@ export const sourceOptions = [
   { value: 'xhs', label: '小红书' },
   { value: 'tieba', label: '贴吧' },
   { value: 'zhihu', label: '知乎' },
+  { value: 'ks', label: '快手' },
 ]
 
 /** 已发布事件列表（对应 public_events 表） */

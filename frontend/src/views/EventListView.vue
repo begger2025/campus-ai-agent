@@ -462,6 +462,7 @@ function sourceShort(value) {
   if (value === 'weibo') return '微'
   if (value === 'xhs') return '红'
   if (value === 'zhihu') return '知'
+  if (value === 'ks') return '快'
   return '贴'
 }
 </script>
