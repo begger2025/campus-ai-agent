@@ -16,7 +16,7 @@
 # 详细许可条款请参阅项目根目录下的LICENSE文件。
 # 使用本代码即表示您同意遵守上述原则和LICENSE中的所有条款。
 
-from sqlalchemy import create_engine, Column, Integer, Text, String, BigInteger
+from sqlalchemy import create_engine, Column, Integer, Text, String, BigInteger, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -493,3 +493,22 @@ class CrawlerRunHistory(Base):
     items_seen = Column(Integer, default=0, comment='平台返回原始条数（过滤前）')
     items_stored = Column(Integer, default=0, comment='真正入库条数（过滤/跳过后）')
     stop_reason = Column(String(64), default='', comment='停止原因（quota_reached | empty_page | window_exhausted | exception | completed）')
+
+class CrawlTaskQueue(Base):
+    """分布式协同爬取任务队列：任务 =（平台, 裸关键词）。乐观条件更新认领，租约防卡死。"""
+    __tablename__ = 'crawl_task_queue'
+    id = Column(Integer, primary_key=True, comment='主键ID')
+    platform = Column(String(16), comment='平台码 xhs/wb/tieba/zhihu/ks')
+    keyword = Column(String(255), comment='裸关键词')
+    status = Column(String(16), default='pending', comment='pending/claimed/done/failed')
+    priority = Column(Integer, default=0, comment='优先级，大者优先')
+    claimed_by = Column(String(64), comment='认领 worker id')
+    claimed_at = Column(BigInteger, comment='认领时间戳(ms)')
+    lease_expires_at = Column(BigInteger, comment='租约到期(ms)')
+    finished_at = Column(BigInteger, comment='完成时间戳(ms)')
+    items_stored = Column(Integer, default=0, comment='新增入库条数')
+    stop_reason = Column(String(32), comment='停止原因')
+    created_at = Column(BigInteger, comment='播种时间戳(ms)')
+    __table_args__ = (
+        Index('ix_crawl_task_queue_platform_status', 'platform', 'status'),
+    )
