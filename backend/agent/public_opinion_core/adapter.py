@@ -89,6 +89,15 @@ def calculate_heat_score(*, like_count: int, collect_count: int, comment_count: 
     )
 
 
+def parse_float(value: Any, default: float = 0.0) -> float:
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_keywords(value: Any, *, text: str = "") -> list[str]:
     if isinstance(value, list):
         raw_items = value
@@ -205,12 +214,20 @@ def processed_post_to_note(row: Mapping[str, Any] | Any, warnings: list[str] | N
         collect_count=collect_count,
         comment_count=comment_count,
         share_count=share_count,
-        heat_score=calculate_heat_score(
-            like_count=like_count,
-            collect_count=collect_count,
-            comment_count=comment_count,
-            share_count=share_count,
+        # 行里带了 heat_score 就照用：web 证据行没有互动量，它的热度来自来源权威度，
+        # 用四个 0 重算会把它抹成 0。爬虫平台的存量值本就是同一份互动量算出来的，
+        # 照用与重算等价。行里没有 heat_score（旧调用方直接喂 dict）才回退到重算。
+        heat_score=(
+            parse_float(row["heat_score"])
+            if row.get("heat_score") is not None
+            else calculate_heat_score(
+                like_count=like_count,
+                collect_count=collect_count,
+                comment_count=comment_count,
+                share_count=share_count,
+            )
         ),
+        heat_rank=parse_float(row.get("heat_rank")),
         sentiment=clean_text(row.get("sentiment")) or "neutral",
         risk_level=clean_text(row.get("risk_level")) or "low",
         top_comments=top_comments,

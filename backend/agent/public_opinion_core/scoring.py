@@ -33,12 +33,17 @@ def calculate_heat_score(
 
 
 def score_note(note: OpinionNote) -> OpinionNote:
-    note.heat_score = calculate_heat_score(
+    computed = calculate_heat_score(
         like_count=note.like_count,
         collect_count=note.collect_count,
         comment_count=note.comment_count,
         share_count=note.share_count,
     )
+    # 没有任何互动量的平台（web 证据行：网页没有赞/藏/评/转），热度来自来源权威度，
+    # 在入库时就算好了。这里用四个 0 重算只会得到 0，把上游那个真实的分数抹掉。
+    if computed == 0.0 and note.heat_score:
+        return note
+    note.heat_score = computed
     return note
 
 

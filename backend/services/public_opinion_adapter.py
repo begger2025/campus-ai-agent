@@ -102,6 +102,10 @@ def processed_post_to_agent_row(post: ProcessedPost) -> dict[str, Any]:
         "collect_count": post.collect_count,
         "comment_count": post.comment_count,
         "share_count": post.share_count,
+        # heat_score 展示用（web 行没有互动量，它的值来自来源权威度，不能靠 Agent 重算）；
+        # heat_rank 是平台内百分位，排序/选 top-N/加权重要性都用它。
+        "heat_score": post.heat_score,
+        "heat_rank": post.heat_rank,
         "sentiment": post.sentiment,
         "risk_level": post.risk_level,
     }

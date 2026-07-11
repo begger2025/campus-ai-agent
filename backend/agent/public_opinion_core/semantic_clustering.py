@@ -20,7 +20,7 @@ import hashlib
 import math
 import re
 
-from .clustering import build_event_from_group, sort_events
+from .clustering import build_event_from_group, note_rank_key, sort_events
 from .schemas import MemorySnapshot, OpinionEvent, OpinionNote
 
 
@@ -104,7 +104,8 @@ def _greedy_cluster(
     vectors: list[list[float]],
     threshold: float,
 ) -> list[dict]:
-    order = sorted(range(len(notes)), key=lambda i: notes[i].heat_score, reverse=True)
+    # 谁先当簇种子是"选择"，按可跨平台比较的 heat_rank 排（高互动量平台不再天然占先）。
+    order = sorted(range(len(notes)), key=lambda i: note_rank_key(notes[i]), reverse=True)
     clusters: list[dict] = []
     for i in order:
         vector = _normalize(vectors[i])
@@ -163,7 +164,7 @@ def _align_with_previous(
 
 
 def _new_key_and_title(group_notes: list[OpinionNote]) -> tuple[str, str]:
-    top_note = max(group_notes, key=lambda note: note.heat_score)
+    top_note = max(group_notes, key=note_rank_key)
     digest = hashlib.sha1(top_note.title.encode("utf-8")).hexdigest()[:8]
     keyword_counter: Counter[str] = Counter()
     for note in group_notes:

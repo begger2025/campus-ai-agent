@@ -34,6 +34,10 @@ class OpinionNote:
     comment_count: int = 0
     share_count: int = 0
     heat_score: float = 0.0
+    # 平台内归一化排序分（0-100 百分位，来自 processed_posts.heat_rank）。
+    # heat_score 跨平台不可比（xhs 中位 3924 / weibo 3），排序、选 top-N、加权重要性
+    # 一律用 heat_rank；heat_score 只用于展示。0 表示该行还没归一化（老数据）。
+    heat_rank: float = 0.0
     sentiment: str = "neutral"
     sentiment_score: float = 0.0
     risk_level: str = "low"
@@ -60,6 +64,8 @@ class OpinionEvent:
     sentiment: str
     heat_score: float
     source_count: int
+    # 成员帖 heat_rank 之和：事件之间排序用它（跨平台可比），heat_score 留给展示。
+    heat_rank: float = 0.0
     risk_score: float = 0.0
     first_seen_at: str = ""
     last_seen_at: str = ""

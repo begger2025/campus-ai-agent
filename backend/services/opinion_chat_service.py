@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.agent.public_opinion_core.clustering import cluster_notes
+from backend.agent.public_opinion_core.clustering import cluster_notes, note_rank_key
 from backend.agent.public_opinion_core.schemas import OpinionEvent, OpinionNote
 from backend.agent.public_opinion_core.scoring import score_notes
 from backend.agent.public_opinion_core.sentiment_risk import analyze_notes_sentiment_and_risk
@@ -97,9 +97,24 @@ class OpinionChatService:
         events = self._events(keyword)
         return sorted(
             events,
-            key=lambda event: (_RISK_RANK.get(event.risk_level, 0), event.risk_score, event.heat_score),
+            # 同风险时按 heat_rank（跨平台可比）排；heat_rank 未归一化的老数据回退 heat_score。
+            key=lambda event: (
+                _RISK_RANK.get(event.risk_level, 0),
+                event.risk_score,
+                event.heat_rank,
+                event.heat_score,
+            ),
             reverse=True,
         )
+
+    def _search_ranked_notes(self, keyword: str = "", limit: int = 10) -> list[OpinionNote]:
+        """检索场景挑 top-N：按 heat_rank 排序（选择），返回的帖子本身仍带真实 heat_score（展示）。
+
+        原来按 heat_score 排，等于把 weibo/zhihu/web 整体排到 xhs/ks 后面——微博头部帖的
+        原始热度（个位数）永远比不过小红书的长尾帖（几千）。
+        """
+
+        return sorted(self._notes(keyword), key=note_rank_key, reverse=True)[: max(limit, 0)]
 
     # ------------------------------------------------------------------ chat
 
@@ -177,7 +192,7 @@ class OpinionChatService:
             return self._response("hotspots", keyword, answer, routed, events)
 
         # search 兜底
-        notes = sorted(self._notes(keyword or message), key=lambda note: note.heat_score, reverse=True)[:10]
+        notes = self._search_ranked_notes(keyword or message, limit=10)
         answer = f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
         _record_turn(user_id, message, answer, "search")
         response = self._response("search", keyword or message, answer, routed, [])
@@ -235,7 +250,7 @@ class OpinionChatService:
     def _react_tools(self) -> dict[str, ReactTool]:
         def run_search(action_input: dict[str, Any]) -> dict[str, Any]:
             keyword = str(action_input.get("keyword") or "")
-            notes = sorted(self._notes(keyword), key=lambda note: note.heat_score, reverse=True)[:5]
+            notes = self._search_ranked_notes(keyword, limit=5)
             return {
                 "keyword": keyword,
                 "count": len(notes),

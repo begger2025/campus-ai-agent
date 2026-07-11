@@ -21,6 +21,11 @@ load_dotenv(ROOT / ".env", override=True, interpolate=False)
 from backend.admin_models import CrawlTask  # noqa: E402
 from backend.database import SessionLocal, init_db  # noqa: E402
 from backend.models import ProcessedPost, RawPost  # noqa: E402
+from backend.services.heat_ranking import (  # noqa: E402
+    WEB_PLATFORM,
+    recompute_heat_ranks,
+    refresh_web_heat_scores,
+)
 from backend.services.log_service import create_crawl_task, finish_crawl_task, write_system_log  # noqa: E402
 from scripts.ensure_wp4_schema import ensure_wp4_schema  # noqa: E402
 
@@ -38,6 +43,9 @@ class ProcessResult:
     skipped_empty: int = 0
     failed: int = 0
     refreshed: int = 0
+    # 归一化 pass 的产出：重算了 heat_rank 的行数 / 重算了来源权威度热度的 web 行数。
+    ranked: int = 0
+    web_rescored: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -304,7 +312,27 @@ def _process_raw_posts(
     if refresh:
         result.refreshed = _refresh_processed_posts(db, platforms)
 
+    if not dry_run:
+        # 归一化 pass：处理完之后，按平台把 heat_score 重算成平台内百分位 heat_rank。
+        # 百分位是语料相对的（一行新增会改变同平台每一行的百分位），所以这里做全量重算，
+        # 而不是给新行单独算一个——增量必然漂移。331 行的规模下 O(n log n) 成本可忽略。
+        db.flush()  # 让本轮新插入的行拿到 id / 进入 query 可见范围
+        result.web_rescored = _rescore_web_posts(db, platforms)
+        result.ranked = recompute_heat_ranks(db, platforms)
+
     return result
+
+
+def _rescore_web_posts(db: Session, platforms: Iterable[str] | None) -> int:
+    """web 行没有互动量，heat_score 恒为 0——改用来源权威度 + 核验强度重算。
+
+    只在 web 在本次处理范围内时才动（`--platform xhs` 不该顺手改 web 的分）。
+    """
+
+    platform_list = [item for item in platforms or [] if item]
+    if platform_list and WEB_PLATFORM not in platform_list:
+        return 0
+    return refresh_web_heat_scores(db)
 
 
 def process_raw_posts(
@@ -350,6 +378,8 @@ def _print_result(result: ProcessResult, dry_run: bool) -> None:
         f"skipped_duplicate={result.skipped_duplicate} "
         f"skipped_empty={result.skipped_empty} "
         f"refreshed={result.refreshed} "
+        f"web_rescored={result.web_rescored} "
+        f"ranked={result.ranked} "
         f"failed={result.failed}"
     )
     for error in result.errors[:5]:

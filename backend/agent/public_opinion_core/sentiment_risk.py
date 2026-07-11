@@ -107,6 +107,20 @@ def _hits(text: str, words: set[str]) -> list[str]:
     return [word for word in words if word in text]
 
 
+# "综合热度较高"的判定：原来用绝对阈值 heat_score >= 150。它跨平台不可比——weibo 的
+# heat_score 中位数只有 3，头部帖也就个位数，这条风险加权对 weibo/zhihu/web 永远不可能
+# 触发，只有 xhs/ks 吃得到。改成看平台内百分位：热度进本平台前 20% 才算"热度较高"。
+HIGH_HEAT_RANK = 80.0
+# 归一化之前的老数据 heat_rank 为 0，退回原来的绝对阈值，不让这条规则凭空失效。
+LEGACY_HIGH_HEAT_SCORE = 150.0
+
+
+def _is_high_heat(note: OpinionNote) -> bool:
+    if note.heat_rank:
+        return note.heat_rank >= HIGH_HEAT_RANK
+    return note.heat_score >= LEGACY_HIGH_HEAT_SCORE
+
+
 def detect_concerns(text: str) -> list[str]:
     concerns: list[str] = []
     for concern, words in CONCERN_RULES.items():
@@ -161,7 +175,7 @@ def analyze_note_sentiment_and_risk(note: OpinionNote) -> OpinionNote:
     if note.share_count >= 10:
         risk_score += 10
         reasons.append("分享传播量较高")
-    if note.heat_score >= 150:
+    if _is_high_heat(note):
         risk_score += 8
         reasons.append("综合热度较高")
 

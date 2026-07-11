@@ -69,6 +69,11 @@ class ProcessedPost(Base):
     comment_count: Mapped[int] = mapped_column(Integer, default=0)
     share_count: Mapped[int] = mapped_column(Integer, default=0)
     heat_score: Mapped[float] = mapped_column(Float, default=0.0)
+    # 平台内归一化排序分（0-100）：该帖 heat_score 在**它自己平台内**的百分位。
+    # heat_score 是原始互动量加权和，跨平台量级差 ~3 个数量级（xhs 中位 3924 / weibo 3），
+    # 直接排序会把 weibo/zhihu/web 全埋掉；排序/选 top-N/加权一律改用 heat_rank，
+    # heat_score 只留给展示。由 backend/services/heat_ranking.py 的归一化 pass 全量重算。
+    heat_rank: Mapped[float] = mapped_column(Float, default=0.0)
     sentiment: Mapped[str] = mapped_column(String(20), default="neutral")
     sentiment_score: Mapped[float] = mapped_column(Float, default=0.0)
     risk_level: Mapped[str] = mapped_column(String(20), default="low")

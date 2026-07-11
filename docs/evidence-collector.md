@@ -69,6 +69,53 @@ scope_decision == in_scope  且  verification_status == verified  且  review_st
 **幂等**：`raw_posts` 上 `(platform, external_id)` 唯一，交付使用
 `platform='web'`、`external_id=canonical_url_hash`，所以重复交付**不会**产生重复行。
 
+### 2.1 web 数据进了下游之后和爬虫数据有什么不同
+
+一条交付进来的网页证据和一条小红书帖子在 `raw_posts` 里是同构的行，但有一个关键差别：
+
+> **网页没有互动量。** `like_count` / `collect_count` / `comment_count` / `share_count`
+> 全是 0，因为一个网页根本没有"点赞"这回事——交付时（`review_delivery._raw_post_for`）
+> 也不会去伪造这四个数。
+
+而下游的热度公式恰恰只吃互动量：
+
+```text
+heat_score = like*1.0 + collect*1.5 + comment*3.0 + share*2.5
+```
+
+所以未经处理的话，**每一条 web 行的 `heat_score` 恒等于 0.0**——一条人工三重审核过的中大
+官方通知，会排在任何一条无聊帖子后面。这不是小问题：web 是唯一经过人工审核闸门的数据源。
+
+**修复**：`platform='web'` 的行不用互动量算热度，改用**来源权威度 + 核验强度**
+（`backend/services/heat_ranking.py::calculate_web_heat_score`，值域 0-100）：
+
+| 来源权威度（看域名） | 分 |  | 核验强度 | 分 |
+|---|---|---|---|---|
+| 中大官方域（`SYSU_OFFICIAL_DOMAIN_ALLOWLIST`） | 60 |  | `verified` | 40 |
+| 允许的新闻域（`NEWS_DOMAIN_ALLOWLIST`） | 30 |  | `needs_review` | 15 |
+| 其它 | 0 |  | 其它（pending/rejected/failed） | 0 |
+
+于是 web 内部的顺序是有意义的：官方+已核验 100 分封顶，未知域名+未核验 0 分垫底。绝对刻度
+无所谓——`heat_rank` 会在 web 平台内部再归一化一次（见下）。域名的点边界判定**直接复用**
+`scope_policy._domain_allowed`，不重写一份（`evil-sysu.edu.cn` 不能命中 `sysu.edu.cn`）。
+
+**这两个字段都不是凭空造的，也没有为此给 `raw_posts` 新增任何列**：
+
+- **域名**来自 `raw_posts.url`（交付时写入的 `canonical_url`）——本来就在行上。
+- **核验状态**不在 `raw_posts` 上，但交付时写了 `source_table='evidence_items'` 和
+  `source_raw_id=str(item.id)`，所以可以据此回查 `evidence_items.verification_status`
+  （`heat_ranking._web_verification_status`）。取的是**当前值**而不是交付那一刻的值：
+  交付闸门只保证交付时是 `verified`，之后 `verify_item` 仍可能把某条改成 rejected/failed。
+
+**跨平台可比性**：`heat_score` 跨平台不可比（xhs 中位数 3924，weibo 只有 3，web 是一个
+完全不同量纲的 0-100 权威度分），所以下游一切**排序 / 选 top-N / 加权重要性**都改用
+`processed_posts.heat_rank`——该行在**自己平台内**的百分位。web 的权威度分只需要在 web
+内部排得对，归一化之后它就能和 weibo、xhs 的头部帖公平竞争。详见 `docs/database.md`
+的 "热度：heat_score（展示）与 heat_rank（排序）"。
+
+> 现状（2026-07）：共享库里还**没有**任何 `platform='web'` 的行——证据采集尚未做过一次
+> 真实交付。上述 web 热度路径已实现并有单测覆盖，第一次交付落库后即自动生效。
+
 ---
 
 ## 3. 范围判定规则（scope_policy）

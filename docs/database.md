@@ -113,6 +113,7 @@ collect_count
 comment_count
 share_count
 heat_score
+heat_rank
 sentiment
 sentiment_score
 risk_level
@@ -136,6 +137,52 @@ publish_time
 raw_post_id -> raw_posts.id
 UNIQUE(raw_post_id)
 ```
+
+#### 热度：heat_score（展示）与 heat_rank（排序）
+
+`heat_score` 是**原始互动量的加权和**，由 `scripts/process_raw_posts.py::calculate_heat_score` 计算：
+
+```text
+heat_score = like*1.0 + collect*1.5 + comment*3.0 + share*2.5
+```
+
+它是一个真实、可解释、要展示给用户看的数，**公式不动**。但它**跨平台不可比**——
+各平台的互动量量级差约 3 个数量级（2026-07 在共享库 331 行 `processed_posts` 上实测）：
+
+| platform | 行数 | heat_score 中位数 |
+|---|---|---|
+| xhs | 182 | 3924 |
+| ks | 38 | 998 |
+| weibo | 10 | **3** |
+| zhihu | 101 | **5** |
+| web | 0（尚无交付） | **0**（网页没有互动量，恒为 0） |
+
+后果：任何按 `heat_score` 排序/取 top-N 的视图都会被 xhs/ks 占满，把 weibo（最重要的舆情
+平台）、zhihu 和人工审核过的 web 官方通知整个埋掉。
+
+`heat_rank`（0-100 float）是修复：该行 `heat_score` 在**它自己平台内**的百分位。
+
+- **算在哪**：百分位是**语料相对**的（一行新增会改变同平台每一行的百分位），不是逐行函数。
+  所以它由 `scripts/process_raw_posts.py` 在处理完之后跑的一次**归一化 pass** 全量重算
+  （按平台重算该平台所有行）。331 行的规模下 O(n log n) 全量重算成本可忽略，且避免了
+  增量更新必然产生的漂移。纯函数 `backend/services/heat_ranking.py::percentile_ranks`
+  可单测，DB pass 只剩薄薄一层。
+- **并列怎么处理**：**中位秩**（mid-rank）——`100 * (比它小的个数 + 并列个数/2) / 总数`。
+  相同分数拿到完全相同的百分位，绝不靠 id 偷偷分先后。由此单条的平台得 50（中性）而不是
+  0 或 100，且任何行的百分位都严格落在 (0, 100) 内，没有哪一行会被判 0 分沉底。
+- **谁用哪个**：**排序 / 选 top-N / 加权重要性一律用 `heat_rank`；展示给用户看的仍是
+  `heat_score`。** 已切换的调用点见 `backend/agent/public_opinion_core/`
+  （`clustering.note_rank_key`、`sort_events`、`semantic_clustering` 簇种子序、
+  `sentiment_risk._is_high_heat`）与 `backend/services/opinion_chat_service.py`
+  （`_search_ranked_notes`、`_risk_sorted_events`）。
+- **老数据兜底**：`heat_rank` 为 0 表示该行还没归一化，此时排序回退到 `heat_score`，
+  行为与改造前一致。
+
+`web` 平台的 `heat_score` 不来自互动量（网页没有赞/藏/评/转），而来自**来源权威度 + 核验
+强度**，见 `docs/evidence-collector.md`。
+
+**迁移**：`create_all()` 不会 ALTER 已存在的表，新增 `heat_rank` 列必须跑
+`scripts/add_processed_posts_heat_rank.py`（幂等，支持 `--dry-run`；加列 + 回填存量行）。
 
 ### public_events
 
