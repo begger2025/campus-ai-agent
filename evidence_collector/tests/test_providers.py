@@ -156,6 +156,30 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         registry = ProviderRegistry.from_config(LegacyCollector())
         self.assertEqual(registry.enabled_provider_ids, IDS)
 
+    def test_mapping_settings_accept_enabled_alias_for_all_providers(self) -> None:
+        config = {
+            provider_id: {
+                "api_key": "mapping-secret",
+                "model": f"{provider_id}-model",
+                "base_url": "https://api.invalid",
+                "enabled": True,
+            }
+            for provider_id in IDS
+        }
+        registry = ProviderRegistry.from_config(config)
+        self.assertEqual(registry.enabled_provider_ids, IDS)
+
+    def test_normalization_rejects_forged_provider_provenance(self) -> None:
+        with self.assertRaises(InvalidSearchHitError):
+            normalize_hit(
+                {
+                    "url": "https://example.invalid/a",
+                    "quote": "quoted evidence",
+                    "provider": "glm",
+                },
+                provider_id="deepseek",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

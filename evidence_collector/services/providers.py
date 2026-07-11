@@ -147,10 +147,14 @@ class ProviderSettings:
         # Environment-style mappings are accepted as a convenience, while
         # retaining a single credential-free settings representation.
         key = data.get("api_key", data.get("API_KEY", data.get("key")))
-        web_enabled = data.get(
-            "web_search_enabled",
-            data.get("WEB_SEARCH_ENABLED", data.get("web_search", False)),
-        )
+        web_enabled = data.get("web_search_enabled")
+        if web_enabled is None:
+            web_enabled = data.get("WEB_SEARCH_ENABLED")
+        if web_enabled is None:
+            web_enabled = data.get("web_search")
+        if web_enabled is None:
+            # Older settings used ``enabled`` for the same web-search gate.
+            web_enabled = data.get("enabled", False)
         if isinstance(web_enabled, str):
             web_enabled = web_enabled.strip().lower() == "true"
         return cls(
@@ -272,6 +276,11 @@ def normalize_hit(
             if alias in data:
                 data["quote"] = data[alias]
                 break
+    raw_provider = data.get("provider") or data.get("provider_id")
+    if raw_provider and provider_id and str(raw_provider).strip().lower() != provider_id.strip().lower():
+        raise InvalidSearchHitError(
+            f"search hit provider {raw_provider!r} does not match {provider_id!r}"
+        )
     if not data.get("provider"):
         data["provider"] = data.get("provider_id", provider_id)
     if not data.get("model"):
