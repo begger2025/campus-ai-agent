@@ -107,10 +107,25 @@ async def test_complete_task_updates_row(monkeypatch):
     session.execute = AsyncMock(return_value=_result(rowcount=1))
     monkeypatch.setattr("store.crawl_queue.get_session", _fake_get_session_factory(session))
 
-    await crawl_queue.complete_task(7, "done", 12, "quota_reached")
+    await crawl_queue.complete_task(7, "worker-A", "done", 12, "quota_reached")
 
     session.execute.assert_awaited_once()
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_complete_task_rejected_when_reclaimed(monkeypatch):
+    session = MagicMock()
+    session.rollback = AsyncMock()
+    session.commit = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(rowcount=0))  # 已被别的 worker 认领
+    monkeypatch.setattr("store.crawl_queue.get_session", _fake_get_session_factory(session))
+    warn = MagicMock()
+    monkeypatch.setattr("store.crawl_queue.utils.logger.warning", warn)
+
+    await crawl_queue.complete_task(7, "worker-A", "done", 12, "quota_reached")  # 不应抛异常
+
+    warn.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -120,7 +135,7 @@ async def test_run_history_delta_sums_new_rows(monkeypatch):
     session.execute = AsyncMock(return_value=_result(all_rows=[(5, "completed"), (7, "quota_reached")]))
     monkeypatch.setattr("store.crawl_queue.get_session", _fake_get_session_factory(session))
 
-    total, reason = await crawl_queue.run_history_delta("ks", before_id=10)
+    total, reason = await crawl_queue.run_history_delta("ks", 10, "中山大学 宿舍")
 
     assert total == 12
     assert reason == "quota_reached"  # 取新增行里最后一行的 stop_reason
@@ -133,7 +148,7 @@ async def test_run_history_delta_no_new_rows_returns_skipped(monkeypatch):
     session.execute = AsyncMock(return_value=_result(all_rows=[]))
     monkeypatch.setattr("store.crawl_queue.get_session", _fake_get_session_factory(session))
 
-    total, reason = await crawl_queue.run_history_delta("ks", before_id=10)
+    total, reason = await crawl_queue.run_history_delta("ks", 10, "中山大学 宿舍")
 
     assert total == 0
     assert reason == "skipped"

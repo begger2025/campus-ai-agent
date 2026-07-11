@@ -75,20 +75,26 @@ async def claim_task(platform: str, worker_id: str) -> Optional[dict]:
         return None
 
 
-async def complete_task(task_id: int, status: str, items_stored: int, stop_reason: str) -> None:
-    """把任务标记为 done/failed 并回填结果统计。"""
+async def complete_task(task_id: int, worker_id: str, status: str, items_stored: int, stop_reason: str) -> None:
+    """把任务标记为 done/failed 并回填结果统计；仅当仍是本 worker 持有时生效（防租约被回收后覆盖）。"""
     if not _is_db_backend():
         return
     now = int(utils.get_current_timestamp())
     async with get_session() as session:
-        await session.execute(
+        result = await session.execute(
             text(
                 "UPDATE crawl_task_queue SET status=:st, finished_at=:now, "
-                "items_stored=:n, stop_reason=:r WHERE id=:id"
+                "items_stored=:n, stop_reason=:r WHERE id=:id AND claimed_by=:w"
             ),
-            {"st": status, "now": now, "n": int(items_stored), "r": str(stop_reason)[:32], "id": int(task_id)},
+            {"st": status, "now": now, "n": int(items_stored), "r": str(stop_reason)[:32],
+             "id": int(task_id), "w": worker_id},
         )
         await session.commit()
+        if result.rowcount == 0:
+            utils.logger.warning(
+                f"[store.crawl_queue.complete_task] completion rejected (task {task_id} "
+                f"reclaimed by another worker), worker={worker_id}"
+            )
 
 
 async def max_run_history_id(platform: str) -> int:
@@ -105,10 +111,12 @@ async def max_run_history_id(platform: str) -> int:
     return int(val or 0)
 
 
-async def run_history_delta(platform: str, before_id: int) -> Tuple[int, str]:
-    """取 id>before_id 的新增 run_history 行：返回（items_stored 之和, 最后一行 stop_reason）。
+async def run_history_delta(platform: str, before_id: int, source_keyword: str) -> Tuple[int, str]:
+    """取 id>before_id 且 source_keyword 匹配的新增 run_history 行：返回（items_stored 之和, 最后一行 stop_reason）。
 
-    宽泛词被拦截时 search 不写行 → 无新增行 → 返回 (0, "skipped")。
+    加 source_keyword 过滤避免多成员同平台并发时把别的 worker 的行算进本任务统计
+    （每个 (platform,keyword) 任务只被一个 worker 认领，故 source_keyword 唯一定位本任务）。
+    宽泛词被拦截时 search 不写行 → 无匹配行 → 返回 (0, "skipped")。
     """
     if not _is_db_backend():
         return 0, ""
@@ -117,9 +125,9 @@ async def run_history_delta(platform: str, before_id: int) -> Tuple[int, str]:
             await session.execute(
                 text(
                     "SELECT items_stored, stop_reason FROM crawler_run_history "
-                    "WHERE platform=:p AND id > :bid ORDER BY id ASC"
+                    "WHERE platform=:p AND id > :bid AND source_keyword=:kw ORDER BY id ASC"
                 ),
-                {"p": platform, "bid": int(before_id)},
+                {"p": platform, "bid": int(before_id), "kw": source_keyword},
             )
         ).all()
     if not rows:
