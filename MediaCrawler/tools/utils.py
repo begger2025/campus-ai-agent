@@ -19,7 +19,11 @@
 
 
 import argparse
+import asyncio
 import logging
+import random
+
+import config
 
 from .crawler_util import *
 from .slider_util import *
@@ -53,3 +57,22 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+async def random_crawl_sleep() -> None:
+    """请求间随机抖动睡眠：在 [CRAWLER_MIN_SLEEP_SEC, CRAWLER_MAX_SLEEP_SEC] 均匀取值。
+
+    固定间隔比随机更易被识别为机器人；本 helper 用抖动降低行为指纹。
+    配置非法（min>max 或非数字）时回退到固定睡 CRAWLER_MAX_SLEEP_SEC，防误配。
+    """
+    max_s = getattr(config, "CRAWLER_MAX_SLEEP_SEC", 18)
+    min_s = getattr(config, "CRAWLER_MIN_SLEEP_SEC", max_s)
+    try:
+        lo, hi = float(min_s), float(max_s)
+    except (TypeError, ValueError):
+        await asyncio.sleep(max_s)
+        return
+    if lo > hi or lo < 0:
+        await asyncio.sleep(max_s)
+        return
+    await asyncio.sleep(random.uniform(lo, hi))
