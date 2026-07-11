@@ -19,9 +19,52 @@ class CanonicalizeTests(unittest.TestCase):
         )
         self.assertEqual(value, "https://example.com/notice?id=42&tag=one")
 
-    def test_meaningful_query_order_is_preserved(self) -> None:
+    def test_meaningful_query_parameters_are_sorted(self) -> None:
+        # Providers return the same article with different parameter order; a
+        # canonical form must sort them so the two collapse to one document.
         value = canonicalize_url("https://example.com/?z=1&utm_medium=x&a=2&z=3")
-        self.assertEqual(value, "https://example.com/?z=1&a=2&z=3")
+        self.assertEqual(value, "https://example.com/?a=2&z=1&z=3")
+
+    def test_query_parameter_order_does_not_change_the_hash(self) -> None:
+        first = canonical_url_hash("https://news.sysu.edu.cn/a?b=1&c=2")
+        second = canonical_url_hash("https://news.sysu.edu.cn/a?c=2&b=1")
+        self.assertEqual(first, second)
+
+    def test_empty_path_is_normalized_to_root(self) -> None:
+        self.assertEqual(
+            canonicalize_url("https://news.sysu.edu.cn"),
+            canonicalize_url("https://news.sysu.edu.cn/"),
+        )
+        self.assertEqual(
+            canonical_url_hash("https://news.sysu.edu.cn"),
+            canonical_url_hash("https://news.sysu.edu.cn/"),
+        )
+
+    def test_default_port_is_stripped(self) -> None:
+        self.assertEqual(
+            canonical_url_hash("https://news.sysu.edu.cn/a"),
+            canonical_url_hash("https://news.sysu.edu.cn:443/a"),
+        )
+        self.assertEqual(
+            canonical_url_hash("http://news.sysu.edu.cn/a"),
+            canonical_url_hash("http://news.sysu.edu.cn:80/a"),
+        )
+
+    def test_non_default_port_is_retained(self) -> None:
+        self.assertEqual(
+            canonicalize_url("https://news.sysu.edu.cn:8443/a"),
+            "https://news.sysu.edu.cn:8443/a",
+        )
+        self.assertNotEqual(
+            canonical_url_hash("https://news.sysu.edu.cn/a"),
+            canonical_url_hash("https://news.sysu.edu.cn:8443/a"),
+        )
+
+    def test_ipv6_host_is_bracketed_and_normalized(self) -> None:
+        self.assertEqual(
+            canonicalize_url("https://[2001:DB8::1]:443"),
+            "https://[2001:db8::1]/",
+        )
 
     def test_malformed_url_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -134,6 +177,56 @@ class ScopePolicyTests(unittest.TestCase):
             "Sun Yat-sen University announced the new program.",
         )
         self.assertEqual(result.decision, "needs_review")
+
+    def test_allowlisted_official_domain_establishes_the_entity(self) -> None:
+        # Real SYSU notices on the university's own site say 我校/学校 rather
+        # than spelling out 中山大学; the domain itself proves the entity.
+        result = assess_scope(
+            "official",
+            "news.sysu.edu.cn",
+            "关于东校区宿舍搬迁的通知",
+            "学校决定于本月启动搬迁工作，请同学配合。",
+        )
+        self.assertEqual(result.decision, "in_scope")
+        self.assertIn(
+            "allowlisted official domain establishes the SYSU entity",
+            result.reasons,
+        )
+
+    def test_official_domain_entity_reason_is_distinct_from_text_entity(self) -> None:
+        by_domain = assess_scope(
+            "official", "news.sysu.edu.cn", "通知", "我校将于下周启动搬迁。"
+        )
+        by_text = assess_scope(
+            "official", "news.sysu.edu.cn", "中山大学通知", "中山大学发布通知。"
+        )
+        self.assertEqual(by_domain.decision, "in_scope")
+        self.assertEqual(by_text.decision, "in_scope")
+        self.assertNotEqual(by_domain.reason, by_text.reason)
+
+    def test_news_domain_still_requires_an_explicit_entity(self) -> None:
+        # A passing mention on an allowlisted news domain must not be hoovered
+        # up: the news site has to actually name the university.
+        result = assess_scope(
+            "news",
+            "people.com.cn",
+            "关于东校区宿舍搬迁的通知",
+            "学校决定于本月启动搬迁工作。",
+        )
+        self.assertEqual(result.decision, "out_of_scope")
+
+    def test_non_allowlisted_official_domain_without_entity_is_out_of_scope(self) -> None:
+        result = assess_scope(
+            "official",
+            "notice.example.com",
+            "关于宿舍搬迁的通知",
+            "学校决定于本月启动搬迁工作。",
+        )
+        self.assertEqual(result.decision, "out_of_scope")
+
+    def test_official_domain_shortcut_still_requires_a_quote(self) -> None:
+        result = assess_scope("official", "news.sysu.edu.cn", "通知", "   ")
+        self.assertEqual(result.decision, "out_of_scope")
 
 
 if __name__ == "__main__":

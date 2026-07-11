@@ -1,8 +1,9 @@
 """Canonical URL and stable external identifier helpers.
 
 The functions in this module are deliberately pure: they do not resolve URLs
-or make network requests.  Tracking query parameters are removed while the
-relative order of all meaningful query parameters is retained.
+or make network requests.  Tracking query parameters are removed and the
+remaining meaningful parameters are sorted so that the same page always yields
+the same canonical form, whichever provider surfaced it.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _TRACKING_KEYS = frozenset({"spm", "from"})
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def canonicalize_url(url: str) -> str:
@@ -20,9 +22,15 @@ def canonicalize_url(url: str) -> str:
 
     Host names and schemes are lower-cased, fragments are discarded, and
     common tracking parameters (``utm_*``, ``spm`` and ``from``) are removed.
-    Meaningful query parameters, including duplicate keys, retain their input
-    order.  Empty, malformed, credential-bearing, and non-HTTP(S) URLs raise
-    :class:`ValueError`.
+    An empty path becomes ``/`` and the scheme's default port (80 for http,
+    443 for https) is dropped, so ``https://host`` , ``https://host/`` and
+    ``https://host:443/`` share one canonical form.
+
+    Meaningful query parameters are sorted by ``(key, value)``; different
+    providers return the same article with the parameters in different orders
+    and an order-sensitive canonical form would store that page twice.
+    Duplicate keys are all retained.  Empty, malformed, credential-bearing,
+    and non-HTTP(S) URLs raise :class:`ValueError`.
     """
 
     if not isinstance(url, str):
@@ -56,7 +64,12 @@ def canonicalize_url(url: str) -> str:
         raise ValueError("URL must include a hostname")
     # urlunsplit expects IPv6 literals to remain bracketed in netloc.
     host_for_netloc = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
-    netloc = host_for_netloc if port is None else f"{host_for_netloc}:{port}"
+    # The scheme's default port carries no information: ``https://host/a`` and
+    # ``https://host:443/a`` are the same page and must dedupe to one row.
+    if port is None or port == _DEFAULT_PORTS[scheme]:
+        netloc = host_for_netloc
+    else:
+        netloc = f"{host_for_netloc}:{port}"
 
     meaningful_query: list[tuple[str, str]] = []
     for key, query_value in parse_qsl(parsed.query, keep_blank_values=True):
@@ -65,10 +78,12 @@ def canonicalize_url(url: str) -> str:
             continue
         meaningful_query.append((key, query_value))
 
-    query = urlencode(meaningful_query, doseq=True)
-    # Keep an empty path empty; adding ``/`` would be an extra normalization
-    # not required by the policy and would alter otherwise valid URLs.
-    return urlunsplit((scheme, netloc, parsed.path, query, ""))
+    # Sort so that ``?b=1&c=2`` and ``?c=2&b=1`` canonicalize identically.
+    query = urlencode(sorted(meaningful_query), doseq=True)
+    # An empty path is the site root; normalize it so ``https://host`` and
+    # ``https://host/`` produce the same canonical_url_hash.
+    path = parsed.path or "/"
+    return urlunsplit((scheme, netloc, path, query, ""))
 
 
 def stable_external_id(url: str) -> str:

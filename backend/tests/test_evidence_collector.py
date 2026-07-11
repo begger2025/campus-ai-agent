@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from sqlalchemy import create_engine
@@ -9,8 +10,10 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.database import Base
 from backend.models_evidence import EvidenceDocument, EvidenceItem, EvidenceQuery
+from backend.services.evidence.canonicalize import canonical_url_hash, canonicalize_url
 from backend.services.evidence.collector import EvidenceCollector, sanitize_error
 from backend.services.evidence.providers import SearchHit
+from backend.services.evidence.scope_policy import assess_scope
 
 
 def make_evidence_session(engine):
@@ -50,6 +53,38 @@ class QualityScope:
     decision = "in_scope"
     reasons = ["test scope"]
     quality_score = 0.87
+
+
+class Gate:
+    """Release only once ``expected`` providers are inside ``search`` at once.
+
+    A sequential fan-out never reaches the second arrival, so the first waiter
+    times out and the query is recorded as failed; a concurrent fan-out passes.
+    """
+
+    def __init__(self, expected: int) -> None:
+        self.expected = expected
+        self.arrived = 0
+        self.opened = asyncio.Event()
+        self.max_concurrent = 0
+
+    async def pass_through(self) -> None:
+        self.arrived += 1
+        self.max_concurrent = max(self.max_concurrent, self.arrived)
+        if self.arrived >= self.expected:
+            self.opened.set()
+        await asyncio.wait_for(self.opened.wait(), timeout=2)
+
+
+class GatedProvider:
+    def __init__(self, provider_id: str, gate: Gate, hits: list[SearchHit] | None = None):
+        self.provider_id = provider_id
+        self.gate = gate
+        self.hits = hits or []
+
+    async def search(self, request):
+        await self.gate.pass_through()
+        return list(self.hits)
 
 
 class CollectorTests(unittest.IsolatedAsyncioTestCase):
@@ -202,6 +237,126 @@ class CollectorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.session.query(EvidenceDocument).count(), 1)
         self.assertEqual(self.session.query(EvidenceItem).count(), 2)
+
+    async def test_concurrent_document_insert_is_recovered_not_fatal(self):
+        """A racing worker committing the same canonical URL must not kill the run.
+
+        ``collect`` does SELECT-then-INSERT on ``evidence_documents``.  The
+        injected ``scope_assessor`` is invoked inside exactly that window, so it
+        is used here to make the conflicting row genuinely exist in the database
+        before the collector's own INSERT reaches the UNIQUE constraint.  The
+        resulting ``IntegrityError`` is real, raised by the real constraint.
+        """
+
+        canonical = canonicalize_url(str(self.official.url))
+        digest = canonical_url_hash(canonical)
+        raced: list[EvidenceDocument] = []
+
+        def racing_assessor(source_type, domain, title, quote):
+            if not raced:
+                winner = EvidenceDocument(
+                    source_type="official",
+                    source_url=str(self.official.url),
+                    canonical_url=canonical,
+                    canonical_url_hash=digest,
+                    domain=domain,
+                    title="raced in by a concurrent worker",
+                    evidence_quote="另一台机器先写入了同一条文档。",
+                )
+                self.session.add(winner)
+                self.session.flush()
+                raced.append(winner)
+            return assess_scope(source_type, domain, title, quote)
+
+        provider = FakeProvider("deepseek", [self.official])
+        collector = EvidenceCollector(
+            self.session,
+            FakeRegistry({"deepseek": provider}),
+            scope_assessor=racing_assessor,
+        )
+
+        run = await collector.collect("topic", ["q"], provider_ids=["deepseek"])
+
+        self.assertEqual(run.status, "completed")
+        query = self.session.query(EvidenceQuery).one()
+        self.assertEqual(query.status, "completed")
+        self.assertIsNone(query.error)
+        # The row the other worker wrote is reused; no duplicate is created and
+        # the hit is still attributed to this run.
+        self.assertEqual(self.session.query(EvidenceDocument).count(), 1)
+        item = self.session.query(EvidenceItem).one()
+        self.assertEqual(item.document_id, raced[0].id)
+        self.assertEqual(item.canonical_url_hash, digest)
+
+    async def test_provider_queries_run_concurrently(self):
+        gate = Gate(expected=3)
+        providers = {
+            "deepseek": GatedProvider("deepseek", gate, [self.official]),
+            "qwen": GatedProvider("qwen", gate, [self.review]),
+            "glm": GatedProvider("glm", gate, [self.out_scope]),
+        }
+        collector = EvidenceCollector(self.session, FakeRegistry(providers))
+
+        run = await collector.collect(
+            "topic", ["q"], provider_ids=["deepseek", "qwen", "glm"]
+        )
+
+        self.assertEqual(gate.max_concurrent, 3)
+        self.assertEqual(run.status, "completed")
+        queries = self.session.query(EvidenceQuery).all()
+        self.assertEqual(len(queries), 3)
+        self.assertTrue(all(query.status == "completed" for query in queries))
+        self.assertEqual(self.session.query(EvidenceItem).count(), 3)
+
+    async def test_partial_run_status_when_only_some_providers_fail(self):
+        working = FakeProvider("deepseek", [self.official])
+        failing = FakeProvider("qwen", error=RuntimeError("api_key=supersecret"))
+        collector = EvidenceCollector(
+            self.session, FakeRegistry({"deepseek": working, "qwen": failing})
+        )
+
+        run = await collector.collect("topic", ["q"], provider_ids=["deepseek", "qwen"])
+
+        self.assertEqual(run.status, "partial")
+        self.assertIn("1 of 2", run.sanitized_error_summary or "")
+        statuses = {
+            query.provider: query.status
+            for query in self.session.query(EvidenceQuery).all()
+        }
+        self.assertEqual(statuses, {"deepseek": "completed", "qwen": "failed"})
+        failed = (
+            self.session.query(EvidenceQuery)
+            .filter(EvidenceQuery.provider == "qwen")
+            .one()
+        )
+        self.assertNotIn("supersecret", failed.error or "")
+        self.assertIn("redacted", failed.error or "")
+        # The surviving provider's evidence is still persisted.
+        self.assertEqual(self.session.query(EvidenceItem).count(), 1)
+
+    async def test_concurrent_fanout_keeps_dedup_deterministic(self):
+        # Both providers return the same page; the slower one must not win the
+        # dedup race.  Persistence order follows the query spec order.
+        slow = FakeProvider("deepseek", [self.official])
+        fast = FakeProvider("qwen", [self.duplicate])
+
+        original_search = slow.search
+
+        async def delayed_search(request):
+            await asyncio.sleep(0.05)
+            return await original_search(request)
+
+        slow.search = delayed_search
+        collector = EvidenceCollector(
+            self.session, FakeRegistry({"deepseek": slow, "qwen": fast})
+        )
+
+        run = await collector.collect("topic", ["q"], provider_ids=["deepseek", "qwen"])
+
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(self.session.query(EvidenceDocument).count(), 1)
+        item = self.session.query(EvidenceItem).one()
+        self.assertEqual(item.retrieval_provider, "deepseek")
 
 
 if __name__ == "__main__":

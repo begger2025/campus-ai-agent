@@ -10,7 +10,9 @@ from backend.services.evidence.config import SUPPORTED_PROVIDER_IDS
 
 
 SOURCE_TYPES = ("web", "news", "official", "academic", "social", "other")
-RUN_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
+# "partial" covers the mixed case: some provider queries failed but others
+# returned usable evidence, so the run is neither completed nor failed.
+RUN_STATUSES = ("pending", "running", "completed", "partial", "failed", "cancelled")
 QUERY_STATUSES = ("pending", "running", "completed", "failed")
 VERIFICATION_STATUSES = ("pending", "verified", "rejected", "needs_review", "failed")
 REVIEW_STATUSES = ("pending", "approved", "rejected", "needs_review")

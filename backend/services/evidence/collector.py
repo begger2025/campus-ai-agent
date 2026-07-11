@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -18,6 +19,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models_evidence import (
@@ -35,6 +37,9 @@ from backend.services.evidence.providers import (
     normalize_hits,
 )
 from backend.services.evidence.scope_policy import ScopeDecision, assess_scope
+
+
+logger = logging.getLogger(__name__)
 
 
 SYSU_QUERY_CONTEXT = (
@@ -223,6 +228,85 @@ class EvidenceCollector:
         self.scope_assessor = scope_assessor
         self.query_context = query_context.strip()
 
+    async def _search_one(
+        self,
+        spec: Mapping[str, Any],
+        *,
+        default_max_results: int,
+        default_prompt_version: str,
+    ) -> tuple[SearchRequest | None, list[SearchHit], Exception | None]:
+        """Resolve one provider and run its query without touching the Session.
+
+        Returned instead of raised so that ``asyncio.gather`` fan-out keeps the
+        long-standing invariant that one failing provider never fails the
+        others.  The exception is handed back for the caller to sanitize into
+        the query's audit row.
+        """
+
+        provider_id = str(spec.get("provider", "")).strip().lower()
+        query_text = str(spec.get("query", "")).strip()
+        prompt_value = str(spec.get("prompt_version", default_prompt_version)).strip()
+        try:
+            # Resolve and validate inside the query boundary so a bad provider
+            # or request is retained as an auditable failure.
+            provider = self.registry.get(provider_id)
+            request = SearchRequest(
+                provider=provider_id,
+                model=spec.get("model"),
+                query=f"{self.query_context} 原始检索词：{query_text}",
+                max_results=int(spec.get("max_results", default_max_results)),
+                prompt_version=prompt_value,
+            )
+            raw_hits = await provider.search(request)
+            hits = normalize_hits(raw_hits, provider_id=provider_id, model=request.model)
+            return request, list(hits), None
+        except Exception as error:  # provider errors are audit data, not fatal
+            return None, [], error
+
+    def _document_for(
+        self,
+        session: Session,
+        *,
+        digest: str,
+        build: Callable[[], EvidenceDocument],
+    ) -> EvidenceDocument | None:
+        """Return the document for ``digest``, inserting it if we get there first.
+
+        Two collectors working overlapping topics can insert the same canonical
+        URL at the same time, so a plain SELECT-then-INSERT loses the race and
+        the resulting ``IntegrityError`` would poison the whole session.  The
+        insert runs inside a SAVEPOINT: on conflict we roll back only that
+        savepoint and re-read the row the winner just committed.
+        """
+
+        existing = (
+            session.query(EvidenceDocument)
+            .filter(EvidenceDocument.canonical_url_hash == digest)
+            .one_or_none()
+        )
+        if existing is not None:
+            return existing
+
+        document = build()
+        try:
+            with session.begin_nested():
+                session.add(document)
+                session.flush()
+            return document
+        except IntegrityError:
+            existing = (
+                session.query(EvidenceDocument)
+                .filter(EvidenceDocument.canonical_url_hash == digest)
+                .one_or_none()
+            )
+            if existing is None:
+                logger.warning(
+                    "evidence document %s conflicted on insert but could not be "
+                    "re-read; skipping this hit",
+                    digest,
+                )
+            return existing
+
     def _session(self) -> tuple[Session, bool]:
         if isinstance(self._session_or_factory, Session) or hasattr(self._session_or_factory, "add"):
             return self._session_or_factory, False  # type: ignore[return-value]
@@ -275,109 +359,125 @@ class EvidenceCollector:
         failures = 0
         seen_hashes: set[str] = set()
         try:
+            # Every spec gets its own auditable query row up front.  They are
+            # created before the fan-out because the Session is not task-safe:
+            # only the network calls run concurrently, all ORM writes stay on
+            # this single sequential path.
+            query_rows: list[EvidenceQuery] = []
             for spec in specs:
-                provider_id = str(spec.get("provider", "")).strip().lower()
-                query_text = str(spec.get("query", "")).strip()
                 # Keep audit columns valid even when request construction is
                 # intentionally going to fail (for example, an empty or
                 # overlong prompt version).
                 prompt_value = str(spec.get("prompt_version", prompt_version)).strip()
-                audit_prompt = prompt_value[:64] or "invalid"
                 query_row = EvidenceQuery(
                     run_id=run.id,
-                    provider=provider_id,
+                    provider=str(spec.get("provider", "")).strip().lower(),
                     model=(str(spec.get("model")).strip()[:128] if spec.get("model") else None),
-                    prompt_version=audit_prompt,
-                    query_text=query_text,
+                    prompt_version=prompt_value[:64] or "invalid",
+                    query_text=str(spec.get("query", "")).strip(),
                     status="running",
                 )
                 session.add(query_row)
-                session.flush()
-                try:
-                    # Resolve and validate inside the query boundary so a bad
-                    # provider or request is retained as an auditable failure.
-                    provider = self.registry.get(provider_id)
-                    request_query = f"{self.query_context} 原始检索词：{query_text}"
-                    request = SearchRequest(
-                        provider=provider_id,
-                        model=spec.get("model"),
-                        query=request_query,
-                        max_results=int(spec.get("max_results", max_results)),
-                        prompt_version=prompt_value,
+                query_rows.append(query_row)
+            session.flush()
+
+            # Providers are independent web-search calls; running them serially
+            # cost minutes per run.  Failures are returned, not raised, so one
+            # bad provider still cannot fail the others.
+            results = await asyncio.gather(
+                *(
+                    self._search_one(
+                        spec,
+                        default_max_results=max_results,
+                        default_prompt_version=prompt_version,
                     )
-                    raw_hits = await provider.search(request)
-                    hits = normalize_hits(
-                        raw_hits,
-                        provider_id=provider_id,
-                        model=request.model,
-                    )
-                    for hit in hits:
-                        try:
-                            canonical = canonicalize_url(str(hit.url))
-                            digest = canonical_url_hash(canonical)
-                        except (TypeError, ValueError):
-                            # Provider normalization normally catches this;
-                            # keep malformed transport output out of the DB.
-                            continue
-                        if digest in seen_hashes:
-                            continue
-                        seen_hashes.add(digest)
-                        existing = (
-                            session.query(EvidenceDocument)
-                            .filter(EvidenceDocument.canonical_url_hash == digest)
-                            .one_or_none()
-                        )
-                        domain = urlsplit(canonical).hostname
-                        source_type = hit.source_type
-                        title = hit.title
-                        quote = hit.quote.strip()
-                        scope = self.scope_assessor(source_type, domain, title, quote)
-                        reasons = json.dumps(scope.reasons, ensure_ascii=False)
-                        if existing is None:
-                            existing = EvidenceDocument(
-                                query_id=query_row.id,
-                                source_type=source_type,
-                                source_url=str(hit.url),
-                                canonical_url=canonical,
-                                canonical_url_hash=digest,
-                                domain=domain,
-                                document_type=_metadata(hit, "document_type"),
-                                title=title,
-                                publisher=_metadata(hit, "publisher"),
-                                published_at=_published_at(_metadata(hit, "published_at")),
-                                evidence_quote=quote,
-                            )
-                            session.add(existing)
-                            session.flush()
-                        item = EvidenceItem(
-                            run_id=run.id,
-                            document_id=existing.id,
-                            source_url=str(hit.url),
-                            canonical_url=canonical,
-                            canonical_url_hash=digest,
-                            source_domain=domain,
-                            source_type=source_type,
-                            published_at=existing.published_at,
-                            evidence_quote=quote,
-                            retrieval_provider=provider_id,
-                            retrieval_model=hit.model or request.model,
-                            prompt_version=request.prompt_version,
-                            scope_decision=scope.decision,
-                            scope_reasons=reasons,
-                            quality_score=getattr(scope, "quality_score", None),
-                            verification_status="pending",
-                            review_status="pending",
-                        )
-                        session.add(item)
-                    query_row.status = "completed"
-                    query_row.completed_at = utcnow()
-                except Exception as error:  # provider errors are audit data, not fatal to other providers
+                    for spec in specs
+                )
+            )
+
+            # Persist sequentially in spec order: the per-run seen_hashes dedup
+            # stays deterministic even though the hits arrived concurrently.
+            for query_row, (request, hits, error) in zip(query_rows, results):
+                if error is not None:
                     failures += 1
                     query_row.status = "failed"
                     query_row.error = sanitize_error(error)
                     query_row.completed_at = utcnow()
+                    continue
+                assert request is not None  # a successful search always has one
+                provider_id = query_row.provider
+                for hit in hits:
+                    try:
+                        canonical = canonicalize_url(str(hit.url))
+                        digest = canonical_url_hash(canonical)
+                    except (TypeError, ValueError):
+                        # Provider normalization normally catches this;
+                        # keep malformed transport output out of the DB.
+                        continue
+                    if digest in seen_hashes:
+                        continue
+                    seen_hashes.add(digest)
+                    domain = urlsplit(canonical).hostname
+                    source_type = hit.source_type
+                    title = hit.title
+                    quote = hit.quote.strip()
+                    scope = self.scope_assessor(source_type, domain, title, quote)
+                    reasons = json.dumps(scope.reasons, ensure_ascii=False)
+                    document = self._document_for(
+                        session,
+                        digest=digest,
+                        build=lambda: EvidenceDocument(
+                            query_id=query_row.id,
+                            source_type=source_type,
+                            source_url=str(hit.url),
+                            canonical_url=canonical,
+                            canonical_url_hash=digest,
+                            domain=domain,
+                            document_type=_metadata(hit, "document_type"),
+                            title=title,
+                            publisher=_metadata(hit, "publisher"),
+                            published_at=_published_at(_metadata(hit, "published_at")),
+                            evidence_quote=quote,
+                        ),
+                    )
+                    if document is None:
+                        continue
+                    item = EvidenceItem(
+                        run_id=run.id,
+                        document_id=document.id,
+                        source_url=str(hit.url),
+                        canonical_url=canonical,
+                        canonical_url_hash=digest,
+                        source_domain=domain,
+                        source_type=source_type,
+                        published_at=document.published_at,
+                        evidence_quote=quote,
+                        retrieval_provider=provider_id,
+                        retrieval_model=hit.model or request.model,
+                        prompt_version=request.prompt_version,
+                        scope_decision=scope.decision,
+                        scope_reasons=reasons,
+                        # Not dead: scope_assessor is injectable and
+                        # schemas.ScopeDecision carries a quality_score.  The
+                        # default scope_policy.ScopeDecision has none, so this
+                        # is None for the built-in policy.
+                        quality_score=getattr(scope, "quality_score", None),
+                        verification_status="pending",
+                        review_status="pending",
+                    )
+                    session.add(item)
+                query_row.status = "completed"
+                query_row.completed_at = utcnow()
             session.flush()
-            run.status = "failed" if failures else "completed"
+            if not failures:
+                run.status = "completed"
+            elif failures == len(specs):
+                run.status = "failed"
+            else:
+                # Four of five providers succeeding is not a failed run; the
+                # partial state keeps the surviving evidence usable while still
+                # flagging the gap to reviewers.
+                run.status = "partial"
             run.sanitized_error_summary = (
                 f"{failures} of {len(specs)} provider queries failed" if failures else None
             )

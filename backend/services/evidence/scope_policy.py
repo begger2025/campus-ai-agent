@@ -228,12 +228,16 @@ def assess_scope(
 ) -> ScopeDecision:
     """Classify a candidate as ``in_scope``, ``needs_review`` or ``out_of_scope``.
 
-    Full ``中山大学``/``Sun Yat-sen University`` evidence is required.  A
-    record mentioning only the ambiguous shorthand ``中大`` is
+    The SYSU entity may be established either by the text (a full
+    ``中山大学``/``Sun Yat-sen University`` mention in the title or evidence
+    quote) or, for ``official`` sources only, by publication on an allowlisted
+    SYSU domain.  ``news`` sources must always name the university in the text.
+    A record mentioning only the ambiguous shorthand ``中大`` is
     ``needs_review``; missing evidence, entities, domains, or unsupported
-    source types are ``out_of_scope``.  In-scope official notices and news must also match their
-    respective allowlists.  ``official_notice`` is accepted as a compatibility
-    alias and normalized to the canonical ``official`` source type first.
+    source types are ``out_of_scope``.  In-scope official notices and news must
+    also match their respective allowlists.  ``official_notice`` is accepted as
+    a compatibility alias and normalized to the canonical ``official`` source
+    type first.
     """
 
     raw_type = source_type.strip().lower() if isinstance(source_type, str) else ""
@@ -257,6 +261,19 @@ def assess_scope(
             return ScopeDecision(
                 "needs_review",
                 ["ambiguous 中大 reference lacks the full SYSU entity"],
+            )
+        # A notice published on SYSU's own site is a SYSU notice: real ones say
+        # 我校/学校 rather than spelling out 中山大学, and demanding the literal
+        # entity string here threw away genuine official announcements.  The
+        # allowlisted domain is itself the entity evidence.  News domains keep
+        # the strict requirement: a news site must actually name the university,
+        # otherwise every passing mention on people.com.cn would be collected.
+        if normalized_type == "official" and _domain_allowed(
+            domain, SYSU_OFFICIAL_DOMAIN_ALLOWLIST
+        ):
+            return ScopeDecision(
+                "in_scope",
+                ["allowlisted official domain establishes the SYSU entity"],
             )
         return ScopeDecision(
             "out_of_scope",
