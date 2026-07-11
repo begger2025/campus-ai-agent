@@ -28,12 +28,13 @@ from backend.services.log_service import create_crawl_task, finish_crawl_task, w
 from scripts.ensure_wp4_schema import ensure_wp4_schema  # noqa: E402
 
 
-SUPPORTED_PLATFORMS = {"xhs", "weibo", "tieba", "zhihu"}
+SUPPORTED_PLATFORMS = {"xhs", "weibo", "tieba", "zhihu", "ks"}
 TABLE_BY_PLATFORM = {
     "xhs": "xhs_note",
     "weibo": "weibo_note",
     "tieba": "tieba_note",
     "zhihu": "zhihu_content",
+    "ks": "kuaishou_video",
 }
 
 
@@ -390,6 +391,30 @@ def _map_zhihu(row: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _map_ks(row: dict[str, Any]) -> dict[str, Any]:
+    crawl_time = row.get("last_modify_ts") or row.get("add_ts")
+    return _base_payload(
+        platform="ks",
+        source_table="kuaishou_video",
+        source_raw_id=row.get("id"),
+        external_id=row.get("video_id"),
+        source_keyword=row.get("source_keyword"),
+        title=row.get("title"),
+        content=row.get("desc"),
+        author=row.get("nickname"),
+        # create_time 为毫秒 epoch（_parse_datetime 自动换算成秒）；0/空回退 add_ts
+        publish_time=row.get("create_time") or row.get("add_ts"),
+        url=row.get("video_url"),
+        like_count=row.get("liked_count"),
+        collect_count=0,
+        comment_count=row.get("comment_count"),
+        share_count=0,
+        tags_json="[]",  # ks 标签未持久化，D 新话题信号不参与
+        crawl_time=crawl_time,
+        raw_row=row,
+    )
+
+
 def _map_json(row: dict[str, Any], platform: str, source_table: str) -> dict[str, Any]:
     return _base_payload(
         platform=platform,
@@ -419,17 +444,18 @@ MAPPER_BY_PLATFORM = {
     "weibo": _map_weibo,
     "tieba": _map_tieba,
     "zhihu": _map_zhihu,
+    "ks": _map_ks,
 }
 
 
 def _normalize_platforms(platforms: Iterable[str] | None) -> list[str]:
     if not platforms:
-        return ["xhs", "weibo", "tieba", "zhihu"]
+        return ["xhs", "weibo", "tieba", "zhihu", "ks"]
     result: list[str] = []
     for platform in platforms:
         item = platform.lower().strip()
         if item == "all":
-            return ["xhs", "weibo", "tieba", "zhihu"]
+            return ["xhs", "weibo", "tieba", "zhihu", "ks"]
         if item not in SUPPORTED_PLATFORMS:
             raise ValueError(f"unsupported platform: {platform}")
         if item not in result:
@@ -590,8 +616,10 @@ def _read_json_records(path: Path) -> list[dict[str, Any]]:
 # 互动量字段：注意点 3 的 --refresh 只碰这四个，标题/正文/标签/发布时间等一律不动。
 ENGAGEMENT_FIELDS = ("like_count", "collect_count", "comment_count", "share_count")
 # 知乎映射的 collect/share 恒 0（平台无此计数），--refresh 只刷赞同与评论，避免 0 覆盖既有值。
+# 快手映射的 collect/share 恒 0（平台无此计数），--refresh 只刷点赞与评论，避免 0 覆盖既有值。
 REFRESH_FIELDS_BY_PLATFORM = {
     "zhihu": ("like_count", "comment_count"),
+    "ks": ("like_count", "comment_count"),
 }
 
 
@@ -763,7 +791,7 @@ def main() -> int:
     parser.add_argument(
         "--platform",
         action="append",
-        choices=["all", "xhs", "weibo", "tieba", "zhihu", "json"],
+        choices=["all", "xhs", "weibo", "tieba", "zhihu", "ks", "json"],
         default=None,
         help="Platform to sync. Use multiple --platform values or all.",
     )
