@@ -25,6 +25,12 @@ class NormalizePlatformTest(unittest.TestCase):
         self.assertEqual(_normalize_platform("xhs"), "xhs")
         self.assertEqual(_normalize_platform("贴吧"), "tieba")
 
+    def test_ks_variants(self):
+        self.assertEqual(_normalize_platform("ks"), "ks")
+        self.assertEqual(_normalize_platform("KS"), "ks")
+        self.assertEqual(_normalize_platform("kuaishou"), "ks")
+        self.assertEqual(_normalize_platform("快手"), "ks")
+
 
 if __name__ == "__main__":
     unittest.main()

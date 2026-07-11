@@ -4,7 +4,7 @@
 本模块按 (platform, 裸 note_id) 批量取每帖点赞最高的前 N 条评论，供 Agent
 分析文本（analysis_text）与简报语料使用。
 
-四个平台的原生评论表列名不同（线上实测），故用 PLATFORM_COMMENT_SPEC 路由：
+五个平台的原生评论表列名不同（线上实测），故用 PLATFORM_COMMENT_SPEC 路由：
 
 | 平台 | 表 | 关联列 | 点赞列 |
 |---|---|---|---|
@@ -12,8 +12,9 @@
 | weibo | weibo_note_comment | note_id    | comment_like_count |
 | tieba | tieba_comment      | note_id    | 无（字面量 0）      |
 | zhihu | zhihu_comment      | content_id | like_count         |
+| ks    | kuaishou_video_comment | video_id | 无（字面量 0）      |
 
-四张表都有 add_ts（BigInteger 毫秒）与 content，排序统一 `ORDER BY likes DESC, add_ts DESC`。
+五张表都有 add_ts（BigInteger 毫秒）与 content，排序统一 `ORDER BY likes DESC, add_ts DESC`。
 
 表不存在时（如 SQLite 演示快照未含 MediaCrawler 原生表）优雅返回空——
 评论是增强信号，不是硬依赖。
@@ -36,6 +37,7 @@ PLATFORM_COMMENT_SPEC: dict[str, dict] = {
     },
     "tieba": {"table": "tieba_comment", "join_col": "note_id", "like_col": None},
     "zhihu": {"table": "zhihu_comment", "join_col": "content_id", "like_col": "like_count"},
+    "ks": {"table": "kuaishou_video_comment", "join_col": "video_id", "like_col": None},
 }
 
 

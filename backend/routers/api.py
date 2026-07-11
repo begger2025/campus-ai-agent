@@ -60,6 +60,8 @@ def _normalize_platform(platform: str | None) -> str:
         return "tieba"
     if "zhihu" in lower or "知乎" in text:
         return "zhihu"
+    if "kuaishou" in lower or lower == "ks" or "快手" in text:
+        return "ks"
     return lower or text
 
 
