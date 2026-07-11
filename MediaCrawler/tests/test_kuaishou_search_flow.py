@@ -255,3 +255,33 @@ async def test_search_exception_only_breaks_current_keyword(search_env, stored_i
     assert len(rows) == 2
     assert rows[0]["stop_reason"] == "exception"
     assert rows[1]["stop_reason"] == "empty_page"
+
+
+@pytest.mark.asyncio
+async def test_search_abnormal_response_stops_instead_of_looping(search_env, stored_ids):
+    """空页/异常响应（result != 1 / feeds 缺失 / None）必须停止翻页——
+    上游原实现在此 continue 且不翻页，是死循环隐患；本测试是该修复的回归锁。"""
+    rows = search_env
+    crawler = KuaishouCrawler()
+    crawler.ks_client = FakeKsClient([{"visionSearchPhoto": {"result": 0}}])
+
+    await crawler.search()
+
+    assert stored_ids == []
+    assert len(rows) == 1
+    assert rows[0]["stop_reason"] == "empty_page"
+    assert rows[0]["pages_fetched"] == 1
+    assert rows[0]["items_stored"] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_none_response_stops_instead_of_looping(search_env, stored_ids):
+    rows = search_env
+    crawler = KuaishouCrawler()
+    crawler.ks_client = FakeKsClient([None])
+
+    await crawler.search()
+
+    assert stored_ids == []
+    assert rows[0]["stop_reason"] == "empty_page"
+    assert rows[0]["pages_fetched"] == 1

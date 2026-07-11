@@ -154,7 +154,11 @@ class KuaishouCrawler(AbstractCrawler):
             if not photo.get("id"):
                 continue
             # photo.timestamp 为毫秒 epoch（缺失/0 视为 unknown，按 PUBLISH_TIME_KEEP_UNKNOWN 处理）
-            ts_ms = int(photo.get("timestamp") or 0) or None
+            try:
+                ts_ms = int(photo.get("timestamp") or 0) or None
+            except (TypeError, ValueError):
+                # 异常形状的时间戳按 unknown 处理（与微博同构），一条坏数据不中断整场爬取
+                ts_ms = None
             if ts_ms is not None:
                 page_resolved_ts.append(ts_ms)
             if window_enabled and not is_within_window(
@@ -316,6 +320,11 @@ class KuaishouCrawler(AbstractCrawler):
                 # 记 exception 落一行历史后继续下一关键词，不中断整场爬取
                 run_state.mark_stop(STOP_EXCEPTION)
                 utils.logger.error(f"[KuaishouCrawler.search] Search error, keyword: {keyword}, error: {ex}")
+            except asyncio.CancelledError:
+                # ks 独有：get_comments 风控恢复路径会取消全部评论任务；CancelledError 是
+                # BaseException，若不拦截，finally 会把中止的一轮记成 completed（假遥测）
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
             except Exception:
                 # 其他异常路径也落一行历史（stop_reason=exception），异常继续上抛
                 run_state.mark_stop(STOP_EXCEPTION)
