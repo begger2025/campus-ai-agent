@@ -23,6 +23,7 @@ from backend.services.admin_service import (
     user_item,
 )
 from backend.services.auth_service import require_admin
+from backend.services.event_keywords import get_keyword_proposer
 from backend.services.keyword_suggestion_adapter import get_keyword_suggestions
 
 router = APIRouter(tags=["admin"])
@@ -54,9 +55,19 @@ def keyword_suggestions(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """智能选题：四信号融合的爬取关键词推荐（设计见 docs/superpowers/specs/2026-07-10）。"""
+    """智能选题：五信号融合的爬取关键词推荐（设计见 docs/superpowers/specs/2026-07-10）。
 
-    return ok(get_keyword_suggestions(db, days=days, top=top))
+    第五路是**事件流水线**：已发布事件按 severity × recency × lifecycle 加权进候选池（算术），
+    并由 LLM 从事件正文生成「学术不端」这类**语料里根本不存在**的检索词（判断）。
+
+    **这里仍然只是建议**：把词放进爬取队列必须由管理员再点一下。AI 提议，人来决定。
+    """
+
+    return ok(
+        get_keyword_suggestions(
+            db, days=days, top=top, keyword_proposer=get_keyword_proposer()
+        )
+    )
 
 
 @router.get("/admin/raw-posts")

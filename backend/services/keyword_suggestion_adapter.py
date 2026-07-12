@@ -1,7 +1,19 @@
-"""智能选题聚合层：从 chat_query_log / processed_posts 取四路信号，调核心 planner。
+"""智能选题聚合层：从 chat_query_log / processed_posts / **public_events** 取五路信号，调核心 planner。
 
 只读，不写任何表。算法本体在 backend/agent/public_opinion_core/keyword_planner.py
 （主项目是唯一源，直接改这里；改完用 scripts/sync_opinion_core.py 反向移植回子项目）。
+
+**本轮新增的第五路：事件流水线。** 缺陷是刺眼的——系统一边把「中大杰青实名举报」判成
+high(91) / 悬而未决 / 全库第一优先级，一边让选题器继续推荐「食堂」。左手不知道右手。
+两个半边，分别站在同一条原则的两侧：
+
+    算术：事件的 severity / lifecycle / recency **早就算好并落库了**，把它们乘起来喂给
+          planner 是**接线**（`EventRecord` -> `plan_keywords(events=...)`）。这里没有 LLM。
+    LLM ：事件该用**什么词**去搜。「学术不端」不在任何标题/标签/提问里，排序器**结构上**
+          排不出一个它没见过的词——这才是 LLM 的位置（`llm_keywords` + `event_keywords`）。
+
+**只读 published 事件**：草稿事件还没有经过管理员那道闸门，不许它去左右爬取计划。
+（而生成出来的词同样只是**建议**：入队仍然要管理员点一下。AI 提议，人来决定。）
 """
 
 from __future__ import annotations
@@ -16,12 +28,31 @@ from sqlalchemy.orm import Session
 
 from backend.agent.public_opinion_core.keyword_planner import (
     ContentStat,
+    EventRecord,
     QueryRecord,
     plan_keywords,
 )
-from backend.models import ChatQueryLog, ProcessedPost
+from backend.agent.public_opinion_core.llm_keywords import (
+    KeywordProposer,
+    generate_event_keywords,
+)
+from backend.agent.public_opinion_core.recency import (
+    effective_lifecycle,
+    event_time_from_payload,
+    growth_signal,
+    lifecycle_judgement_from_payload,
+    member_times_from_payload,
+    parse_time,
+    recency_config,
+)
+from backend.models import ChatQueryLog, EventPostLink, ProcessedPost, PublicEvent
+from backend.services.llm_config import EVENT_KEYWORD_MAX, EVENT_KEYWORD_TOP_EVENTS
 
 CONTENT_WINDOW_DAYS = 14
+
+# 一个事件送给 LLM 的代表帖上限（代表帖已经够判"该用什么词搜"了；读完 91 条纯属烧钱）。
+EVENT_MAX_TEXTS = 5
+EVENT_TEXT_MAX_CHARS = 120
 
 _EPOCH = datetime(1970, 1, 1)
 
@@ -93,12 +124,110 @@ def _load_crawler_history(
     return barren, crawled_at_by_keyword
 
 
+def _parse_top_tags(top_tags_json: str) -> dict[str, float]:
+    """top_tags_json（`[{"tag": "学术", "count": 3}]`）-> {标签: 权重}，权重 = count / max_count。
+
+    **为什么要权重**：头号事件「中大杰青实名举报」的标签是 学术(3) / 热点(1) / 新闻(1) /
+    医学(1) / **上海(1)** / **广州(1)**。所有标签共享同一个事件优先级的话，「上海」会和
+    「学术不端」并列同分顶上首屏（消融第一版实测就是这样，见 docs/keyword-event-ablation.md）。
+    count 本来就在库里：3 条帖子都带「学术」、只有 1 条带「上海」——**前者才是这件事的特征**。
+    这是测量，不是又一张黑名单。
+    """
+
+    try:
+        data = json.loads(top_tags_json or "[]")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, list):
+        return {}
+    counts: dict[str, float] = {}
+    for item in data:
+        if isinstance(item, dict):
+            name = str(item.get("tag") or "").strip()
+            count = float(item.get("count") or 1)
+        else:
+            name, count = str(item).strip(), 1.0
+        if name:
+            counts[name] = max(counts.get(name, 0.0), count)
+    top = max(counts.values(), default=0.0)
+    if not top:
+        return {}
+    return {name: count / top for name, count in counts.items()}
+
+
+def _parse_json_list(raw: str) -> list[str]:
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(item).strip() for item in data if str(item or "").strip()]
+
+
+def _load_events(db: Session, *, now: datetime, half_life_days: float) -> list[EventRecord]:
+    """已发布事件 -> planner 的只读投影。
+
+    生命周期用**读侧合成**的那个（`escalating` = LLM 的 ongoing ∧ 算术测出的 growing），
+    和 GET /api/events 完全同一个口径——否则看板说「持续发酵」、选题器却按「悬而未决」加权，
+    两个界面会互相打脸。`escalating` 不落库（它是 now 的函数），所以必须在这里现算。
+    """
+
+    events = (
+        db.query(PublicEvent)
+        .filter(PublicEvent.status == "published")
+        .all()
+    )
+    if not events:
+        return []
+
+    # 代表帖正文：只给 LLM 读。算术那一路一个字都不看。
+    links = (
+        db.query(EventPostLink.event_id, ProcessedPost.title, ProcessedPost.content)
+        .join(ProcessedPost, EventPostLink.processed_post_id == ProcessedPost.id)
+        .filter(EventPostLink.event_id.in_([event.id for event in events]))
+        .order_by(EventPostLink.rank)
+        .all()
+    )
+    texts_by_event: dict[int, list[str]] = {}
+    for event_id, title, content in links:
+        bucket = texts_by_event.setdefault(event_id, [])
+        text_value = (title or content or "").strip()
+        if text_value and len(bucket) < EVENT_MAX_TEXTS:
+            bucket.append(text_value[:EVENT_TEXT_MAX_CHARS])
+
+    records: list[EventRecord] = []
+    for event in events:
+        payload = event.date_range_json
+        judgement, _ = lifecycle_judgement_from_payload(payload)
+        growth = growth_signal(
+            member_times_from_payload(payload), now, window_days=half_life_days
+        )
+        tag_weights = _parse_top_tags(event.top_tags_json)
+        # source_keywords 是**真的拿去爬过**的词（不是顺手打的标签），不打折。
+        source_keywords = _parse_json_list(event.source_keywords_json)
+        records.append(
+            EventRecord(
+                event_id=str(event.id),
+                title=event.title or "",
+                risk_level=event.risk_level or "low",
+                lifecycle=effective_lifecycle(judgement, growth["growing"]),
+                event_time=parse_time(event_time_from_payload(payload)),
+                keywords=[*tag_weights, *source_keywords],
+                keyword_weights=tag_weights,
+                texts=texts_by_event.get(event.id, []),
+            )
+        )
+    return records
+
+
 def get_keyword_suggestions(
     db: Session,
     *,
     days: int = 30,
     top: int = 10,
     now: datetime | None = None,
+    keyword_proposer: KeywordProposer | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.utcnow()
 
@@ -149,6 +278,23 @@ def get_keyword_suggestions(
         if existing is None or crawled_at > existing:
             crawled_at_by_keyword[keyword] = crawled_at
 
+    # E：事件流水线。半衰期取事件侧**同一个** .env 值（21 天），选题器和看板不许各用一套年龄。
+    half_life_days = recency_config()["half_life_days"]
+    events = _load_events(db, now=now, half_life_days=half_life_days)
+
+    # LLM 那一半：从事件生成检索词。proposer=None（未配置 / 显式关掉）-> 这一步是 no-op，
+    # 事件的标签词照常进候选池（算术那一半完全不依赖 LLM）。
+    warnings: list[str] = []
+    stats = generate_event_keywords(
+        events,
+        keyword_proposer,
+        now=now,
+        half_life_days=half_life_days,
+        warnings=warnings,
+        top_events=EVENT_KEYWORD_TOP_EVENTS,
+        max_per_event=EVENT_KEYWORD_MAX,
+    )
+
     suggestions = plan_keywords(
         queries,
         content_stats,
@@ -156,6 +302,8 @@ def get_keyword_suggestions(
         now=now,
         top_n=top,
         barren_keywords=barren_keywords,
+        events=events,
+        event_half_life_days=half_life_days,
     )
     return {
         "suggestions": [s.to_dict() for s in suggestions],
@@ -165,5 +313,11 @@ def get_keyword_suggestions(
             "query_window_days": days,
             "content_window_days": CONTENT_WINDOW_DAYS,
             "barren_count": len(barren_keywords),
+            "event_count": len(events),
+            "event_half_life_days": half_life_days,
+            "llm_events": stats["events"],
+            "generated_keywords": stats["accepted"],
+            "rejected_keywords": stats["rejected"],
+            "warnings": warnings,
         },
     }

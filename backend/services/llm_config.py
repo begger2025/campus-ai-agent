@@ -12,6 +12,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from backend.agent.public_opinion_core.llm_keywords import (
+    DEFAULT_MAX_KEYWORDS_PER_EVENT,
+    DEFAULT_TOP_EVENTS,
+)
 from backend.agent.public_opinion_core.llm_refine import DEFAULT_REFINE_MIN_SIZE
 from backend.agent.public_opinion_core.llm_risk import DEFAULT_MAX_TEXTS as DEFAULT_RISK_MAX_TEXTS
 from backend.agent.public_opinion_core.semantic_clustering import (
@@ -114,3 +118,18 @@ EVENT_RISK_MAX_TEXTS = max(_read_int("EVENT_RISK_MAX_TEXTS", DEFAULT_RISK_MAX_TE
 # 关掉即回到"未研判"：生命周期因子恒为 1.0，排序逐位退化回「严重性 × 时效性」（改造前）。
 # 不关也会自动逐事件降级——LLM 挂了事件照出，只是那个事件不带状态（见 llm_lifecycle.py）。
 EVENT_LIFECYCLE_ENABLED = _read_bool("EVENT_LIFECYCLE_ENABLED", True)
+
+# ---- 从事件生成爬取关键词（智能选题的 LLM 那一半）----
+# 复用同一组 EVENT_LLM_*。关掉即回到"用户提问 + 内容标签 + 事件标签"三路——**算术那一半
+# 照常工作**（事件仍然进候选池、仍然按 severity×recency×lifecycle 加权），只是提不出
+# 「学术不端」这种从未在语料里出现过的词（见 llm_keywords.py 顶部的论证）。
+# 不关也会自动逐事件降级：一个事件的词生成失败，别的事件照常。
+EVENT_KEYWORDS_ENABLED = _read_bool("EVENT_KEYWORDS_ENABLED", True)
+
+# 只给**算术已经说它重要**的前 N 个事件花 LLM 的钱（按 event_priority 降序）。
+EVENT_KEYWORD_TOP_EVENTS = max(_read_int("EVENT_KEYWORD_TOP_EVENTS", DEFAULT_TOP_EVENTS), 0)
+
+# 一个事件最多贡献几个生成词（再多就是同义词灌水，只会挤掉用户的真实提问）。
+EVENT_KEYWORD_MAX = max(
+    _read_int("EVENT_KEYWORD_MAX", DEFAULT_MAX_KEYWORDS_PER_EVENT), 1
+)

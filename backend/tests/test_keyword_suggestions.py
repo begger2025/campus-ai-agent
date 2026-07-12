@@ -8,10 +8,12 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import json
+
 from backend.admin_models import User
 from backend.database import Base, get_db
 from backend.main import app
-from backend.models import ChatQueryLog, ProcessedPost
+from backend.models import ChatQueryLog, EventPostLink, ProcessedPost, PublicEvent
 from backend.services.auth_service import get_current_user
 from backend.services.keyword_suggestion_adapter import get_keyword_suggestions
 
@@ -312,6 +314,187 @@ class CrawlerRunHistoryMissingTableTest(unittest.TestCase):
         self.assertIn("宿舍空调", by_kw)
         self.assertIn("食堂", by_kw)
         self.assertEqual(data["meta"]["barren_count"], 0)
+
+
+class EventDrivenSuggestionsTest(unittest.TestCase):
+    """adapter 把 public_events 接进选题器：算术那一半（事件加权）+ LLM 那一半（生成检索词）。
+
+    零网络、零 MySQL：proposer 是注入的假货，事件躺在 SQLite 里，`now` 注入。
+    """
+
+    def setUp(self) -> None:
+        self.db = make_session_factory()()
+        self.addCleanup(self.db.close)
+
+    def _publish_event(
+        self,
+        event_id: int,
+        title: str,
+        *,
+        risk_level: str = "high",
+        risk_score: float = 91.0,
+        lifecycle: str = "ongoing",
+        days_ago: float = 21.0,
+        tags: list[str] | None = None,
+        status: str = "published",
+        texts: list[str] | None = None,
+    ) -> None:
+        event_time = NOW - timedelta(days=days_ago)
+        self.db.add(
+            PublicEvent(
+                id=event_id,
+                event_key=f"evt_{event_id}",
+                title=title,
+                risk_level=risk_level,
+                risk_score=risk_score,
+                status=status,
+                top_tags_json=json.dumps(
+                    [{"tag": tag, "count": 1} for tag in (tags or [])], ensure_ascii=False
+                ),
+                source_keywords_json=json.dumps(["中山大学"], ensure_ascii=False),
+                date_range_json=json.dumps(
+                    {
+                        "event_time": event_time.isoformat(),
+                        "lifecycle": lifecycle,
+                        "lifecycle_judgement": lifecycle,
+                        "member_times": [event_time.isoformat()],
+                    },
+                    ensure_ascii=False,
+                ),
+                created_at=event_time,
+            )
+        )
+        for index, text in enumerate(texts or [f"{title}的帖子正文"], start=1):
+            post = ProcessedPost(
+                raw_post_id=9000 + event_id * 10 + index,
+                platform="xhs",
+                title=text,
+                source_keyword="中山大学",
+                publish_time=event_time,
+                created_at=event_time,
+            )
+            self.db.add(post)
+            self.db.flush()
+            self.db.add(
+                EventPostLink(
+                    event_id=event_id,
+                    processed_post_id=post.id,
+                    rank=index,
+                    role="representative",
+                )
+            )
+
+    def test_llm_proposes_a_keyword_that_exists_nowhere_in_the_corpus(self) -> None:
+        """「学术不端」不在任何标题、标签、提问里——这正是现行 planner 结构上排不出的词。"""
+
+        self._publish_event(
+            20, "中大杰青实名举报", tags=["学术", "热点", "新闻"],
+            texts=["耿同学杀疯了 继续举报中山大学另一位杰青"],
+        )
+        self.db.commit()
+
+        seen: list[tuple] = []
+
+        def proposer(title, texts, risk, lifecycle):
+            seen.append((title, tuple(texts), risk, lifecycle))
+            return {"keywords": ["学术不端", "论文造假", "校园生活"]}
+
+        data = get_keyword_suggestions(self.db, now=NOW, keyword_proposer=proposer)
+        by_kw = {s["keyword"]: s for s in data["suggestions"]}
+
+        self.assertEqual(
+            seen,
+            [("中大杰青实名举报", ("耿同学杀疯了 继续举报中山大学另一位杰青",), "high", "ongoing")],
+        )
+        self.assertIn("学术不端", by_kw)
+        self.assertIn("论文造假", by_kw)
+        self.assertNotIn("校园生活", by_kw)  # 同一套黑名单拒掉它
+        self.assertIn("event_llm", by_kw["学术不端"]["signals"])
+        self.assertEqual(by_kw["学术不端"]["event_refs"][0]["title"], "中大杰青实名举报")
+        self.assertEqual(by_kw["学术不端"]["event_refs"][0]["event_id"], "20")
+        self.assertEqual(data["meta"]["event_count"], 1)
+        self.assertEqual(data["meta"]["generated_keywords"], 2)
+        self.assertEqual(data["meta"]["rejected_keywords"], 1)
+
+    def test_the_scandal_outranks_the_canteen(self) -> None:
+        """缺陷的原话：系统把学术不端丑闻定为头号事件，选题器还在推荐「食堂」。"""
+
+        self.db.add(_post(1, "食堂", 3, 500))
+        self.db.add(_post(2, "食堂", 3, 300))
+        self._publish_event(20, "中大杰青实名举报", tags=["学术"])
+        self.db.commit()
+
+        data = get_keyword_suggestions(
+            self.db, now=NOW, keyword_proposer=lambda *_: ["学术不端"]
+        )
+        keywords = [s["keyword"] for s in data["suggestions"]]
+
+        self.assertEqual(keywords[0], "学术不端")
+        self.assertIn("食堂", keywords)
+        self.assertGreater(keywords.index("食堂"), keywords.index("学术不端"))
+
+    def test_only_published_events_drive_the_planner(self) -> None:
+        """人工闸门：草稿事件还没被管理员认可，不许它去左右爬取计划。"""
+
+        self._publish_event(20, "中大杰青实名举报", tags=["学术"], status="draft")
+        self.db.commit()
+
+        data = get_keyword_suggestions(
+            self.db, now=NOW, keyword_proposer=lambda *_: ["学术不端"]
+        )
+        self.assertEqual(data["suggestions"], [])
+        self.assertEqual(data["meta"]["event_count"], 0)
+
+    def test_no_proposer_still_lets_the_arithmetic_half_work(self) -> None:
+        self._publish_event(20, "中大杰青实名举报", tags=["学术"])
+        self.db.commit()
+
+        data = get_keyword_suggestions(self.db, now=NOW, keyword_proposer=None)
+        by_kw = {s["keyword"]: s for s in data["suggestions"]}
+
+        self.assertIn("学术", by_kw)                 # 事件标签照常进池
+        self.assertNotIn("学术不端", by_kw)          # 但生不出新词
+        self.assertEqual(by_kw["学术"]["signals"], ["event"])
+        self.assertEqual(data["meta"]["generated_keywords"], 0)
+
+    def test_proposer_blowing_up_degrades_to_a_warning(self) -> None:
+        self._publish_event(20, "中大杰青实名举报", tags=["学术"])
+        self.db.add(_post(1, "食堂", 3, 500))
+        self.db.commit()
+
+        def boom(*_):
+            raise TimeoutError("api gateway timeout")
+
+        data = get_keyword_suggestions(self.db, now=NOW, keyword_proposer=boom)
+        keywords = [s["keyword"] for s in data["suggestions"]]
+
+        self.assertIn("学术", keywords)   # 事件的算术那一路还在
+        self.assertIn("食堂", keywords)   # 别的信号完全不受影响
+        self.assertEqual(data["meta"]["generated_keywords"], 0)
+        self.assertTrue(any("TimeoutError" in w for w in data["meta"]["warnings"]))
+
+    def test_a_live_event_survives_a_fresh_crawl_but_a_resolved_one_does_not(self) -> None:
+        self._publish_event(20, "中大杰青实名举报", lifecycle="ongoing", tags=["学术"])
+        self._publish_event(
+            77, "东校区宿舍火情", risk_level="high", risk_score=95.0,
+            lifecycle="resolved", tags=["火情"],
+        )
+        # 两个词昨天都刚爬过
+        for keyword in ("学术不端", "宿舍火情"):
+            self.db.add(_post(hash(keyword) % 1000, keyword, 1, 10))
+        self.db.commit()
+
+        proposals = {"中大杰青实名举报": ["学术不端"], "东校区宿舍火情": ["宿舍火情"]}
+        data = get_keyword_suggestions(
+            self.db, now=NOW, keyword_proposer=lambda title, *_: proposals[title]
+        )
+        by_kw = {s["keyword"]: s for s in data["suggestions"]}
+
+        # 悬而未决：新证据还在来，"昨天爬过"不构成理由 -> 事件项不降权
+        self.assertIn("仍在发酵", by_kw["学术不端"]["reason"])
+        # 已了结：不会再有新帖，"昨天爬过"是真的 -> 照常 ×0.3
+        self.assertNotIn("仍在发酵", by_kw["宿舍火情"]["reason"])
+        self.assertGreater(by_kw["学术不端"]["score"], by_kw["宿舍火情"]["score"])
 
 
 class KeywordSuggestionsApiTest(unittest.TestCase):
