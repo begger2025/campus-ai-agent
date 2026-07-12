@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 
 from .normalizer import note_text
 from .platform_weights import note_ranking_score
-from .recency import event_reference_time, priority_score, recency_config
+from .recency import event_reference_time, note_time, priority_score, recency_config
 from .schemas import OpinionEvent, OpinionNote
 from .sentiment_risk import aggregate_risk_level, aggregate_sentiment
 
@@ -62,6 +62,17 @@ def _date_range(notes: list[OpinionNote]) -> tuple[str, str]:
     if not values:
         return "", ""
     return values[0], values[-1]
+
+
+def member_publish_times(notes: list[OpinionNote]) -> list[str]:
+    """成员帖的发布时间（ISO 串，升序；解析不了的丢掉）。
+
+    这是「持续发酵」判据的**原料**：它是事实（不依赖 now），所以在造事件时就算好、并且落库；
+    而"还在不在长"是 now 的函数，只能在读侧现算（见 recency.growth_signal）。
+    """
+
+    stamps = sorted(stamp for stamp in (note_time(note) for note in notes) if stamp is not None)
+    return [stamp.isoformat() for stamp in stamps]
 
 
 def _top_tags(notes: list[OpinionNote]) -> list[dict[str, int | str]]:
@@ -152,6 +163,9 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
         # 才算得出来（recency.annotate_events_with_recency）。规则路径和语义路径都从这里出事件，
         # 所以两条路径的事件都自动带上时间。
         event_time=event_reference_time(group_notes, strategy=recency_config()["strategy"]),
+        # 成员帖的发布时间（升序）。和 event_time 一样是**事实**、不依赖 now：读侧拿它现算
+        # "这件事还在不在长"（recency.growth_signal），从而合成「持续发酵」。
+        member_times=member_publish_times(group_notes),
         source_keywords=_source_keywords(group_notes),
         top_tags=_top_tags(group_notes),
         concerns=concerns,

@@ -81,13 +81,26 @@ class OpinionEvent:
     age_days: float | None = None
     # 时效权重 0.5 ** (age_days / half_life)，钳在 [min_weight, 1.0]。默认 1.0 = 未标注/不打折。
     recency_weight: float = 1.0
+    # 成员帖的发布时间（ISO 串，升序）。**事实**（同 event_time），落库——读侧要拿它现算
+    # "这件事还在不在长"（见 recency.growth_signal）。
+    member_times: list[str] = field(default_factory=list)
     # ---- 生命周期（第四根轴，见 llm_lifecycle.py）----
-    # 事件状态：resolved（已了结）/ ongoing（悬而未决）/ escalating（持续发酵）。
-    # "" = 未研判（LLM 关掉/失败/老数据）-> 因子 1.0 -> 排序退化回改造前。**落库**（它是对
-    # 内容的判断，不是 now 的函数）。
+    # 看板上真正显示、也真正进排序的那个状态：
+    #   resolved（已了结）/ ongoing（悬而未决）/ escalating（持续发酵）/ not_applicable（非事件）。
+    # "" = 未研判（LLM 关掉/失败/老数据）-> 因子 1.0 -> 排序退化回改造前。
+    # **它是判断和测量的合成**：escalating = ongoing ∧ 算术判定仍在增长（effective_lifecycle）。
+    # 因此 escalating **不落库**——它是 now 的函数，冻进数据库第二天就是错的（同 age_days）。
     lifecycle: str = ""
+    # LLM 答的那一半：**有没有一件悬而未决的事**（resolved / ongoing / not_applicable）。
+    # 模型不再被允许回答 escalating（那是测量，不是判断）。这一半是对内容的判断、不是 now 的
+    # 函数，所以**落库**；读侧用它 + 成员帖时间重新合成 lifecycle。
+    lifecycle_judgement: str = ""
     # 状态的人话理由（给管理员看的："凭什么这条 3 个月前的事还在前面"）。
     lifecycle_reason: str = ""
+    # 增长的**证据**（算术算出来的，展示给管理员看"凭什么标持续发酵"）：
+    # {"window_days", "total_notes", "recent_notes", "recent_share", "recent_rate",
+    #  "baseline_rate", "growing"}。**不落库**（是 now 的函数），读侧现算。
+    growth: dict[str, Any] = field(default_factory=dict)
     # 展示优先级 = severity_weight × recency_weight × lifecycle_weight，事件排序的第一排序键。
     priority_score: float = 0.0
     source_keywords: list[str] = field(default_factory=list)

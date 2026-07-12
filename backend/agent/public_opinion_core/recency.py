@@ -118,6 +118,47 @@ VALID_LIFECYCLES = tuple(LIFECYCLE_WEIGHTS)
 
 SECONDS_PER_DAY = 86400.0
 
+# ---- 增长（「持续发酵」的判据）：**测量，不是语气**。----
+#
+# **缺陷**（上一轮消融实测）：`escalating` 在 28 个事件上一次都没触发（0/28）。诚实的诊断是——
+# 模型读的是一份**冻结的 fixture**，它看不见"新帖还在不在增加"，于是只能从**措辞和语气**里
+# 嗅"发酵感"。`escalating` / `ongoing` 的边界事实上是由**文风**决定的。
+#
+# **问 LLM「这件事还在扩大吗」，和问它「这条帖子有多火」是同一类错误。** 每一条成员帖的
+# `publish_time` 就摆在那里：「这件事还在长吗」是减法和除法，和时效衰减（17d5ef2）完全同类。
+# 项目四个 commit 一以贯之的分工——**测量归算术，判断归 LLM**——escalating 本来站错了边。
+#
+# 判据两条，缺一不可：
+#
+#   1. **窗口内至少 GROWTH_MIN_NOTES(=2) 条成员帖**。
+#      为什么不是 1：一条掉队的新帖不是"还在长"。这正是 `event_reference_time` 拒绝 `latest`
+#      口径时防的那个失败模式——一次转发、一条蹭话题的帖子，不许把整个事件重贴成「持续发酵」。
+#      两条才构成一个**速率**，一条只是一个点。
+#   2. **窗口内的发帖速率 >= 它自己在窗口之前的速率**：
+#           recent / W  >=  (total - recent) / max(span - W, W)
+#      一句人话：**它现在来帖的速度，比它自己过去更快吗？**
+#      为什么要这一条：光有"窗口内 2 条"会把**大存档的滴水**误判成发酵——一个两年攒了 100 帖的
+#      老话题最近 3 周来了 2 帖（0.095 帖/天），可它过去的速率就有 0.14 帖/天，它没有在加速，
+#      只是还在滴水。比速率能分出来，数绝对条数分不出来。
+#      **自归一化**是关键好处：不需要一个"多少条算多"的魔法阈值，每个事件只和**它自己的过去**比。
+#      （也因此不用"近期占比"：占比会系统性地惩罚大事件——一个 40 帖的事件这周新增 3 帖，占比
+#      才 7.5%，可它确实在长。增长是**新证据的到达速率**，不是存量的比例。占比仍然算出来给
+#      管理员看，但它是**证据**，不是判据。）
+#      基线**只看窗口之前**的证据，不是生命期平均：拿生命期平均当基线，等于让这一波新帖
+#      **自己抬高自己的基线**，爆发把自己抵消掉（实测撞过这个坑，见 growth_signal 里的注释）。
+#
+# **窗口取 21 天 = 时效半衰期本身，不是一个新常数。** 半衰期的定义就是"一个校园议题从爆发到
+# 被忘记的典型长度"（三周）。一个事件若在**一个半衰期之内**还在追加证据，它增加证据的速度
+# 就还赶得上衰减打折它的速度——这正是"还在发酵"的算术含义。少一个可调旋钮，也少一个要在
+# 答辩上辩护的数字。（语料上这个选择很稳：297 条帖子在 13 天和 32 天之间是**空的**，
+# 所以窗口取 14 / 21 / 30 天，落进窗口的帖子都是同样的 12 条——结论不依赖窗口的精确取值。）
+#
+# `span < window` 时用 window 做分母（而不是 span）：一个今天刚爆出来的 2 帖事件跨度接近 0，
+# 拿 span 做分母会让历史速率变成无穷大，反而判它"没在长"。
+DEFAULT_GROWTH_MIN_NOTES = 2
+GROWTH_WINDOW_ENV = "EVENT_GROWTH_WINDOW_DAYS"
+GROWTH_MIN_NOTES_ENV = "EVENT_GROWTH_MIN_NOTES"
+
 
 def parse_time(value: Any) -> datetime | None:
     """把语料里各种写法的时间解析成 **naive UTC** datetime；解析不了返回 None。
@@ -241,6 +282,132 @@ def recency_weight(
     return max(min(weight, 1.0), floor)
 
 
+def growth_config() -> dict[str, Any]:
+    """当前生效的增长判据配置（`.env` 可调；写坏了退回默认，不炸流水线）。
+
+    窗口缺省 = 时效半衰期（见上面的注释：它不是一个新常数）。
+    """
+
+    return {
+        "window_days": _read_float(
+            GROWTH_WINDOW_ENV, recency_config()["half_life_days"] or DEFAULT_HALF_LIFE_DAYS,
+            minimum=0.0,
+        ),
+        "min_notes": int(
+            _read_float(GROWTH_MIN_NOTES_ENV, float(DEFAULT_GROWTH_MIN_NOTES), minimum=1.0)
+        ),
+    }
+
+
+def growth_signal(
+    member_times: list[str] | None,
+    now: datetime,
+    *,
+    window_days: float | None = None,
+    min_notes: int | None = None,
+) -> dict[str, Any]:
+    """这件事**还在长吗**？——纯算术，读成员帖的 `publish_time` 分布，相对于**注入的** `now`。
+
+    这是「持续发酵」的唯一判据。它**不问 LLM**：新帖还在不在增加是一个**测量**，
+    每一条成员帖的时间戳就摆在那里（详见本模块顶部的判据说明）。
+
+    返回的是**证据**，不只是一个结论——徽标背后必须有"凭什么"：
+
+        {"window_days": 21.0,      # 看的是最近多少天（= 一个半衰期）
+         "total_notes": 4,         # 事件一共几条成员帖
+         "recent_notes": 3,        # 其中几条落在窗口内
+         "recent_share": 0.75,     # 占比（展示用；**不是**判据，理由见顶部注释）
+         "recent_rate": 0.1428,    # 窗口内的发帖速率（帖/天）
+         "baseline_rate": 0.1,     # 事件自己的历史平均速率（帖/天）
+         "growing": True}          # recent_notes >= 2 且 recent_rate >= baseline_rate
+
+    **没有时间戳 -> growing=False**：「不知道它在不在长」≠「它在长」。没有证据不许抬高紧急度
+    （同 recency_weight 对未知年龄的口径：宁可不加成，不可凭空加成）。
+    """
+
+    config = growth_config()
+    window = config["window_days"] if window_days is None else float(window_days)
+    minimum = config["min_notes"] if min_notes is None else int(min_notes)
+
+    reference = parse_time(now)
+    stamps = sorted(
+        stamp for stamp in (parse_time(value) for value in (member_times or [])) if stamp is not None
+    )
+    empty = {
+        "window_days": window,
+        "total_notes": len(stamps),
+        "recent_notes": 0,
+        "recent_share": 0.0,
+        "recent_rate": 0.0,
+        "baseline_rate": 0.0,
+        "growing": False,
+    }
+    if not stamps or reference is None or window <= 0.0:
+        return empty
+
+    recent = sum(
+        1
+        for stamp in stamps
+        if 0.0 <= (reference - stamp).total_seconds() / SECONDS_PER_DAY <= window
+    )
+    total = len(stamps)
+    span = max((stamps[-1] - stamps[0]).total_seconds() / SECONDS_PER_DAY, 0.0)
+
+    # 基线是**窗口之前**那段时间的速率，不是整个生命期的平均速率。
+    #
+    # 差别很要紧：拿"生命期平均"当基线，等于让**这一波新帖自己抬高自己的基线**——一个真正在
+    # 爆发的事件，它的新帖同时进了分子（近期速率）和分母（生命期平均），于是爆发把自己抵消掉了。
+    # 实测就撞上了这个坑：一个 3 帖事件（30 / 9 / 3 天前）明明三分之二的帖子是最近 9 天来的，
+    # 生命期基线（3/27=0.111）却压过了近期速率（2/21=0.095），判它"没在长"——荒谬。
+    #
+    # 所以基线只看**窗口之前**的证据：`prior / (span - window)`。这才是"它以前多快"，
+    # 于是判据读作一句人话：**它现在来帖的速度，比它自己过去更快吗？**
+    # 分母下限仍取一个窗口：跨度不足一个窗口的事件（今天刚爆出来）没有"过去"，
+    # 基线 = 0，两条新帖就足以判定它在长——这正确。
+    prior = total - recent
+    prior_days = max(span - window, window)
+    recent_rate = recent / window
+    baseline_rate = prior / prior_days
+
+    return {
+        "window_days": window,
+        "total_notes": total,
+        "recent_notes": recent,
+        "recent_share": recent / total,
+        "recent_rate": recent_rate,
+        "baseline_rate": baseline_rate,
+        "growing": recent >= minimum and recent_rate >= baseline_rate,
+    }
+
+
+def effective_lifecycle(lifecycle: str | None, growing: bool) -> str:
+    """把**判断**和**测量**合成为看板上的那一个状态。
+
+        escalating = ongoing（LLM：有一件悬而未决的事）  ∧  growing（算术：新帖还在来）
+
+    三条性质，全是刻意的：
+
+    1. **`resolved` / `not_applicable` 永远不会被算术提升。** 「这件事结束了」和「这本来就不是
+       一件事」是**判断**，成员帖的时间分布推翻不了它们。允许算术在这里翻盘就等于开了一个后门：
+       任何一个被转发到今天的旧事件都能自称在发酵，而语料里发帖最勤的恰恰是宿舍/攻略这类
+       **非事件**——它们会直接冲上首屏。（这正是 not_applicable 权重分析里堵死的那个后门。）
+    2. **未研判（""）也不会被提升。** 算术不知道"有没有待办动作"，它只知道"帖子还在来"。
+       没有判断就没有 escalating，因子留在恒等的 1.0——否则一次 LLM 超时就能让一个咨询贴
+       凭"最近很多人问"上首屏。
+    3. **幂等，而且会自我纠正。** 输入已经是 `escalating`（读到老数据、或重复标注）时先退回它的
+       判断底座 `ongoing`，再由**当下的**算术重新决定。于是一个上周还在发酵的事件，这周没人
+       再发帖，它自己就降回「悬而未决」——这也正是 escalating **不落库**的理由：它是 `now`
+       的函数，冻进数据库第二天就是错的（同 age_days / recency_weight）。
+    """
+
+    base = str(lifecycle or "").strip().lower()
+    if base == "escalating":  # escalating 不再是一个可被**输入**的判断，只是一个合成结果
+        base = "ongoing"
+    if base == "ongoing" and growing:
+        return "escalating"
+    return base
+
+
 def severity_weight(risk_level: str) -> float:
     """严重性的排序权重（low/medium/high -> 1/3/9）。**只用于排序，不改写 risk_score**。"""
 
@@ -284,6 +451,7 @@ def annotate_events_with_recency(
     now: datetime,
     half_life_days: float | None = None,
     min_weight: float | None = None,
+    growth_window_days: float | None = None,
 ) -> list[OpinionEvent]:
     """给事件盖上时效性三件套：`age_days` / `recency_weight` / `priority_score`。
 
@@ -296,6 +464,17 @@ def annotate_events_with_recency(
         event.age_days = age_in_days(event.event_time, now)
         event.recency_weight = recency_weight(
             event.age_days, half_life_days=half_life_days, min_weight=min_weight
+        )
+        # 「这件事还在长吗」= **测量**，在这里算（这个函数已经拿着注入的 now）。
+        # 它只读成员帖的时间戳，不碰 risk_*（严重性）、heat_*（流行度）、recency_weight（时效）。
+        event.growth = growth_signal(
+            event.member_times, now, window_days=growth_window_days
+        )
+        # 合成：escalating = ongoing（LLM 的判断） ∧ growing（算术的测量）。
+        # `lifecycle_judgement` 是模型答的那一半，原样留着（落库、可审计）；`lifecycle` 是看板
+        # 上真正显示、也真正进排序的那个状态。resolved / not_applicable / 未研判 不会被提升。
+        event.lifecycle = effective_lifecycle(
+            event.lifecycle_judgement or event.lifecycle, event.growth["growing"]
         )
         # 生命周期（第四根轴）已经由 llm_lifecycle 盖在事件上（未研判时是 ""，因子 1.0）：
         # 它进 priority_score，不进 recency_weight —— 时效权重必须保持"只是年龄的函数"，
@@ -394,10 +573,59 @@ def lifecycle_from_payload(date_range_json: str | None) -> tuple[str, str]:
     return lifecycle, str(data.get("lifecycle_reason") or "").strip()
 
 
+def lifecycle_judgement_from_payload(date_range_json: str | None) -> tuple[str, str]:
+    """从 `date_range_json` 里取 **LLM 的那一半判断** + 理由（读侧合成 escalating 用）。
+
+    库里存的是**判断**（resolved / ongoing / not_applicable），不是合成后的 escalating——
+    escalating 是 `now` 的函数（见 effective_lifecycle 的第 3 条），冻进数据库第二天就是错的。
+
+    老数据（04f25f5 那一版把合成前的 `escalating` 直接落了库）没有 `lifecycle_judgement`
+    这个键：退回读 `lifecycle`，并让 `effective_lifecycle` 把 `escalating` 降回它的判断底座
+    `ongoing`，再由**当下的**算术重新决定它还在不在长。老徽标不会凭一次陈年跑批永远挂着。
+    """
+
+    if not date_range_json:
+        return "", ""
+    try:
+        data = json.loads(date_range_json)
+    except (TypeError, ValueError):
+        return "", ""
+    if not isinstance(data, dict):
+        return "", ""
+    judgement = str(data.get("lifecycle_judgement") or data.get("lifecycle") or "").strip().lower()
+    if judgement not in VALID_LIFECYCLES:  # 脏值 / 模型自创的状态 -> 未研判（因子 1.0）
+        return "", ""
+    return judgement, str(data.get("lifecycle_reason") or "").strip()
+
+
+def member_times_from_payload(date_range_json: str | None) -> list[str]:
+    """从 `date_range_json` 里取**成员帖的发布时间**（读侧现算"还在不在长"的原料）。
+
+    这些时间戳是**事实**（和 event_time 同类），所以落库；而由它们算出来的"还在不在长"
+    是 `now` 的函数，**不落库**——每次请求按当前时刻重算，看板因此会自我纠正。
+    """
+
+    if not date_range_json:
+        return []
+    try:
+        data = json.loads(date_range_json)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    values = data.get("member_times")
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if str(value or "").strip()]
+
+
 __all__ = [
+    "DEFAULT_GROWTH_MIN_NOTES",
     "DEFAULT_HALF_LIFE_DAYS",
     "DEFAULT_MIN_WEIGHT",
     "DEFAULT_STRATEGY",
+    "GROWTH_MIN_NOTES_ENV",
+    "GROWTH_WINDOW_ENV",
     "HALF_LIFE_ENV",
     "LIFECYCLE_WEIGHTS",
     "MIN_WEIGHT_ENV",
@@ -407,10 +635,15 @@ __all__ = [
     "VALID_STRATEGIES",
     "age_in_days",
     "annotate_events_with_recency",
+    "effective_lifecycle",
     "event_reference_time",
     "event_time_from_payload",
+    "growth_config",
+    "growth_signal",
     "lifecycle_from_payload",
+    "lifecycle_judgement_from_payload",
     "lifecycle_weight",
+    "member_times_from_payload",
     "note_time",
     "parse_time",
     "priority_score",

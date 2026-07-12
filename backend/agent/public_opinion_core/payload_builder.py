@@ -40,13 +40,26 @@ def build_public_event_payloads(result: AnalyzeResult) -> list[dict[str, Any]]:
                         # ——它们由读侧（GET /api/events）用请求时刻现算，见 recency.py。
                         # public_events 没有新增列：date_range_json 本来就装着时间信息。
                         "event_time": event.event_time,
-                        # 生命周期（第四根轴）：这件事**完了没有**（resolved/ongoing/escalating）。
-                        # 它是对内容的判断（不是 now 的函数），所以**落库**——读侧（GET /api/events
-                        # 的 sort_event_rows）要用它算优先级，前端要用它显示「悬而未决」。
-                        # 同样不加列：状态是时间这根轴上的修饰量，和 event_time 装在一起。
-                        # 未研判时是空串 -> 读回来因子 1.0 -> 排序退化回改造前。
-                        "lifecycle": event.lifecycle,
+                        # 生命周期（第四根轴）。**判断落库，测量不落库**：
+                        #
+                        #   lifecycle_judgement —— LLM 答的那一半（这件事**悬而未决吗**：
+                        #     resolved / ongoing / not_applicable）。它是对**内容**的判断，
+                        #     不是 now 的函数，所以落库。
+                        #   member_times —— 成员帖的发布时间，**事实**（同 event_time），落库。
+                        #     读侧拿它现算"这件事还在不在长"。
+                        #
+                        # 而 `escalating` = ongoing ∧ 仍在增长，**是 now 的函数**——冻进数据库
+                        # 第二天就是错的（同 age_days / recency_weight）。所以它不作为一个独立
+                        # 的落库状态，由读侧（GET /api/events）按请求时刻重新合成，看板因此会
+                        # **自我纠正**：新帖停了，「持续发酵」自己降回「悬而未决」。
+                        #
+                        # `lifecycle` 仍然写（写的是判断，不是合成结果），是为了老读侧/老数据的
+                        # 兼容：没有 lifecycle_judgement 键时 lifecycle_judgement_from_payload
+                        # 会退回读它。未研判时是空串 -> 读回来因子 1.0 -> 排序退化回改造前。
+                        "lifecycle": event.lifecycle_judgement or event.lifecycle,
+                        "lifecycle_judgement": event.lifecycle_judgement,
                         "lifecycle_reason": event.lifecycle_reason,
+                        "member_times": list(event.member_times),
                     }
                 ),
                 "source_keywords_json": _json_dumps(event.source_keywords),

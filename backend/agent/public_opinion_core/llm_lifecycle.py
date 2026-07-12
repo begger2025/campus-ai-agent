@@ -51,9 +51,26 @@ from .recency import VALID_LIFECYCLES
 from .schemas import OpinionEvent, OpinionNote
 
 
+# **模型被允许回答的状态**（判断），比排序认的 VALID_LIFECYCLES 少一个：
+#
+#     VALID_LIFECYCLES = LLM_LIFECYCLES + ("escalating",)
+#
+# `escalating`（持续发酵）**已经不是一个模型判词**。上一轮消融实测它在 28 个事件上一次都没
+# 触发（0/28），诊断是诚实的：模型读的是一份**冻结的 fixture**，它看不见"新帖还在不在增加"，
+# 只能从**措辞和语气**里嗅发酵感——`escalating` / `ongoing` 的边界事实上由**文风**决定。
+#
+# 而「这件事还在不在长」是一个**测量**：每一条成员帖的 `publish_time` 就摆在那里。它归算术
+# （recency.growth_signal），和时效衰减同类。模型只答它答得了的那一半：
+#
+#     LLM（判断）：有没有一件悬而未决的事？ -> resolved / ongoing / not_applicable
+#     算术（测量）：这件事还在长吗？        -> growth_signal(member_times, now)
+#     合成：escalating = ongoing ∧ growing  （见 recency.effective_lifecycle）
+LLM_LIFECYCLES = ("resolved", "ongoing", "not_applicable")
+
+
 # (事件标题, 成员帖文本) -> 状态研判；由运行环境注入（见 backend/services/event_lifecycle.py），
 # 核心不认识 HTTP、模型名和 API key（同 RiskAssessor / Embedder / ClusterRefiner）。
-#   {"lifecycle": "resolved"|"ongoing"|"escalating"|"not_applicable", "lifecycle_reason": "一句人话"}
+#   {"lifecycle": "resolved"|"ongoing"|"not_applicable", "lifecycle_reason": "一句人话"}
 # 返回 None / 抛异常 = 本次研判不可用，调用方保留"未研判"（因子 1.0）。
 LifecycleAssessor = Callable[[str, list[str]], "Mapping[str, Any] | None"]
 
@@ -105,27 +122,53 @@ def assess_events_lifecycle(
             )
             continue
 
-        lifecycle, reason = verdict
-        event.lifecycle = lifecycle
+        judgement, reason, demoted = verdict
+        if demoted:
+            warnings.append(
+                f"llm lifecycle returned 'escalating' for event 「{event.title}」, "
+                f"demoted to 'ongoing': whether an event is still growing is measured from "
+                f"member post timestamps (recency.growth_signal), not judged by the model"
+            )
+        # **判断**（模型答的那一半）落在 lifecycle_judgement 上；`lifecycle` 先取同值，
+        # 稍后由 annotate_events_with_recency 用**注入的 now** 合成最终状态：
+        #   escalating = ongoing ∧ 算术判定仍在增长。
+        # 这里不合成，是因为本模块**没有 now**——而"还在不在长"必须相对某个时刻才有意义，
+        # 纯函数里绝不允许出现 datetime.now()（否则消融不可复现）。
+        event.lifecycle_judgement = judgement
+        event.lifecycle = judgement
         event.lifecycle_reason = reason
         event.extra["lifecycle_assessed_by"] = "llm"
         assessed += 1
     return assessed
 
 
-def _validate(raw: Any) -> tuple[str, str] | None:
-    """验模型输出；None = 不可信，调用方保留"未研判"。
+def _validate(raw: Any) -> tuple[str, str, bool] | None:
+    """验模型输出 -> (判断, 理由, 是否降级过)；None = 不可信，调用方保留"未研判"。
 
     这是本模块的安全边界。状态会改变一个事件在看板上的位置（最多 8 倍的优先级差），所以：
     编造的状态（"dormant"、"持续发酵"）不许进；**没有理由的状态也不许进**——管理员看到
     「悬而未决」时必须能看到"凭什么"，一个说不出理由的判断在答辩里也辩护不了。
+
+    **模型仍然吐 `escalating` 怎么办**（提示词已经不给它这个选项了，但模型不是合同）：
+    **不静默接受，但也不整份作废**——降级成 `ongoing`，保留理由，并让调用方记一条 warning。
+
+    理由：`escalating` 在语义上**蕴含** `ongoing`（"没有结论**而且**还在扩大" ⇒ "没有结论"）。
+    模型对**前半句**依然是权威的（它读了帖子），对**后半句**（还在不在扩大）已经不是了——
+    那是测量，归算术。所以保留它答得了的那一半，把测量交还给 `growth_signal`：如果算术同意
+    它在长，它会被重新合成回 `escalating`；如果不同意，模型的语气就到此为止。
+
+    整份作废（退回"未研判"、因子 1.0）反而更糟：那会把一条**有效的判断**（"这事没结"）连同
+    越权的那一半一起扔掉，让一个真正悬而未决的事件掉回恒等因子、和"不知道"混为一谈。
     """
 
     if not isinstance(raw, Mapping):
         return None
 
     lifecycle = str(raw.get("lifecycle") or "").strip().lower()
-    if lifecycle not in VALID_LIFECYCLES:  # 包括模型自创的状态与空值
+    demoted = False
+    if lifecycle == "escalating":  # 模型越权：它不再有资格回答"还在不在长"
+        lifecycle, demoted = "ongoing", True
+    if lifecycle not in LLM_LIFECYCLES:  # 包括模型自创的状态与空值
         return None
 
     reason = raw.get("lifecycle_reason")
@@ -134,10 +177,11 @@ def _validate(raw: Any) -> tuple[str, str] | None:
     reason = reason.strip()[:REASON_MAX_CHARS]
     if not reason:
         return None
-    return lifecycle, reason
+    return lifecycle, reason, demoted
 
 
 __all__ = [
+    "LLM_LIFECYCLES",
     "REASON_MAX_CHARS",
     "VALID_LIFECYCLES",
     "LifecycleAssessor",

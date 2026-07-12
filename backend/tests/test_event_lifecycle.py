@@ -30,6 +30,7 @@ from unittest import mock
 from backend.agent.public_opinion_core import AnalyzeRequest, PublicOpinionAgentService
 from backend.agent.public_opinion_core.clustering import build_event_from_group, sort_events
 from backend.agent.public_opinion_core.llm_lifecycle import (
+    LLM_LIFECYCLES,
     VALID_LIFECYCLES,
     assess_events_lifecycle,
 )
@@ -108,11 +109,16 @@ class LifecycleWeightTest(unittest.TestCase):
 
         原本只有三档，而三档全都预设了"存在一件待处置的事"——于是「图书馆对校外开放吗」这种
         **提问**只能被塞进 ongoing（"未见校方结论"），看板上挂出「悬而未决」。那是句假话。
+
+        **排序**认的仍然是这四个状态（因子表不变，escalating 仍是 ×4）。但**模型**能回答的
+        只剩三个（`LLM_LIFECYCLES`）：`escalating` 现在是 `ongoing ∧ 算术判定仍在增长` 的
+        **合成结果**，不是模型的判词。两个枚举的差集正好是它——见 test_event_growth.py。
         """
 
         self.assertEqual(
             set(VALID_LIFECYCLES), {"resolved", "ongoing", "escalating", "not_applicable"}
         )
+        self.assertEqual(set(VALID_LIFECYCLES) - set(LLM_LIFECYCLES), {"escalating"})
 
     def test_not_applicable_does_not_compete_with_incidents(self) -> None:
         """无诉求的内容不该抗衰减：它不急（≠ ongoing 的 ×2），但也不是"处置完了"的事。"""
@@ -609,14 +615,23 @@ class DeploymentAssessorTest(unittest.TestCase):
         self.assertEqual(kwargs["model"], event_lifecycle.EVENT_LLM_MODEL)
 
     def test_prompt_frames_the_question_as_state_not_severity(self) -> None:
+        """**本次修改的断言**：原本这里是 `for state in VALID_LIFECYCLES: assertIn(state, prompt)`，
+        即"提示词必须给出全部四个状态"。现在改成 `LLM_LIFECYCLES`（三个），并**新增**一条
+        `assertNotIn("escalating", prompt)`。
+
+        这不是放松，是**收紧**：`escalating` 不再是模型可以回答的状态（它是算术测出来的，
+        不是模型从语气里判出来的），所以提示词里出现它反而是缺陷——旧断言会**要求**这个缺陷存在。
+        """
+
         payload = {"lifecycle": "ongoing", "lifecycle_reason": "校方未回应"}
         with mock.patch.object(event_lifecycle, "call_llm", return_value=self.reply(payload)) as call:
             event_lifecycle.assess_event_lifecycle("中大杰青实名举报", ["举报两个月了还没结论"])
 
         prompt = "\n".join(message["content"] for message in call.call_args.args[0])
         self.assertIn("校园", prompt)
-        for state in VALID_LIFECYCLES:
+        for state in LLM_LIFECYCLES:
             self.assertIn(state, prompt)
+        self.assertNotIn("escalating", prompt)  # 「还在不在长」不是模型的问题，是算术的
         self.assertIn("严重", prompt)  # 状态 ≠ 严重性：严重的事也可以已了结
         self.assertIn("热度", prompt)  # 状态 ≠ 流行度
         self.assertIn("<data>", prompt)  # 采集内容当数据、不当指令

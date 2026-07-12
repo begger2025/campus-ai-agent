@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -220,6 +220,175 @@ class EventsApiLifecycleTest(unittest.TestCase):
             items["无状态的旧事件"]["priority_score"] * 2.0,
             places=6,
         )
+
+
+def growth_range(event_time: str, judgement: str, reason: str, member_ages: list[float]) -> str:
+    """落库口径（新）：**判断**（lifecycle_judgement）+ **事实**（member_times）。
+
+    「还在不在长」是 now 的函数，**不落库**——它由读侧用请求时刻现算（同 age_days）。
+    """
+
+    return json.dumps(
+        {
+            "first_seen_at": event_time,
+            "last_seen_at": event_time,
+            "event_time": event_time,
+            "lifecycle": judgement,
+            "lifecycle_judgement": judgement,
+            "lifecycle_reason": reason,
+            "member_times": [
+                (NOW - timedelta(days=age)).replace(tzinfo=None).isoformat()
+                for age in member_ages
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+class EventsApiGrowthTest(unittest.TestCase):
+    """「持续发酵」在**前端真正消费的那个顺序**里生效，而且带着算术证据。
+
+    `sort_event_rows` 是看板的顺序（核心的 `sort_events` 只决定写库顺序，写完就被
+    `ORDER BY created_at DESC` 冲掉了——17d5ef2 实测出来的坑）。escalating 是 `now` 的函数，
+    所以它**在这里现算**：库里存的是判断（ongoing）+ 成员帖时间，读时才合成。
+    """
+
+    def setUp(self) -> None:
+        engine = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        )
+        Base.metadata.create_all(engine)
+        self.session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+        db = self.session_factory()
+        db.add_all(
+            [
+                # 悬而未决 + 近 21 天有 3 条新帖 -> 算术判定"还在长" -> **持续发酵**（×4）。
+                PublicEvent(
+                    title="中大杰青实名举报",
+                    status="published",
+                    risk_level="high",
+                    risk_score=90.0,
+                    heat_score=12.0,
+                    source_count=4,
+                    date_range_json=growth_range(
+                        "2026-07-05T10:00:00", "ongoing", "举报未见调查结论", [2, 5, 9, 40]
+                    ),
+                ),
+                # 同龄同险、同样悬而未决，但**没有新帖** -> 停在「悬而未决」（×2）。
+                PublicEvent(
+                    title="中大作息调整争议",
+                    status="published",
+                    risk_level="high",
+                    risk_score=90.0,
+                    heat_score=12.0,
+                    source_count=4,
+                    date_range_json=growth_range(
+                        "2026-07-05T10:00:00", "ongoing", "校方仅称会关注关切", [40, 41, 42, 43]
+                    ),
+                ),
+                # **已了结**，可最近又冒出 3 条新帖（转发/回顾）——算术不许把它抬成持续发酵。
+                PublicEvent(
+                    title="东校区宿舍火情",
+                    status="published",
+                    risk_level="high",
+                    risk_score=95.0,
+                    heat_score=17.0,
+                    source_count=4,
+                    date_range_json=growth_range(
+                        "2026-07-05T10:00:00", "resolved", "明火已扑灭、校方已通报", [2, 5, 9, 40]
+                    ),
+                ),
+                # **非事件**，而且是语料里发帖最勤的一类——同样不许被抬上首屏。
+                PublicEvent(
+                    title="中大校园与宿舍展示",
+                    status="published",
+                    risk_level="high",
+                    risk_score=90.0,
+                    heat_score=9.0,
+                    source_count=4,
+                    date_range_json=growth_range(
+                        "2026-07-05T10:00:00", "not_applicable", "宿舍环境分享，无待处置诉求", [1, 3, 6, 8]
+                    ),
+                ),
+            ]
+        )
+        db.commit()
+        db.close()
+
+        def override_get_db():
+            db = self.session_factory()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = override_get_db
+        self.addCleanup(app.dependency_overrides.clear)
+        self.client = TestClient(app)
+
+    def rows(self) -> list[PublicEvent]:
+        db = self.session_factory()
+        try:
+            return db.query(PublicEvent).filter(PublicEvent.status == "published").all()
+        finally:
+            db.close()
+
+    def items(self) -> dict:
+        payload = self.client.get("/api/events").json()["data"]["items"]
+        return {item["title"]: item for item in payload}
+
+    def test_a_growing_unresolved_event_is_escalating_on_the_board(self) -> None:
+        items = self.items()
+
+        self.assertEqual(items["中大杰青实名举报"]["lifecycle"], "escalating")
+        self.assertEqual(items["中大作息调整争议"]["lifecycle"], "ongoing")
+
+    def test_growth_evidence_is_surfaced_next_to_the_badge(self) -> None:
+        """徽标背后必须有证据：管理员要能看到"凭什么说它在发酵"（近 21 天 3/4 帖）。"""
+
+        growth = self.items()["中大杰青实名举报"]["growth"]
+
+        self.assertTrue(growth["growing"])
+        self.assertEqual(growth["recent_notes"], 3)
+        self.assertEqual(growth["total_notes"], 4)
+        self.assertEqual(growth["window_days"], 21.0)
+
+    def test_arithmetic_never_promotes_a_resolved_or_non_event(self) -> None:
+        items = self.items()
+
+        self.assertEqual(items["东校区宿舍火情"]["lifecycle"], "resolved")
+        self.assertEqual(items["中大校园与宿舍展示"]["lifecycle"], "not_applicable")
+        # 算术**看见了**新帖（证据如实交出），但它没有权力改判「已了结」和「非事件」。
+        self.assertTrue(items["东校区宿舍火情"]["growth"]["growing"])
+        self.assertTrue(items["中大校园与宿舍展示"]["growth"]["growing"])
+
+    def test_escalating_leads_the_board_order(self) -> None:
+        ordered = [row.title for row in api_router.sort_event_rows(self.rows(), now=NOW)]
+
+        self.assertEqual(ordered[0], "中大杰青实名举报")
+        self.assertEqual(ordered[1], "中大作息调整争议")
+
+    def test_escalating_is_worth_exactly_twice_ongoing(self) -> None:
+        items = self.items()
+
+        self.assertAlmostEqual(
+            items["中大杰青实名举报"]["priority_score"],
+            items["中大作息调整争议"]["priority_score"] * 2.0,
+            places=6,
+        )
+
+    def test_the_board_self_corrects_when_the_posts_stop(self) -> None:
+        """60 天后再看同一批行：新帖不再新，「持续发酵」自己降回「悬而未决」。
+
+        这正是 escalating **不落库**的理由——把它冻进数据库，它就会永远宣称自己在发酵。
+        """
+
+        later = NOW + timedelta(days=60)
+        ordered = api_router.sort_event_rows(self.rows(), now=later)
+        report = next(row for row in ordered if row.title == "中大杰青实名举报")
+
+        self.assertEqual(api_router._recency_fields(report, later)["lifecycle"], "ongoing")
 
 
 if __name__ == "__main__":

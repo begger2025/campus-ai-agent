@@ -49,7 +49,7 @@
                 <span
                   v-if="hasLifecycle(event.lifecycle)"
                   :class="['lifecycle-tag', `lifecycle-tag--${event.lifecycle}`]"
-                  :title="lifecycleTitle(event.lifecycle, event.lifecycle_reason)"
+                  :title="lifecycleTitle(event.lifecycle, event.lifecycle_reason, event.growth)"
                 >{{ lifecycleLabel(event.lifecycle) }}</span>
               </div>
             </div>
@@ -71,7 +71,7 @@
               <span
                 v-if="hasLifecycle(selectedEvent.lifecycle)"
                 :class="['lifecycle-tag', `lifecycle-tag--${selectedEvent.lifecycle}`]"
-                :title="lifecycleTitle(selectedEvent.lifecycle, selectedEvent.lifecycle_reason)"
+                :title="lifecycleTitle(selectedEvent.lifecycle, selectedEvent.lifecycle_reason, selectedEvent.growth)"
               >{{ lifecycleLabel(selectedEvent.lifecycle) }}</span>
             </div>
 
@@ -81,6 +81,12 @@
             <p v-if="hasLifecycle(selectedEvent.lifecycle)" class="detail-lifecycle">
               <strong>{{ lifecycleLabel(selectedEvent.lifecycle) }}</strong>
               <span v-if="selectedEvent.lifecycle_reason">· {{ selectedEvent.lifecycle_reason }}</span>
+            </p>
+
+            <!-- 「持续发酵」不是模型说的，是**算出来的**：把那组数字摆出来，管理员能自己复核。
+                 别的三个状态是判断（理由是一句话），这一个是测量（依据是一组帖子的发布时间）。 -->
+            <p v-if="growthEvidence(selectedEvent.growth) && selectedEvent.lifecycle === 'escalating'" class="detail-growth">
+              发酵依据（算术）：{{ growthEvidence(selectedEvent.growth) }}
             </p>
 
             <div class="detail-metrics">
@@ -184,7 +190,7 @@ import { ElMessage } from 'element-plus'
 import { Pointer } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { formatAge, formatEventTime, isStale } from '@/utils/age'
-import { hasLifecycle, lifecycleLabel, lifecycleTitle } from '@/utils/lifecycle'
+import { growthEvidence, hasLifecycle, lifecycleLabel, lifecycleTitle } from '@/utils/lifecycle'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { sourceOptions } from '@/mock/events'
 import { fetchPublishedEvents } from '@/api/events'
@@ -440,6 +446,14 @@ function sentimentLabel(s) {
   margin: 0 0 12px;
   font-size: 12px;
   color: var(--color-text-secondary);
+}
+
+/* 「持续发酵」的算术证据：等宽字体，因为它是一组**可以复核的数字**，不是一句判词。 */
+.detail-growth {
+  margin: -6px 0 12px;
+  font-size: 12px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--color-text-muted);
 }
 
 /* ——— 中栏：事件详情 ——— */

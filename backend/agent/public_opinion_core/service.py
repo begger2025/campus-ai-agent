@@ -15,7 +15,7 @@ from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner
 from .llm_risk import DEFAULT_MAX_TEXTS, RiskAssessor, assess_events_risk
 from .memory import annotate_events_with_memory, build_snapshot
 from .normalizer import analysis_text, clean_text, note_text
-from .recency import annotate_events_with_recency, recency_config
+from .recency import annotate_events_with_recency, growth_config, recency_config
 from .schemas import AgentRunLogPayload, AnalyzeRequest, AnalyzeResult, MemorySnapshot, OpinionNote
 from .scoring import score_notes
 from .semantic_clustering import cluster_notes_semantic, strip_social_noise
@@ -60,6 +60,7 @@ class PublicOpinionAgentService:
         lifecycle_assessor: LifecycleAssessor | None = None,
         now: datetime | None = None,
         recency_half_life_days: float | None = None,
+        growth_window_days: float | None = None,
     ) -> AnalyzeResult:
         request = request or AnalyzeRequest()
         started_perf = time.perf_counter()
@@ -188,8 +189,22 @@ class PublicOpinionAgentService:
             if recency_half_life_days is None
             else float(recency_half_life_days)
         )
+        # 增长窗口缺省 = 半衰期本身（**不是一个新常数**：半衰期的定义就是"一个校园议题的典型
+        # 活跃长度"，一个事件若在一个半衰期内还在追加证据，它就还赶得上衰减打折它的速度）。
+        growth_window = (
+            growth_window_days
+            if growth_window_days is not None
+            else (half_life if half_life > 0 else growth_config()["window_days"])
+        )
         if events:
-            events = annotate_events_with_recency(events, now=now, half_life_days=half_life)
+            # 这一步同时做三件事，顺序是刻意的：
+            #   1. 时效算术（年龄 -> recency_weight）；
+            #   2. **增长算术**（成员帖时间分布 -> growing）；
+            #   3. **合成**：escalating = ongoing（LLM 的判断） ∧ growing（算术的测量）。
+            # 必须排在状态研判之后：合成要用模型刚判出来的那一半。
+            events = annotate_events_with_recency(
+                events, now=now, half_life_days=half_life, growth_window_days=growth_window
+            )
             events = sort_events(events)
         events = annotate_events_with_memory(events, previous_snapshot)
 
@@ -226,6 +241,13 @@ class PublicOpinionAgentService:
                 "lifecycle_assessed": lifecycle_assessed,
                 "lifecycle_counts": dict(
                     Counter(event.lifecycle for event in events if event.lifecycle)
+                ),
+                # 增长（「持续发酵」的**算术**判据）：窗口是多少天、有几个事件被测出仍在增长。
+                # escalating = ongoing ∧ growing，所以 escalating 的个数永远 <= growing_events
+                # （已了结 / 非事件 即使还在来新帖也不会被提升）。两个数一起记，差值本身就是证据。
+                "growth_window_days": growth_window,
+                "growing_events": sum(
+                    1 for event in events if event.growth.get("growing")
                 ),
                 # 时效性：本次排序用的半衰期与"现在"。0 = 关掉衰减（消融对照臂）。
                 # 记进 agent_run_logs 才能事后复现"这一版看板为什么是这个顺序"。

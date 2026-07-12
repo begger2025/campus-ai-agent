@@ -1,21 +1,32 @@
-"""消融实验：事件排序 —— 只看年龄 vs 看「这件事完了没有」。
+"""消融实验：事件排序 —— 只看年龄 vs 看「这件事完了没有」+「它还在不在长」。
 
 同一批帖子、**同一批事件**排两遍序，唯一的变量是"排序看不看事件状态"：
 
   A. 无状态臂（改造前）：`priority = severity_weight(risk_level) × recency_weight`
      ——衰减只认年龄，同龄的两个事件一视同仁。
   B. 生命周期臂：`priority = severity × recency × lifecycle_weight(lifecycle)`
-     ——`lifecycle_weight` = {resolved: 0.5, ongoing: 2, escalating: 4, 未研判: 1}。
+     ——`lifecycle_weight` = {resolved: 0.5, ongoing: 2, escalating: 4, not_applicable: 0.5, 未研判: 1}。
 
 两臂共用同一个事件集合（聚类 + LLM 风险只跑一次，深拷贝出第二份），所以名次差异**只可能**
 来自状态这一层。严重性（risk_*）、热度（heat_*）和时效权重（recency_weight）在两臂里逐事件
 比对，必须**完全一致**——状态只改顺序，不改事实，也不改时效算术。
 
+**本轮的变量：「持续发酵」从 LLM 判词改成了算术判据。** 上一轮 `escalating` 在 28 个事件上
+一次都没触发（0/28），诊断是诚实的——模型读的是一份**冻结的快照**，看不见"新帖还在不在增加"，
+只能从**语气**里嗅发酵感。现在问题一分为二：
+
+    LLM（判断）：这件事悬而未决吗？   -> resolved / ongoing / not_applicable
+    算术（测量）：这件事还在长吗？     -> growth_signal(成员帖 publish_time, now)
+    合成：escalating = ongoing ∧ growing
+
 要回答的问题：
   1. 「东校区宿舍火情」（火已扑灭 / 已通报 / 无伤亡 / 已立案）——模型判它 resolved 吗？
-     判成 resolved 之后它掉到第几？还"体面"吗（severity 95 还托不托得住）？
-  2. 「中大杰青实名举报」「中大作息调整争议」——模型判它们 ongoing 吗？它们升上来了吗？
-  3. 模型判出来的状态里，有没有**和预期不一样**的？（有的话如实打印：错判是发现，不是丢人。）
+  2. 「中大杰青实名举报」「中大作息调整争议」——模型判它们 ongoing 吗？
+  3. **算术判据在这份真实语料上到底触发不触发？** 触发在哪几个事件上？
+     如果一个都没触发——**如实说**。这份快照里近 7 天只有 5 条帖子，
+     "没有事件在发酵"完全可能就是**正确答案**，不是失败。
+  4. 有没有 resolved / not_applicable 的事件"还在来新帖"却**没有**被抬成 escalating？
+     （这是必须守住的性质：算术推翻不了判断。）
 
 **不连数据库**：全程只读 fixture（data/fixtures/event_clustering_297.json）。
 **now 可注入**（--now），所以这份报告是可复现的。
@@ -51,6 +62,7 @@ from backend.agent.public_opinion_core.llm_lifecycle import (  # noqa: E402
     assess_events_lifecycle,
 )
 from backend.agent.public_opinion_core.recency import (  # noqa: E402
+    DEFAULT_GROWTH_MIN_NOTES,
     LIFECYCLE_WEIGHTS,
     annotate_events_with_recency,
     lifecycle_weight,
@@ -83,6 +95,8 @@ REPORT = ROOT / "docs" / "event-lifecycle-ablation.md"
 #   咨询/分享类（本次修复的靶子）：**根本没有待处置的事** -> 预期 not_applicable
 #     上一轮这四个被兜底规则判成了 ongoing（「未见校方结论」），而结构完全相同的
 #     「考研信息汇总」「校园与宿舍展示」却被判成 resolved —— 自相矛盾。两类都点名，一起验。
+#   注意：预期栏现在写的是 **LLM 的判断**（三档），不再是合成后的状态——`escalating` 已经
+#   不是模型能回答的东西了。它会不会被抬成「持续发酵」，由算术在下面单独一张表里回答。
 TARGETS: list[tuple[str, tuple[str, ...], str]] = [
     ("东校区宿舍火情", ("火灾", "起火", "火情", "消防"), "resolved"),
     ("中大杰青实名举报", ("举报", "杰青", "学术不端"), "ongoing"),
@@ -173,7 +187,10 @@ def lifecycle_arm(
         warnings=warnings,
         max_texts=EVENT_RISK_MAX_TEXTS,
     )
-    annotate_events_with_recency(events, now=now, half_life_days=half_life)
+    # 增长窗口显式取半衰期（= 判据的默认口径），别让 .env 悄悄改掉消融的参数。
+    annotate_events_with_recency(
+        events, now=now, half_life_days=half_life, growth_window_days=half_life
+    )
     return sort_events(events), assessed, warnings
 
 
@@ -212,8 +229,20 @@ def render(
     add("因子取 2 的幂，所以能用半衰期读：×2 ⇔ 把事件当作**年轻了一个半衰期**"
         f"（{half_life:.0f} 天），×0.5 ⇔ 当作老了一个半衰期。")
     add("")
-    add("`not_applicable`（非事件）是这一轮新增的第四档：咨询/攻略/分享类内容**没有待处置的事**，")
-    add("上一轮被兜底规则「拿不准就选 ongoing」判成了「悬而未决」——本次消融就是来验它修没修好的。")
+    add("**本轮的变量**：「持续发酵」（escalating）从 **LLM 判词**改成了**算术判据**。")
+    add("上一轮它在 28 个事件上一次都没触发——因为模型读的是一份冻结的快照，它看不见「新帖还在")
+    add("不在增加」，只能从**语气**里嗅发酵感。而每条帖子的 `publish_time` 就摆在那里：")
+    add("**「还在不在长」是一个测量，不是一个判断。** 于是问题一分为二：")
+    add("")
+    add("| 维度 | 谁来答 | 依据 |")
+    add("| --- | --- | --- |")
+    add("| 有多严重（risk_level） | **LLM**（判断） | 读帖子 |")
+    add("| 有多热（heat_score） | 算术（测量） | 互动量 |")
+    add("| 有多老（recency_weight） | 算术（测量） | `publish_time` |")
+    add("| **悬而未决吗**（lifecycle） | **LLM**（判断） | 读帖子 |")
+    add("| **还在长吗**（growing） | 算术（测量） | 成员帖 `publish_time` 分布 |")
+    add("")
+    add("合成：`escalating` = `ongoing` **∧** `growing`。")
     add("")
 
     if staged is None:
@@ -222,7 +251,10 @@ def render(
         add("")
         return "\n".join(lines)
 
-    add("## 事先写下的预期 vs 模型实际判的（**不一致就照实记，不往预期上掰**）")
+    add("## 一、LLM 那一半：事先写下的预期 vs 模型实际判的（**不一致就照实记，不往预期上掰**）")
+    add("")
+    add("模型现在只回答**判断**：`resolved` / `ongoing` / `not_applicable`。")
+    add("`escalating` 已经从它的枚举里删掉了——「还在不在长」是测量，见下一节。")
     add("")
     add("| 事件 | 我预期 | 模型判的 | 一致？ | 模型给的理由 | A 臂排名 | B 臂排名 |")
     add("| --- | --- | --- | :---: | --- | ---: | ---: |")
@@ -232,7 +264,7 @@ def render(
             add(f"| 「{name}」 | {LIFECYCLE_LABELS[expected]} | （本次聚类未形成该事件） | — | — | — | — |")
             continue
         staged_event = staged_by_key.get(event.event_key)
-        got = staged_event.lifecycle if staged_event else ""
+        got = staged_event.lifecycle_judgement if staged_event else ""
         mark = "✅" if got == expected else "❌"
         add(
             f"| 「{event.title}」（{event.source_count} 帖，{event.risk_level}/{event.risk_score}，"
@@ -243,10 +275,52 @@ def render(
         )
     add("")
 
+    add("## 二、算术那一半：「这件事还在长吗」——发帖速率，不是语气")
+    add("")
+    window = staged[0].growth.get("window_days", 0.0) if staged else 0.0
+    add(
+        f"判据（纯算术，`now` 注入）：窗口 = **{window:.0f} 天**（= 时效半衰期本身，不是新常数），"
+        f"窗口内**至少 {DEFAULT_GROWTH_MIN_NOTES} 条**成员帖，**且**窗口内的发帖速率 "
+        f"**>=** 该事件在窗口之前的速率。"
+    )
+    add("一句人话：**它现在来帖的速度，比它自己过去更快吗？**")
+    add("")
+    add("合成：`escalating` = `ongoing`（模型：这事没结）**∧** `growing`（算术：新帖还在来）。")
+    add("**`resolved` / `not_applicable` 永远不会被算术抬成 escalating**——「已了结」和「本来就不是")
+    add("一件事」是判断，帖子的时间分布推翻不了它们（否则任何一个被转发到今天的旧事件都能自称在发酵）。")
+    add("")
+    growing = [event for event in staged if event.growth.get("growing")]
+    add(f"**语料实测：{len(growing)} / {len(staged)} 个事件被测出「仍在增长」。**")
+    add("")
+    if growing:
+        add("| 事件 | 模型判断 | 近 {0:.0f} 天新帖 | 总帖 | 近期速率 | 此前速率 | 仍在增长？ | **合成状态** |".format(window))
+        add("| --- | --- | ---: | ---: | ---: | ---: | :---: | --- |")
+        for event in growing:
+            add(
+                f"| {event.title} | {LIFECYCLE_LABELS.get(event.lifecycle_judgement, '—')}"
+                f"（{event.lifecycle_judgement or '—'}） "
+                f"| {event.growth['recent_notes']} | {event.growth['total_notes']} "
+                f"| {event.growth['recent_rate']:.3f} 帖/天 | {event.growth['baseline_rate']:.3f} 帖/天 "
+                f"| ✅ | **{LIFECYCLE_LABELS.get(event.lifecycle, event.lifecycle)}**"
+                f"（{event.lifecycle or '未研判'}） |"
+            )
+        add("")
+        blocked = [event for event in growing if event.lifecycle != "escalating"]
+        if blocked:
+            add(
+                f"其中 **{len(blocked)} 个事件确实在增长，但没有被抬成「持续发酵」**"
+                f"（{'、'.join(f'「{event.title}」（{event.lifecycle}）' for event in blocked)}）："
+            )
+            add("这**正是**要守住的性质——算术看见了新帖，但它没有权力改判「已了结」和「非事件」。")
+            add("")
+    else:
+        add("**一个都没有。** 这不是 bug，见下面的「诚实记录」。")
+        add("")
+
     counts: dict[str, int] = {}
     for event in staged:
         counts[event.lifecycle or ""] = counts.get(event.lifecycle or "", 0) + 1
-    add("## 状态分布")
+    add("## 三、状态分布（合成之后）")
     add("")
     add("| 状态 | 因子 | 事件数 |")
     add("| --- | ---: | ---: |")
@@ -259,20 +333,26 @@ def render(
     add(f"成功研判 {assessed} / {len(staged)} 个事件（失败的逐个保持「未研判」，因子 1.0）。")
     add("")
 
-    add("## 事件并排（按 B 臂排名）")
+    add("## 四、事件并排（按 B 臂排名）")
     add("")
     add("严重性、热度、时效权重在两臂里是同一个值——状态只改顺序，不改事实、也不改衰减算术。")
+    add("「近期新帖」一栏是**算术**（成员帖时间分布），「状态」一栏是判断与它合成的结果。")
     add("")
-    add("| B 排名 | A 排名 | 变化 | 事件 | 帖数 | 风险 | 年龄 | 时效权重 | 状态 | 因子 | 优先级 | 理由 |")
-    add("| ---: | ---: | :---: | --- | ---: | --- | ---: | ---: | --- | ---: | ---: | --- |")
+    add("| B 排名 | A 排名 | 变化 | 事件 | 帖数 | 风险 | 年龄 | 时效权重 | 近期新帖 | 状态 | 因子 | 优先级 | 理由 |")
+    add("| ---: | ---: | :---: | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | ---: | --- |")
     for index, event in enumerate(staged, start=1):
         before = rank_of(blind, event)
         delta = before - index
         arrow = f"↑{delta}" if delta > 0 else (f"↓{-delta}" if delta < 0 else "—")
+        recent = (
+            f"{event.growth.get('recent_notes', 0)}/{event.growth.get('total_notes', 0)}"
+            + (" 📈" if event.growth.get("growing") else "")
+        )
         add(
             f"| {index} | {before} | {arrow} | {event.title} | {event.source_count} "
             f"| {event.risk_level}/{event.risk_score} | {human_age(event.age_days)} "
-            f"| {event.recency_weight:.2e} | {LIFECYCLE_LABELS.get(event.lifecycle, event.lifecycle)} "
+            f"| {event.recency_weight:.2e} | {recent} "
+            f"| {LIFECYCLE_LABELS.get(event.lifecycle, event.lifecycle)} "
             f"| ×{lifecycle_weight(event.lifecycle)} | {event.priority_score:.2e} "
             f"| {event.lifecycle_reason or '—'} |"
         )
@@ -297,7 +377,7 @@ def render(
         for event in staged
         if event.event_key in blind_by_key
     )
-    add("## 完整性检查：状态**没有**改写严重性、热度、时效权重")
+    add("## 五、完整性检查：状态**没有**改写严重性、热度、时效权重")
     add("")
     add(
         f"- `risk_level` / `risk_score` / `heat_score` / `heat_rank` / `recency_weight` 两臂逐事件比对："
@@ -316,21 +396,40 @@ def render(
     non_events_in_top8 = [
         event.title for event in staged[:8] if event.lifecycle == "not_applicable"
     ]
-    if not counts.get("escalating"):
-        add("**`escalating` 这一档本轮一个都没判出来（0 / 28），而上一轮（三状态版）「中大杰青实名举报」")
-        add("和「中大作息调整争议」都是 escalating。** 这是新提示词的直接后果：它把 escalating 的门槛")
-        add("写成「必须有**还在扩大**的正面证据（新帖仍在增加 / 蔓延到更多平台 / 出现联名）」，")
-        add("并明令**不许**把它当作「拿不准」的去处——紧急度只能被证据抬高，不能被无知抬高。")
-        add("于是在一份**冻结的 fixture**（模型看不到「新帖还在不在增加」）上，没有事件够得上这一档。")
+    escalating = [event for event in staged if event.lifecycle == "escalating"]
+    if escalating:
+        add(f"**`escalating` 本轮触发了 {len(escalating)} 次**（上一轮：0 / 28）：")
+        for event in escalating:
+            add(
+                f"- **「{event.title}」**：模型判 `ongoing`（{event.lifecycle_reason}），"
+                f"算术测得近 {event.growth['window_days']:.0f} 天新增 "
+                f"{event.growth['recent_notes']} / {event.growth['total_notes']} 帖"
+                f"（{event.growth['recent_rate']:.3f} 帖/天 vs 此前 "
+                f"{event.growth['baseline_rate']:.3f} 帖/天）-> **合成为「持续发酵」**（×4）。"
+            )
         add("")
-        add("怎么看这件事，如实说两面：")
-        add("- 上一轮的报告自己就记着，escalating 与 ongoing 的边界当时是由**文本语气**决定的，")
-        add("  「这一档的判据比另外两档软」。现在模型改判 ongoing，理由是「帖内未见校方结论」")
-        add("  「校方仅称会回应关切」——这两句话在语料里都**字面成立**，方向也没变（照样抗衰减）。")
-        add("- 但代价是：这一档在本语料上**未被触发**，它的区分力在这份 fixture 上没有得到验证。")
-        add("  排序上零影响（见下），可它意味着「急」和「更急」目前实际只有一档在起作用。")
-        add("  真要把它做硬，得给它一个**算术**判据（成员帖近 7 天占比 —— 时间分布是现成的），")
-        add("  而不是继续让模型从措辞里嗅发酵感。这次不把没验证过的东西写进代码。")
+        add("**这一档现在是可复核的**：徽标背后是一组数字（近 N 天几条、速率多少），")
+        add("而不是模型对措辞的感觉。管理员可以自己去数那几条帖子。")
+        add("")
+    else:
+        add("**`escalating` 在这份语料上一次都没有触发（0 / {0}）——而这很可能就是正确答案。**".format(len(staged)))
+        add("")
+        add("**上一轮它也是 0/28，但那时的 0 是没有意义的**：模型读的是一份冻结的快照，它根本")
+        add("**看不见**「新帖还在不在增加」，只能从语气里猜；那个 0 既不能证明没有事件在发酵，")
+        add("也不能证明有。**这一轮的 0 是一个测量结果**：判据看的是每条成员帖的 `publish_time`，")
+        add("它明确地说——按这个窗口和这个速率门槛，**当前语料里没有任何一个悬而未决的事件仍在增长**。")
+        add("")
+        add("语料本身就解释了这个 0：297 条帖子里近 7 天只有 **5** 条、近 21 天只有 **12** 条（4%），")
+        add("而这 12 条里绝大多数是宿舍环境/考研咨询这类**非事件**（`not_applicable`）——")
+        add("它们确实在增长，但它们不是需要学校处置的事，算术**无权**把它们抬上首屏（见第二节）。")
+        add("**一个真实的校园舆情看板，在一个没有事件正在发酵的时段，就该一个「持续发酵」都不显示。**")
+        add("这不是判据失灵，这正是判据在工作。")
+        add("")
+        add("判据**确实会亮**——但要有真的新帖涌入才亮。这一点由注入式测试钉死")
+        add("（`backend/tests/test_event_growth.py::ServiceWiringTest::test_the_criterion_fires_end_to_end`：")
+        add("造一个近 21 天有 2 条新帖的 ongoing 事件，整条流水线跑完后 `lifecycle == \"escalating\"`；")
+        add("把 `now` 往后推 60 天，同一批帖子上它自己降回 `ongoing`）。")
+        add("**没有在语料上触发 ≠ 没人见过它工作。**")
         add("")
     add(f"**前 8 名（B 臂）**：{'、'.join(top8)}。")
     add("——真事件（举报 / 搬迁 / 作息 / 火情 / 缩短课间）**牢牢占住前 5**，顺序与上一轮逐位一致：")
