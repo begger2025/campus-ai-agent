@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,12 +15,26 @@ from sqlalchemy.pool import StaticPool
 
 from backend.agent.public_opinion_core.adapter import processed_post_to_note
 from backend.agent.public_opinion_core.clustering import build_event_from_group, sort_events
+from backend.agent.public_opinion_core.platform_weights import PLATFORM_WEIGHTS_ENV
 from backend.agent.public_opinion_core.schemas import OpinionEvent, OpinionNote
 from backend.agent.public_opinion_core.scoring import score_notes
 from backend.agent.public_opinion_core.sentiment_risk import analyze_notes_sentiment_and_risk
 from backend.database import Base
 from backend.models import ProcessedPost, RawPost
 from backend.services.public_opinion_adapter import processed_post_to_agent_row
+
+
+# 断言的是默认权重表下的排序效果；backend/database.py 的 load_dotenv(override=True)
+# 会把部署用的 HEAT_PLATFORM_WEIGHTS 灌进 os.environ，必须隔离（详见 test_platform_weights）。
+_ENV_ISOLATION = mock.patch.dict("os.environ", {PLATFORM_WEIGHTS_ENV: ""})
+
+
+def setUpModule() -> None:
+    _ENV_ISOLATION.start()
+
+
+def tearDownModule() -> None:
+    _ENV_ISOLATION.stop()
 
 
 def _note(note_id: str, *, platform: str, heat_score: float, heat_rank: float, title: str = "") -> OpinionNote:

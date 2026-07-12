@@ -29,6 +29,21 @@ from backend.agent.public_opinion_core.platform_weights import (
 from backend.agent.public_opinion_core.schemas import OpinionNote
 
 
+_ENV_ISOLATION = mock.patch.dict("os.environ", {PLATFORM_WEIGHTS_ENV: ""})
+
+
+def setUpModule() -> None:
+    # 这些用例断言的是**代码里的默认权重表**。而 backend/database.py 在 import 时
+    # load_dotenv(override=True)，会把部署用的 HEAT_PLATFORM_WEIGHTS 灌进 os.environ——
+    # 同一进程里只要有任何一个用例 import 过 backend.database（discover 时必然发生），
+    # 默认表用例就会读到部署配置而变红（单跑绿、全量红）。这里显式与部署配置隔离。
+    _ENV_ISOLATION.start()
+
+
+def tearDownModule() -> None:
+    _ENV_ISOLATION.stop()
+
+
 def _note(platform: str, heat_rank: float, heat_score: float = 0.0) -> OpinionNote:
     return OpinionNote(
         note_id=f"{platform}:{heat_rank}",
