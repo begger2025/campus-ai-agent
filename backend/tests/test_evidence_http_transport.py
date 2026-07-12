@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import unittest
 
+from backend.services.evidence.collector import SYSU_QUERY_CONTEXT
 from backend.services.evidence.http_transport import (
     HttpTransportUnavailableError,
     OpenAICompatibleTransport,
     build_http_transports,
     parse_citation_response,
 )
+from backend.services.evidence.provider_adapters import glm_search_query
 from backend.services.evidence.providers import SearchRequest
 
 
@@ -125,6 +127,37 @@ class HttpTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             body, {"search_engine": "search_pro_bing", "search_query": "中山大学 校园通知"}
         )
+
+    def test_glm_search_query_reduces_the_collectors_prompt_to_a_search_string(self):
+        # web_search 是**搜索引擎**接口：search_query 就是检索词本身，不是提示词。
+        # 把采集器那句上下文（"……校园公共信息与舆情；仅返回……可引用公开信息。"）
+        # 原样送进去，Bing 会去搜"信息公开"，于是每个关键词都返回同一批
+        # "中山大学信息公开网"页面，真正的关键词一个字都没起作用（首次真实运行实测）。
+        self.assertEqual(
+            glm_search_query(f"{SYSU_QUERY_CONTEXT} 原始检索词：学术不端"),
+            "中山大学 学术不端",
+        )
+
+    def test_glm_search_query_keeps_a_plain_search_string_and_scopes_it_to_sysu(self):
+        self.assertEqual(glm_search_query("中山大学 校园通知"), "中山大学 校园通知")
+        self.assertEqual(glm_search_query("食堂"), "中山大学 食堂")
+
+    async def test_glm_posts_the_reduced_search_query(self):
+        client = FakeClient({"search_result": []})
+        transport = OpenAICompatibleTransport(
+            "glm",
+            "https://open.bigmodel.cn/api/paas/v4/web_search",
+            None,
+            "secret-key",
+            client,
+        )
+        request = SearchRequest(
+            provider="glm",
+            query=f"{SYSU_QUERY_CONTEXT} 原始检索词：宿舍起火",
+            max_results=3,
+        )
+        await transport(request)
+        self.assertEqual(client.calls[0][2]["search_query"], "中山大学 宿舍起火")
 
     async def test_glm_search_engine_is_configurable(self):
         client = FakeClient({"search_result": []})

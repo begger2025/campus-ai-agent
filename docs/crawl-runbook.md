@@ -32,6 +32,22 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 .\.venv\Scripts\python.exe scripts\process_raw_posts.py --platform <同步码>
 ```
 
+### 0.1 开爬之前：先用同一批关键词跑一遍联网检索
+
+爬虫拿到的是**学生的声音**（小红书/微博/知乎/快手）；官方通知与新闻（`zwc.sysu.edu.cn`、
+`jwb.sysu.edu.cn`、`xuefeng.sysu.edu.cn`…）爬虫**结构上够不着**，那是联网检索的活。两者互补，
+所以每轮爬取前先跑：
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main"
+.\.venv\Scripts\python.exe scripts\collect_evidence.py --from-queue --dry-run   # 先看要检索什么
+.\.venv\Scripts\python.exe scripts\collect_evidence.py --from-queue             # 采集 + 抓取核验
+```
+
+`--from-queue` 直接读 `crawl_task_queue` 里 `pending` 任务的关键词，与本轮爬取**天然同题**。
+脚本只采集 + 核验，**不写 `raw_posts`**：交付要人工在「后台管理 → 证据采集」审批。
+详见 [evidence-collector.md §7.1](evidence-collector.md)。
+
 ---
 
 ## 1. 环境与前置准备（每次开跑前必看）

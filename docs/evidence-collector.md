@@ -285,6 +285,49 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 
 ---
 
+## 7.1 命令行入口：`scripts/collect_evidence.py`（推荐：每次爬取前跑一遍）
+
+爬虫和联网检索是**互补**的两路数据（见 §1），所以最自然的用法是：**用同一批关键词，
+先跑联网检索，再开爬。** `--from-queue` 直接读 `crawl_task_queue` 里 `pending` 任务的
+去重关键词，两边天然同题。
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main"
+
+# 预览：打印将要检索什么，零大模型调用、零数据库写入
+.\.venv\Scripts\python.exe scripts\collect_evidence.py --from-queue --dry-run
+
+# 真跑：采集 + 抓取核验
+.\.venv\Scripts\python.exe scripts\collect_evidence.py --from-queue --topic "校园舆情（爬取前联网检索）"
+
+# 手动关键词（不看队列）
+.\.venv\Scripts\python.exe scripts\collect_evidence.py --keywords "食堂,东校宿舍搬迁"
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `--from-queue` | 取 `crawl_task_queue` 中 `pending` 任务的关键词（多平台同词只检索一次；`claimed`/`done`/`failed` 不取） |
+| `--platform` | 配合 `--from-queue`，只取该平台的关键词 |
+| `--keywords a,b,c` | 手动关键词，可与 `--from-queue` 叠加 |
+| `--topic` | 本次 run 的话题标签（默认「中山大学校园舆情（联网检索）」） |
+| `--providers` | 供应商 id，逗号分隔；默认用 `.env` 中已启用的全部 |
+| `--max-results` | 每个关键词最多取几条引用（默认 10） |
+| `--dry-run` | 只打印检索计划：**零 LLM 调用、零数据库写入** |
+
+脚本做两件事、**只做**这两件事：
+
+1. **采集**：每个关键词一条 `evidence_queries` 行，引用落进 `evidence_documents` / `evidence_items`。
+2. **抓取核验**：把每条引用的 URL 真的 GET 一遍（`UrlFetchVerifier`，`trust_env=False`，见 §9.2）。
+
+它**不会**自动审批、**不会**写 `raw_posts`——交付需要 `in_scope` + `verified` + **人工 approved**
+三个条件同时满足，人工那一道闸门是这个功能的设计核心。审批与交付请回到 §7 的管理端页面。
+
+报告按关键词逐条打印：引用数、范围判定（in_scope / needs_review / out_of_scope）、核验结论
+（verified / needs_review / rejected + 驳回原因）。**某个关键词一条都没检索到时会明确写出来**——
+"学校没有就此发布任何公开通知"本身就是一条结论，不是故障。
+
+---
+
 ## 8. 接口
 
 全部在 `/api` 前缀下，需要管理员权限（`require_admin`），统一 `{code, message, data}` 信封。

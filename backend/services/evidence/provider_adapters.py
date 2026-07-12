@@ -162,6 +162,30 @@ def glm_search_url(endpoint: str | None) -> str:
     )
 
 
+# ``search_query`` 是**检索词**，不是提示词。采集器给每条查询都套了一句上下文
+# （"中山大学……校园公共信息与舆情；仅返回明确涉及中山大学的可引用公开信息。原始检索词：X"），
+# 那对 chat 供应商是对的，对搜索引擎却是灾难：整句话就是检索式本身，"信息公开"这类样板词
+# 会盖过真正的关键词。首次真实运行实测——6 个关键词（学术不端/实名举报/东校宿舍搬迁/作息调整/
+# 宿舍起火/食堂）返回的是**完全相同**的 10 条"中山大学信息公开网"页面，关键词一个字都没起作用。
+# 所以这里把提示词还原成检索式：取回原始检索词，并保证带上"中山大学"做学校限定
+# （否则"宿舍起火"会搜到台湾的国立中山大学 nsysu.edu.tw）。
+_RAW_QUERY_MARKER = "原始检索词："
+_SYSU_QUALIFIER = "中山大学"
+
+
+def glm_search_query(query: str) -> str:
+    """把采集器的提示词还原成一条真正的检索式。"""
+
+    text = str(query or "").strip()
+    if _RAW_QUERY_MARKER in text:
+        text = text.rsplit(_RAW_QUERY_MARKER, 1)[1].strip()
+    if not text:
+        return _SYSU_QUALIFIER
+    if _SYSU_QUALIFIER in text:
+        return text
+    return f"{_SYSU_QUALIFIER} {text}"
+
+
 def build_glm_request(request: SearchRequest, context: TransportContext) -> ProviderHttpRequest:
     """The standalone web-search call: no model, no messages, just a query."""
 
@@ -169,7 +193,7 @@ def build_glm_request(request: SearchRequest, context: TransportContext) -> Prov
     return ProviderHttpRequest(
         url=glm_search_url(context.endpoint),
         headers=bearer_headers(context),
-        body={"search_engine": engine, "search_query": request.query},
+        body={"search_engine": engine, "search_query": glm_search_query(request.query)},
     )
 
 
@@ -290,5 +314,6 @@ __all__ = [
     "derive_source_type",
     "extract_generic_citations",
     "extract_glm_citations",
+    "glm_search_query",
     "glm_search_url",
 ]
