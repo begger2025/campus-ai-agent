@@ -103,8 +103,10 @@ import_latest.bat                             # 导入 raw_posts（按 external_
   `.venv\Scripts\python.exe -m unittest discover -s backend/tests -t .`
 - 全局异常处理（统一 JSON 500 + `system_logs` 落库，后台可视）、
   Python 日志（`data/logs/app.log` 轮转）
-- 舆情 Agent 核心由独立子项目开发（249 个测试守护），经
-  `scripts/sync_opinion_core.py` 白名单单向同步
+- 舆情 Agent 核心的**唯一源是本仓** `backend/agent/public_opinion_core/`；
+  子项目 `campus-opinion-agent` 是算法参考 / 回归测试镜像，改动由
+  `scripts/sync_opinion_core.py` **单向反向移植（主项目 -> 子项目）**，
+  默认 dry-run，且脚本永不写入主项目
 
 ## 文档索引
 

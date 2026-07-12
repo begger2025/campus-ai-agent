@@ -46,26 +46,35 @@
 
 依赖：`requirements.txt` 新增 `openai`（已装入 .venv）。语义聚类需手动 `pip install sentence-transformers`（约 500MB，国内网络配 `HF_ENDPOINT=https://hf-mirror.com`）。
 
-## 4. 核心同步纪律
+## 4. 核心同步纪律（2026-07-12 方向已反转）
 
-`backend/agent/public_opinion_core/` 的**唯一改动源是子项目**（那边有 207 个测试守护），不要在主项目直接改这些文件。子项目更新后运行：
+`backend/agent/public_opinion_core/` 的**唯一改动源是主项目**。子项目 `campus-opinion-agent`
+只是算法参考 / 回归测试镜像，**不再是改动源**。
 
 ```text
-scripts\sync_opinion_core.bat
+主项目 backend/agent/public_opinion_core  = 唯一运行源（single source of truth）
+子项目 campus-opinion-agent                = 算法参考 / 回归测试镜像
 ```
 
-> **⚠️ 2026-07-12 现状更新：两边已经分叉，上面这条纪律事实上已经作废，`sync_opinion_core.py` 现在是把危险的枪。**
+改动流程：**直接改主项目核心 -> 跑主项目测试 -> 需要时把改动反向移植（back-port）回子项目 -> 跑子项目测试。**
+
+```text
+.venv\Scripts\python.exe scripts\sync_opinion_core.py            # dry-run（默认，安全）
+.venv\Scripts\python.exe scripts\sync_opinion_core.py --apply    # 确认 dry-run 输出后再执行
+```
+
+> **历史事故记录（务必保留，防止有人把方向改回去）**
 >
-> 主项目自己往核心里加了 `platform_weights.py`（commit `45efe86` / `e494f85` 的 heat_rank 排序分），
-> 子项目**没有这个文件**；13 个核心文件里有 7 个（`clustering` / `semantic_clustering` / `scoring` /
-> `sentiment_risk` / `schemas` / `adapter` / `__init__`）两边哈希不同，主项目更新。
+> 本脚本原来是**反着的**：它把子项目当源（`SUB -> MAIN`），并且会把"子项目没有的文件"
+> 从**主项目**删掉。到 2026-07-12 两边已分叉、主项目领先：主项目独有 `platform_weights.py`
+> （heat_rank 平台归一化排序分），14 个核心文件里有 8 个两边不同（`clustering` /
+> `semantic_clustering` / `scoring` / `sentiment_risk` / `schemas` / `adapter` / `service` /
+> `__init__`），全部是主项目更新。当时跑一次旧脚本就会 (1) 删掉 `platform_weights.py`、
+> (2) 用旧版覆盖 heat_rank / 质心合并 / min_cluster_size 的改动 —— 一整天的工作直接回滚，测试变红。
 >
-> **现在跑 `scripts/sync_opinion_core.py` 会 (1) 删掉 `platform_weights.py`（脚本会删所有"子项目没有的文件"）、
-> (2) 用旧版覆盖主项目的 heat_rank 改动 → 直接把两个 commit 的工作回滚掉，且测试会红。**
->
-> 结论：**主项目已经是核心的事实改动源**。要么把 heat_rank / min_cluster_size 这批改动反向移植回子项目
-> 再恢复"子项目为源"的纪律，要么正式宣布主项目为唯一源、把 `sync_opinion_core.py` 停用或改成双向核对。
-> 在做出决定之前，**不要运行这个同步脚本**。（本次 `min_cluster_size` 的改动按现状直接改在主项目核心里。）
+> 现在脚本已重写为 `MAIN -> SUB`，且**文件里不再存在任何写入或删除主项目路径的代码**；
+> `apply_plan()` 会在运行时校验每个写入目标都落在子项目目录内，否则直接抛 `ValueError`。
+> 回归测试见 `backend/tests/test_sync_opinion_core.py`（21 个用例，全部在 tmp 目录上跑）。
 
 ## 4.5 语义聚类启用与阈值标定（2026-06-13 补充）
 
@@ -81,7 +90,9 @@ scripts\sync_opinion_core.bat
 
 **注意——事件身份切换**：语义事件的 `event_key` 是 `sem:*`，与旧规则事件不同。下一次 `persist=true` 的分析会在 `public_events` 新增一批语义草稿事件（旧已发布事件不受影响，但审核队列会变长），建议先和负责审核的队友同步。不想启用时在 `.env` 设 `EMBEDDING_ENABLED=false` 即可整体退回规则聚类。
 
-`scripts/sync_opinion_core.bat` 已重写为调用 `sync_opinion_core.py`（bat 直接写中文路径有 cmd 代码页问题）。同步脚本覆盖两部分：核心 12 文件原样复制；**服务层白名单 7 文件**（llm_client/prompt_guard/sentiment_llm/embedding/intent_router/react_loop/critic）复制时自动改写导入前缀（`app.config`→`backend.services.llm_config`、`app.services.*`→`backend.services.*`）。主项目专属服务（opinion_chat_service/opinion_report/llm_config/adapter）不在白名单内，不会被覆盖；子项目新增共享服务时在脚本的 `PORTED_SERVICES` 登记。
+`scripts/sync_opinion_core.bat` 已重写为调用 `sync_opinion_core.py`（bat 直接写中文路径有 cmd 代码页问题）。同步脚本（**方向：主项目 -> 子项目**）覆盖两部分：核心 14 文件原样回移；**服务层白名单 8 文件**（llm_client/prompt_guard/sentiment_llm/embedding/intent_router/react_loop/critic/citations）回移时自动改写导入前缀（`backend.services.llm_config`→`app.config`、`backend.services.*`→`app.services.*`；顺序敏感，llm_config 规则必须在前）。核心包两边都只用相对导入，改写对它是恒等变换。主项目专属服务（opinion_chat_service/opinion_report/llm_config/public_opinion_adapter）不在白名单内，不会被回移；新增共享服务时在脚本的 `PORTED_SERVICES` 登记。
+
+子项目里"主项目没有的文件"**默认保留**（只在报告里列出），确实要删必须显式 `--prune-sub`——破坏性默认正是上面那次事故的根因。
 
 ## 4.6 事件生成的两条底线：单帖不成事件 + 输入不许静默截断（2026-07-12）
 

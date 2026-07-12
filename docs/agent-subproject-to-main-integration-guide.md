@@ -1,8 +1,21 @@
 # 公共舆情 Agent 子项目接入主项目下一步指导文档
 
 生成日期：2026-06-07  
+**更新：2026-07-12 —— 同步方向已正式确定并反转，见下方「唯一源」声明。**  
 Agent 子项目：`D:\桌面文件\软件工程大作业\campus-opinion-agent`  
 主项目：`D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main`
+
+> ## ⚠️ 唯一源声明（2026-07-12，覆盖本文其余部分的任何相反说法）
+>
+> ```text
+> 主项目 backend/agent/public_opinion_core  = 唯一运行源（single source of truth）
+> 子项目 campus-opinion-agent                = 算法参考 / 回归测试镜像，不是改动源
+> ```
+>
+> - 算法改动**一律先改主项目**，再用 `scripts/sync_opinion_core.py` **反向移植**回子项目。
+> - 该脚本方向是 **主项目 -> 子项目**，不加参数即 dry-run；真正写入需 `--apply`。
+> - 脚本**没有**、也不允许再有任何写入或删除主项目文件的能力。
+> - 本文第 4 节的哈希核对、第 11 节的「流程 B」原本假设"子项目是源"，已按此声明修正。
 
 ## 1. 当前结论
 
@@ -127,10 +140,13 @@ __init__.py        Same = True
 
 如果有 `False`：
 
-1. 先不要覆盖文件。
-2. 分别查看两边改动。
-3. 判断是 Agent 子项目更新了，还是主项目后端适配时改了核心逻辑。
-4. 确认后再同步。
+1. **不要用子项目覆盖主项目**——主项目是唯一源，子项目落后是正常状态。
+2. 分别查看两边改动，确认主项目那份是想要的版本。
+3. 用 `scripts\sync_opinion_core.py`（dry-run 先看，再 `--apply`）把主项目的版本**回移到子项目**。
+4. 回移后到子项目跑它自己的测试套件。
+
+> 注：现在核对结果里出现 `False` / `MISSING` 属预期——主项目独有 `platform_weights.py`，
+> 且多个核心文件主项目更新。这不是"需要修复的不一致"，而是"子项目待回移"。
 
 ## 5. 第二步：分别做 import 验证
 
@@ -570,48 +586,39 @@ export function fetchEventReviewLogs(eventId, params = {}) {
 
 现在最容易出问题的是两个项目同时存在 Agent 核心代码。
 
-建议定一个规则：
+**规则已定死（2026-07-12），只有一个流程，没有二选一：**
 
 ```text
-主项目 backend/agent/public_opinion_core 是运行源。
-Agent 子项目 campus-opinion-agent 是算法参考和回归测试源。
+主项目 backend/agent/public_opinion_core 是唯一运行源。
+Agent 子项目 campus-opinion-agent 是算法参考和回归测试镜像。
 ```
 
-后续如果要改 Agent 规则，有两种流程，二选一。
-
-### 11.1 推荐流程 A：先改主项目，再同步回子项目
-
-适合当前阶段，因为主项目已经完成后端接入。
-
-流程：
+### 11.1 唯一流程：先改主项目，再反向移植回子项目
 
 ```text
 修改主项目 backend/agent/public_opinion_core
--> 跑主项目 check_wp5/check_wp10
--> 再同步回 campus-opinion-agent
+-> 跑主项目 unittest（backend/tests）+ check_wp5/check_wp10
+-> scripts\sync_opinion_core.py            （dry-run，看清将要回移哪些文件）
+-> scripts\sync_opinion_core.py --apply    （写入子项目）
 -> 跑 Agent 子项目 unittest 和 CLI
 ```
 
-### 11.2 流程 B：先改 Agent 子项目，再同步到主项目
+### 11.2 ~~流程 B：先改子项目，再同步到主项目~~（已废止）
 
-适合后续算法负责人独立迭代。
+**这条流程已被永久废止。** 它曾经由 `sync_opinion_core.py` 的旧实现支撑，
+而那个实现会把主项目当成复制目标、并删除"子项目没有的"主项目文件——
+2026-07-12 差点因此回滚掉 heat_rank / platform_weights / 质心合并一整天的工作。
 
-流程：
+现在脚本里**不存在**写入主项目的代码路径，运行时还会校验写入目标必须在子项目内。
+任何人想恢复"子项目 -> 主项目"的同步，请先读 `backend/tests/test_sync_opinion_core.py`
+里的安全性断言（那些用例会拦住这种改动）。
 
-```text
-修改 campus-opinion-agent/backend/app/public_opinion_core
--> 跑 Agent 子项目 unittest 和 CLI
--> 复制 public_opinion_core 到主项目
--> 跑哈希核对
--> 跑主项目 check_wp5/check_wp10
-```
-
-不管选哪种，都必须做：
+必须做：
 
 ```text
-哈希核对
-Agent 子项目测试
+主项目 backend/tests 全绿
 主项目 WP5/WP10 验收
+回移后 Agent 子项目测试全绿
 ```
 
 ## 12. 第九步：大模型能力的接入顺序

@@ -90,7 +90,12 @@ def plan_keywords(queries: list[QueryRecord],
                   now: datetime, top_n: int = 10) -> list[KeywordSuggestion]
 ```
 
-同步机制：`scripts/sync_opinion_core.py` 对 core 目录整目录 glob，新文件跑一次脚本自动进主项目，无需改白名单。
+同步机制：`scripts/sync_opinion_core.py` 对 core 目录整目录 glob，无需改白名单。
+
+> **⚠️ 2026-07-12 更正：** 本节原文写的是「新文件跑一次脚本自动**进主项目**」——该方向已废止。
+> 主项目 `backend/agent/public_opinion_core/` 是**唯一源**，脚本方向已反转为**主项目 -> 子项目**
+> （back-port），默认 dry-run，且永不写入主项目。详见
+> `docs/agent-subproject-to-main-integration-guide.md` 的「唯一源声明」。
 
 ### 主项目（campus-ai-agent-main）——落库 / 聚合 / API / 前端
 

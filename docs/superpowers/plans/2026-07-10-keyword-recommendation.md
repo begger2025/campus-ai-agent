@@ -4,7 +4,13 @@
 
 **Goal:** 基于四路客观信号（用户需求 A / 供给缺口 B / 小红书热度延续 C / 新话题发现 D）的规则打分管线，自动推荐下一轮爬取关键词，在管理端「智能选题」面板呈现。
 
-**Architecture:** 算法核心 `keyword_planner.py` 是纯函数（零 IO、零新依赖），在子项目 campus-opinion-agent TDD 开发，经 `scripts/sync_opinion_core.py` 单向同步进主项目 `backend/agent/public_opinion_core/`。主项目负责：新表 `chat_query_log`（对话端点成功路径非阻塞落库）、聚合 adapter、`GET /api/admin/keyword-suggestions`、前端「智能选题」页、两个开发期自举脚本。
+> **⚠️ 2026-07-12 后续更正（本计划已执行完毕，以下仅为历史记录）：** 当时描述的
+> 「子项目开发 -> `sync_opinion_core.py` 同步进主项目」的方向**已被永久废止**。
+> 主项目 `backend/agent/public_opinion_core/` 现在是**唯一源**，脚本方向已反转为
+> **主项目 -> 子项目**，且不再具备写入主项目的能力。详见
+> `docs/agent-subproject-to-main-integration-guide.md` 的「唯一源声明」。
+
+**Architecture:** 算法核心 `keyword_planner.py` 是纯函数（零 IO、零新依赖），在子项目 campus-opinion-agent TDD 开发，经 `scripts/sync_opinion_core.py` 单向同步进主项目 `backend/agent/public_opinion_core/`（**方向已于 2026-07-12 反转，见上方更正**）。主项目负责：新表 `chat_query_log`（对话端点成功路径非阻塞落库）、聚合 adapter、`GET /api/admin/keyword-suggestions`、前端「智能选题」页、两个开发期自举脚本。
 
 **Tech Stack:** Python 3.11 dataclasses + unittest（零网络测试）、FastAPI + SQLAlchemy、Vue3 + Element Plus。设计文档：`docs/superpowers/specs/2026-07-10-keyword-recommendation-design.md`。
 

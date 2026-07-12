@@ -1,7 +1,7 @@
 """智能选题聚合层：从 chat_query_log / processed_posts 取四路信号，调核心 planner。
 
 只读，不写任何表。算法本体在 backend/agent/public_opinion_core/keyword_planner.py
-（由子项目单向同步，勿在主项目直接改）。
+（主项目是唯一源，直接改这里；改完用 scripts/sync_opinion_core.py 反向移植回子项目）。
 """
 
 from __future__ import annotations
