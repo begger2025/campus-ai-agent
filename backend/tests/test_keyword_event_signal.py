@@ -16,6 +16,7 @@ import unittest
 from datetime import datetime, timedelta
 
 from backend.agent.public_opinion_core.keyword_planner import (
+    EVENT_TOP_KEYWORDS,
     W_EVENT,
     ContentStat,
     EventRecord,
@@ -203,6 +204,99 @@ class TagWeightTest(unittest.TestCase):
             plan_keywords([], [], {}, now=NOW, events=[event], event_half_life_days=HALF_LIFE)
         )
         self.assertAlmostEqual(by_kw["学术"].score, W_EVENT * 10.0, places=6)
+
+
+class OneEventDoesNotFloodTheBoardTest(unittest.TestCase):
+    """一件事不许用近义词刷屏（线上实测：《东校区宿舍搬迁》一件事占了 6 个席位）。
+
+        1.70 东校区宿舍搬迁 / 同校区搬迁 / 宿舍搬迁 / 封闭管理 / 强制搬宿舍 / 搬宿舍 原因
+
+    六个席位全是同一个故事。人工闸门要的是**一件事的几个不同角度**——不是六句同义反复，
+    但也不是只剩一个词（管理员得有得挑）。所以：**一个事件最多在最终榜单上放 EVENT_TOP_KEYWORDS 个
+    "只靠事件立身"的词**。
+
+    "只靠事件立身"是关键：「宿舍」有站内热度、「食堂」有人真的问过——它们不是这件事在刷屏，
+    它们自己站得住，**不占配额**。配额只管"这个词的全部理由就是这件事提过它"的那些。
+
+    选谁留下（同一事件内所有词的 event_priority 完全相同，分数给不出顺序）：
+      1. **证据多者优先**——同时被语料的标签和模型提名的词（两个 origin）排最前；
+      2. 然后是模型自己给的排序（提示词就是让它按检索价值从高到低排的）；
+      3. 最后是标签词按 count/max 权重降序。
+    """
+
+    def test_an_event_places_at_most_three_event_only_keywords(self) -> None:
+        event = _event(
+            "49", "东校区宿舍搬迁", risk_level="medium", lifecycle="ongoing",
+            keywords=["宿舍搬迁"],
+            generated=["东校区宿舍搬迁", "强制搬宿舍", "同校区搬迁", "封闭管理", "搬宿舍 原因"],
+        )
+        suggestions = plan_keywords(
+            [], [], {}, now=NOW, top_n=16, events=[event], event_half_life_days=HALF_LIFE
+        )
+        self.assertEqual(len(suggestions), EVENT_TOP_KEYWORDS)
+
+    def test_the_corroborated_word_survives_even_if_the_model_ranked_it_fourth(self) -> None:
+        """线上模型自己的排序是 杰青 举报 / 实名举报 / 副院长 质疑 / **学术不端** / 耿同学。
+
+        照模型的排名砍到 3 个，会把这个功能存在的**全部理由**——「学术不端」——砍掉。
+        但语料的标签也在说这件事是「学术」(3 条成员帖)，而「学术」正是被并入「学术不端」的那个词：
+        **两路证据都指向它**。证据多者优先，它必须活下来。
+        """
+
+        event = _event(
+            keywords=["学术"],
+            generated=["杰青 举报", "实名举报", "副院长 质疑", "学术不端", "耿同学"],
+        )
+        event.keyword_weights = {"学术": 1.0}
+        keywords = [
+            s.keyword
+            for s in plan_keywords(
+                [], [], {}, now=NOW, top_n=16, events=[event], event_half_life_days=HALF_LIFE
+            )
+        ]
+        self.assertEqual(keywords, ["学术不端", "杰青 举报", "实名举报"])
+
+    def test_a_word_with_its_own_demand_or_heat_does_not_pay_the_quota(self) -> None:
+        """「宿舍」有站内热度、「食堂」有人真的问过——配额是给"刷屏"设的，不是给它们设的。"""
+
+        event = _event(
+            "49", "东校区宿舍搬迁", risk_level="medium", lifecycle="ongoing",
+            keywords=["宿舍"],
+            generated=["东校区宿舍搬迁", "强制搬宿舍", "同校区搬迁", "封闭管理", "搬宿舍 原因"],
+        )
+        suggestions = plan_keywords(
+            [QueryRecord("食堂", NOW - timedelta(days=1), hit_count=0)],
+            [ContentStat("宿舍", 500, NOW - timedelta(days=1))],
+            {},
+            now=NOW, top_n=16, events=[event], event_half_life_days=HALF_LIFE,
+        )
+        keywords = [s.keyword for s in suggestions]
+        self.assertIn("宿舍", keywords)   # 事件标签 + 站内热度 -> 不占配额
+        self.assertIn("食堂", keywords)   # 跟事件毫无关系 -> 更不占配额
+        # 事件"只靠事件立身"的词仍然只剩 3 个
+        event_only = [
+            s.keyword for s in suggestions
+            if s.event_refs and not ({"demand", "heat", "discovery"} & set(s.signals))
+        ]
+        self.assertEqual(len(event_only), EVENT_TOP_KEYWORDS)
+
+    def test_two_events_each_get_their_own_quota(self) -> None:
+        """配额是**逐事件**的：一件事刷屏不该连累另一件事少拿词。"""
+
+        scandal = _event(generated=["学术不端", "实名举报", "杰青 举报", "副院长 质疑"])
+        moving = _event(
+            "49", "东校区宿舍搬迁", risk_level="medium", lifecycle="ongoing",
+            generated=["宿舍搬迁", "强制搬宿舍", "同校区搬迁", "封闭管理"],
+        )
+        suggestions = plan_keywords(
+            [], [], {}, now=NOW, top_n=16, events=[scandal, moving],
+            event_half_life_days=HALF_LIFE,
+        )
+        per_event: dict[str, int] = {}
+        for suggestion in suggestions:
+            for ref in suggestion.event_refs:
+                per_event[ref["event_id"]] = per_event.get(ref["event_id"], 0) + 1
+        self.assertEqual(per_event, {"20": EVENT_TOP_KEYWORDS, "49": EVENT_TOP_KEYWORDS})
 
 
 class DegradationTest(unittest.TestCase):

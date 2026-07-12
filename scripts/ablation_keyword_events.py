@@ -47,7 +47,9 @@ from backend.agent.public_opinion_core import (  # noqa: E402
     AnalyzeRequest,
     PublicOpinionAgentService,
 )
+from backend.agent.public_opinion_core import keyword_planner  # noqa: E402
 from backend.agent.public_opinion_core.keyword_planner import (  # noqa: E402
+    EVENT_TOP_KEYWORDS,
     W_ASK,
     W_EVENT,
     W_GAP,
@@ -75,6 +77,10 @@ from backend.agent.public_opinion_core.llm_lifecycle import (  # noqa: E402
 )
 from backend.services.event_refiner import get_cluster_refiner  # noqa: E402
 from backend.services.event_risk import get_risk_assessor  # noqa: E402
+from backend.services.keyword_suggestion_adapter import (  # noqa: E402
+    MIN_TAG_POSTS,
+    _parse_top_tags,
+)
 from backend.services.llm_client import get_llm_usage, reset_llm_usage  # noqa: E402
 from backend.services.llm_config import (  # noqa: E402
     EMBEDDING_ALIGN_THRESHOLD,
@@ -161,8 +167,12 @@ def build_content_signals(
     return stats, crawled
 
 
-def build_event_records(events, now: datetime) -> list[EventRecord]:
-    """OpinionEvent（流水线产物）-> EventRecord（选题器的只读投影）。等价于 adapter 从库里读。"""
+def build_event_records(events, now: datetime, *, tag_floor: bool = True) -> list[EventRecord]:
+    """OpinionEvent（流水线产物）-> EventRecord（选题器的只读投影）。等价于 adapter 从库里读。
+
+    `tag_floor=False` 复现 **6f85f72 那一版**（只有 count/max_count 权重、没有出现次数门槛），
+    用来量本轮那道门槛到底拦下了什么——不然"修好了"就只是一句自我表扬。
+    """
 
     records: list[EventRecord] = []
     for index, event in enumerate(events, start=1):
@@ -172,15 +182,19 @@ def build_event_records(events, now: datetime) -> list[EventRecord]:
             (note.title or note.content or "").strip()[:120]
             for note in event.representative_notes
         ]
-        # 标签权重 = count / max_count（同 adapter 的 _parse_top_tags）：一个事件里
-        # 3 条帖子都带的「学术」比只有 1 条带的「上海」更像这件事。
-        counts = {
-            str(tag.get("tag") or ""): float(tag.get("count") or 1)
-            for tag in event.top_tags
-            if str(tag.get("tag") or "")
-        }
-        top = max(counts.values(), default=0.0) or 1.0
-        weights = {name: count / top for name, count in counts.items()}
+        # 标签的门槛与权重**直接调 adapter 的 _parse_top_tags**（不再在这里复制一遍算术，
+        # 否则消融测的就不是线上跑的那条规则了）：count < 2 的标签根本不进候选池
+        # （一个发帖人的一个 hashtag 不是证据），过关者按 count / max_count 加权。
+        if tag_floor:
+            weights = _parse_top_tags(json.dumps(event.top_tags, ensure_ascii=False))
+        else:
+            counts = {
+                str(tag.get("tag") or ""): float(tag.get("count") or 1)
+                for tag in event.top_tags
+                if str(tag.get("tag") or "")
+            }
+            top = max(counts.values(), default=0.0) or 1.0
+            weights = {name: count / top for name, count in counts.items()}
         records.append(
             EventRecord(
                 event_id=str(index),
@@ -207,11 +221,16 @@ def render(
     warnings: list[str],
     usage: dict,
     corpus: int,
+    prev_arm: list,
+    tag_counts: dict[str, dict[str, int]],
+    floor_only_arm: list,
 ) -> str:
     lines: list[str] = []
     add = lines.append
     base_by_kw = {s.keyword: s for s in baseline}
     arm_by_kw = {s.keyword: s for s in event_arm}
+    prev_by_kw = {s.keyword: s for s in prev_arm}
+    floor_by_kw = {s.keyword: s for s in floor_only_arm}
 
     add("# 消融实验：智能选题 —— 看不看得见「事件」")
     add("")
@@ -362,13 +381,24 @@ def render(
                 return index
         return None
 
+    def arm_cell(keyword: str) -> str:
+        """事件臂那一格。**「不存在」和「被配额挤掉」不是一回事**，不许混着写。"""
+
+        arm = arm_by_kw.get(keyword)
+        if arm:
+            return f"{arm.score:.2f} / 第 {rank_of(event_arm, keyword)}"
+        if keyword in floor_by_kw:  # 有门槛无配额的臂上有、最终没有 = 配额拿掉的
+            return f"**被事件配额挤掉**（{floor_by_kw[keyword].score:.2f}）"
+        if keyword in prev_by_kw:   # 只在 6f85f72 臂上有 = 标签门槛拦下的
+            return f"**被标签门槛拦下**（{prev_by_kw[keyword].score:.2f}）"
+        return "不存在（被合并或被卫生规则拒）"
+
     for keyword in ("食堂", *sorted(generated)):
         base = base_by_kw.get(keyword)
-        arm = arm_by_kw.get(keyword)
         add(
             f"| {keyword} "
             f"| {f'{base.score:.2f} / 第 {rank_of(baseline, keyword)}' if base else '**不存在**'} "
-            f"| {f'{arm.score:.2f} / 第 {rank_of(event_arm, keyword)}' if arm else '不存在'} |"
+            f"| {arm_cell(keyword)} |"
         )
     add("")
     if canteen_base and canteen_arm:
@@ -392,6 +422,71 @@ def render(
     add("")
     add("这些**全都只是建议**。`GET /api/admin/keyword-suggestions` 返回它们，管理员点一下才进")
     add("爬取队列——**没有任何东西被自动入队**。和证据投递、事件发布同一条纪律：**AI 提议，人来决定**。")
+    add("")
+
+    add("## 八、本轮两个修复的实测（第三条臂 = 6f85f72 原样）")
+    add("")
+    add("为了不让「修好了」变成一句自我表扬，这里再跑一条臂：**标签没有出现次数门槛、"
+        "事件没有席位配额**（即 6f85f72 那一版），其余一切相同（同一批事件、同一次 LLM 调用）。")
+    add("")
+    add("### 8.1 出现一次的标签（`count == 1`）")
+    add("")
+    add("`count` 是「有几条成员帖带这个标签」。`count=1` = **全事件只有一个发帖人打过它**——")
+    add("那是他一个人的 hashtag 习惯。门槛：`count >= 2`（两个互不相识的发帖人对同一件事想到了")
+    add("同一个词，这是标签能构成证据的最小形态）。")
+    add("")
+    add("| 事件 | 标签分布（count） | 过门槛 | 被拦下 |")
+    add("| --- | --- | --- | --- |")
+    for record in records:
+        counts = tag_counts.get(record.event_id, {})
+        if not counts:
+            continue
+        kept = [f"**{tag}**({count})" for tag, count in counts.items() if count >= MIN_TAG_POSTS]
+        dropped = [f"{tag}({count})" for tag, count in counts.items() if count < MIN_TAG_POSTS]
+        add(
+            f"| {record.title} | "
+            f"{'、'.join(f'{tag}({count})' for tag, count in counts.items()) or '—'} | "
+            f"{'、'.join(kept) or '**一个都没有**'} | {'、'.join(dropped) or '—'} |"
+        )
+    add("")
+    add("**退化情形（门槛为什么必须是绝对下限、不能是「占最大值的比例」）：**"
+        "《中大火箭试验成功》唯一的标签是 宿舍(1)，它的 `max_count` **本身就是 1**——")
+    add("`share = 1/1 = 1.0`，任何比例阈值都给它满分，于是一件火箭的事把「宿舍」顶上榜。")
+    add("绝对下限的答案很干脆：**这个事件一个标签都提不出来**（它真的拿去爬过的 `source_keywords` 不受影响）。")
+    add("")
+    add("### 8.2 一个事件占几个席位")
+    add("")
+    add(f"配额：一个事件最多在最终榜单上放 **{EVENT_TOP_KEYWORDS} 个「只靠事件立身」的词**"
+        f"（有站内热度 / 有人问过的词自己站得住，不占配额）。")
+    add("")
+    add("对照的是**只修了缺陷 1 的那条臂**（有标签门槛、没有配额），所以这一格量的")
+    add("**只是配额**——不把 8.1 的功劳算到 8.2 头上。")
+    add("")
+    add("两列数字是**上榜词里带着这件事出处的个数**，它**可以大于 3**，两个原因，都是设计：")
+    add("① 「宿舍」这种有站内热度的词**不占配额**（它自己站得住）；")
+    add("② 一个词可以同时挂在好几件事上（「宿舍」在 4 件事的标签里都出现），"
+        "它只在**最急的那件事**头上记一次账。右边那列（被配额挤掉的词）才是配额的**净效果**。")
+    add("")
+    add("| 事件 | 有门槛无配额 | 本轮（门槛+配额） | 被配额挤掉的词 |")
+    add("| --- | ---: | ---: | --- |")
+    for record in records:
+        def words_of(by_kw: dict) -> list[str]:
+            return [
+                keyword
+                for keyword, suggestion in by_kw.items()
+                if any(ref["event_id"] == record.event_id for ref in suggestion.event_refs)
+            ]
+        before, after = words_of(floor_by_kw), words_of(arm_by_kw)
+        gone = [word for word in before if word not in after]
+        if not before:
+            continue
+        add(
+            f"| {record.title} | {len(before)} | {len(after)} | "
+            f"{'、'.join(gone) or '—'} |"
+        )
+    add("")
+    add("被挤掉的词**不是被压到榜尾，是真的拿掉了**：它们是同一句话的第 4、5、6 种说法，")
+    add("留在榜上只会继续挤占别的事件和用户的真实提问。腾出来的席位去了哪里，看第四节。")
     add("")
 
     add("## 诚实记录（**不利的也写**）")
@@ -422,19 +517,28 @@ def render(
         add("全被拒时该事件不贡献任何词并记 warning）。**没在语料上触发 ≠ 没人见过它工作**，")
         add("但也**不能**拿这份报告去声称「卫生规则拦下了模型的胡话」——这一轮它没有胡话可拦。")
     add("")
-    add("**4. 「耿同学」是一个自然人的名字。**")
+    add("**4. 模型仍然会提自然人的名字 / 口语化的词——人工闸门就是为此存在的。**")
     add("")
-    add("模型把举报人的网名提成了检索词。作为**检索策略**它是对的（真人就是这么搜的），")
-    add("但把一个**具体个人**的名字放进爬取队列是另一回事。系统**没有**自动入队它——")
-    add("它和别的词一样躺在建议列表里等管理员点。**这正是人工闸门存在的理由**：")
-    add("模型可以提议，但「要不要围绕一个自然人做定向采集」不该由模型决定。")
+    add("上一轮模型提了「耿同学」（举报人的网名），这一轮提了「骂校长」。作为**检索策略**")
+    add("它们不算错（真人就是这么搜的），但把一个**具体个人**的名字、或一句情绪化的话")
+    add("放进爬取队列是另一回事。系统**没有**自动入队任何词——它们和别的词一样躺在建议列表里")
+    add("等管理员点。**AI 提议，人来决定**：模型可以提，但「要不要围绕一个自然人做定向采集」")
+    add("不该由模型决定。（顺带一提：这两个词这一轮都没能挤进配额，但那是**算术的副作用**，")
+    add("不是安全机制——不能拿它当护栏用。）")
     add("")
-    add("**5. 近义词冗余：「东校区宿舍搬迁」「东校宿舍搬迁」「同校区搬迁」「宿舍搬迁」四个词并列 1.73。**")
+    add("**5. 配额只封住了「刷屏」的量，没有封住模型的同义反复。**")
     add("")
-    add("planner 的合并规则（短词并入**唯一**包含它的长词）在这里失效了：「宿舍搬迁」同时被")
-    add("「东校宿舍搬迁」和「东校区宿舍搬迁」包含 -> 视为歧义 -> 不合并。于是同一件事占了 4 个席位。")
-    add("**这是本次改造引入的新问题**（事件臂把同义说法一起灌了进来），没有修，如实记：")
-    add("代价是 Top-N 里的位置被浪费，而不是推荐错。管理员看得出它们是一回事。")
+    add("提示词这一轮明确要求「每个词一个不同角度，不许给同一句话的几种说法」。模型对")
+    add("《东校区宿舍搬迁》的回答仍然是：`宿舍搬迁`、`封闭管理`、`强制搬宿舍`、`同校区搬迁`、`校方回应`")
+    add("——**五个词里三个是同一个角度**，而且它把这三个排在了前面。于是配额留下的 3 个席位里，")
+    add("仍然有近义词，而真正另一个角度的「校方回应」（模型自己排第 5）被挤了出去。")
+    add("**如实记：判断那一半（这两个词是不是一个意思）没有被提示词彻底解决**，")
+    add("算术那一半（一件事最多占 3 个席位）是硬的——它把损失从 6 个席位封到了 3 个，")
+    add("并且把腾出来的席位交给了别的事件（火情、作息调整这两件事在改造前一个词都排不上）。")
+    add("再往下修的话，「两个词是不是一个意思」需要的是**语义相似度**，那要么是又一次 LLM 调用，")
+    add("要么是一个字符重合度阈值——后者会在下一批数据上碎掉（「杰青 举报」和「实名举报」的")
+    add("字符重合度是 0.4，「宿舍搬迁」和「东校区宿舍搬迁」是 0.57，两者只差 0.17，")
+    add("任何阈值都是在这份语料上凑出来的）。没有做，如实写。")
     if warnings:
         add("")
         add("**降级/告警：**")
@@ -505,6 +609,8 @@ def main() -> int:
         events, now=now, half_life_days=half_life, growth_window_days=half_life
     )
     records = build_event_records(events, now)
+    # 6f85f72 那一版的投影（没有出现次数门槛），作为第三条臂
+    records_prefix = build_event_records(events, now, tag_floor=False)
     print(f"      已发布事件 {len(records)} 个")
 
     queries = build_queries(now)
@@ -535,18 +641,50 @@ def main() -> int:
             )
     usage = get_llm_usage()
 
-    print("[3/3] 两臂打分…")
+    print("[3/3] 三臂打分…")
+    # 生成词是同一批（同一个事件、同一次调用），复制给"改造前"那条臂——两臂的唯一变量
+    # 必须是**门槛和配额**，不是模型这次心情如何。
+    generated_by_title = {record.title: list(record.generated_keywords) for record in records}
+    for record in records_prefix:
+        record.generated_keywords = list(generated_by_title.get(record.title, []))
+
     # top_n 取满：截断会让排名 12 之后的词在报告里显示成"不存在"，那是假话。
     # 并排表自己切 TOP_N。
     baseline = plan_keywords(queries, content_stats, crawled, now=now, top_n=10_000)
+    # 两条中间臂，把两个修复拆开单独计量（把配额抬到不可能触发的高度 = 关掉配额）：
+    #   prev_arm      无标签门槛 + 无配额  = 6f85f72 原样
+    #   floor_only    有标签门槛 + 无配额  = 只修了缺陷 1
+    original_quota = keyword_planner.EVENT_TOP_KEYWORDS
+    keyword_planner.EVENT_TOP_KEYWORDS = 10_000
+    try:
+        prev_arm = plan_keywords(
+            queries, content_stats, crawled, now=now, top_n=10_000,
+            events=records_prefix, event_half_life_days=half_life,
+        )
+        floor_only_arm = plan_keywords(
+            queries, content_stats, crawled, now=now, top_n=10_000,
+            events=records, event_half_life_days=half_life,
+        )
+    finally:
+        keyword_planner.EVENT_TOP_KEYWORDS = original_quota
     event_arm = plan_keywords(
         queries, content_stats, crawled, now=now, top_n=10_000,
         events=records, event_half_life_days=half_life,
     )
 
+    tag_counts = {
+        record.event_id: {
+            str(tag.get("tag") or ""): int(tag.get("count") or 1)
+            for tag in event.top_tags
+            if str(tag.get("tag") or "")
+        }
+        for record, event in zip(
+            records, [e for e in events if any(w in e.title for w in PUBLISHED_TITLES)]
+        )
+    }
     report = render(
         now, half_life, baseline, event_arm, records, raw_proposals, stats,
-        warnings, usage, len(rows),
+        warnings, usage, len(rows), prev_arm, tag_counts, floor_only_arm,
     )
     Path(args.report).write_text(report, encoding="utf-8")
     print(report)

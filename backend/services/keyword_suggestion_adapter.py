@@ -54,6 +54,9 @@ CONTENT_WINDOW_DAYS = 14
 EVENT_MAX_TEXTS = 5
 EVENT_TEXT_MAX_CHARS = 120
 
+# 一个标签至少要出现在这么多条成员帖上，才算这件事的证据（见 _parse_top_tags）。
+MIN_TAG_POSTS = 2
+
 _EPOCH = datetime(1970, 1, 1)
 
 
@@ -125,13 +128,31 @@ def _load_crawler_history(
 
 
 def _parse_top_tags(top_tags_json: str) -> dict[str, float]:
-    """top_tags_json（`[{"tag": "学术", "count": 3}]`）-> {标签: 权重}，权重 = count / max_count。
+    """top_tags_json（`[{"tag": "学术", "count": 3}]`）-> {标签: 权重}。
 
-    **为什么要权重**：头号事件「中大杰青实名举报」的标签是 学术(3) / 热点(1) / 新闻(1) /
-    医学(1) / **上海(1)** / **广州(1)**。所有标签共享同一个事件优先级的话，「上海」会和
-    「学术不端」并列同分顶上首屏（消融第一版实测就是这样，见 docs/keyword-event-ablation.md）。
-    count 本来就在库里：3 条帖子都带「学术」、只有 1 条带「上海」——**前者才是这件事的特征**。
-    这是测量，不是又一张黑名单。
+    两道关，都是**算术**（count 早就在库里：`clustering._top_tags` 数的就是"有几条成员帖带它"）：
+
+      1. **门槛**：`count >= MIN_TAG_POSTS`（=2）。**出现一次的标签是噪音，不是信号。**
+      2. **权重**：`count / max_count`（分母是**事件自己的** max，不是过关者里的 max——
+         删掉噪音不该让剩下的词凭空涨分）。
+
+    **为什么必须有门槛（而权重不够）。** 线上两份真实分布：
+
+        《中大杰青实名举报》 学术(3) 热点(1) 新闻(1) 热点新闻事件(1) 社会新闻(1)
+                            学术论文(1) 真实案件(1) 医学(1) 上海(1) 广州(1)
+        《中大火箭试验成功》 宿舍(1)                                  ← 它**唯一**的标签
+
+    权重那一版（上一轮）把「上海」压到 1/3 分——它照样上了首屏（实测第 16 名，1.00 分）。
+    可 count=1 的意思是：**全事件只有一个发帖人打过这个 hashtag**。那是他一个人的贴标签习惯，
+    不是"这件事该拿这个词去搜"的证据。「学术」(3 条帖子都打了) 是信号，「上海」(1 条) 不是。
+
+    **为什么门槛必须是绝对下限，而不是"占最大值的比例"。** 火箭事件把 share-of-max 这条路堵死了：
+    它的 `max_count` 本身就是 1，于是 宿舍(1)/1 = **1.0 满分**——任何比例阈值都放它过。
+    分母是 1 的比例说明不了任何事。绝对下限的答案很干脆：**这个事件一个标签都提不出来**
+    （它的 `source_keywords`——真的拿去爬过的词——不受影响）。两个互不相识的发帖人对同一件事
+    都想到了同一个词，这是"标签能构成证据"的最小形态；一个人想到过，什么都不是。
+
+    **不是黑名单**：这里没有一个词被点名。下一个事件的噪音是「深圳」「珠海」，同一条算术照拦。
     """
 
     try:
@@ -152,7 +173,11 @@ def _parse_top_tags(top_tags_json: str) -> dict[str, float]:
     top = max(counts.values(), default=0.0)
     if not top:
         return {}
-    return {name: count / top for name, count in counts.items()}
+    return {
+        name: count / top
+        for name, count in counts.items()
+        if count >= MIN_TAG_POSTS
+    }
 
 
 def _parse_json_list(raw: str) -> list[str]:
