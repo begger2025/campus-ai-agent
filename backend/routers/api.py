@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.agent.public_opinion_core.recency import (
     age_in_days,
     event_time_from_payload,
+    lifecycle_from_payload,
     priority_score,
     recency_weight,
 )
@@ -29,41 +30,51 @@ def _now() -> datetime:
 
 
 def _recency_fields(row: PublicEvent, now: datetime) -> dict:
-    """一个已发布事件的时效性三件套（**读时现算**，不读数据库里的陈年快照）。
+    """一个已发布事件的时效性 + 生命周期字段（**读时现算**，不读数据库里的陈年快照）。
 
-    库里只存 `date_range_json.event_time`（成员帖发布时间的中位数，一个事实）。年龄和权重
-    是 `now` 的函数——冻进数据库第二天就是错的，所以每次请求按当前时刻重算。
+    库里只存两个**事实**：`date_range_json.event_time`（成员帖发布时间的中位数）和
+    `date_range_json.lifecycle`（+ 理由；LLM 读帖子判出的"这件事完了没有"）。年龄、时效权重和
+    优先级是 `now` 的函数——冻进数据库第二天就是错的，所以每次请求按当前时刻重算。
     没有 event_time 的老数据：age 未知（None），权重 1.0——"不知道多老" ≠ "很老"，不许凭空沉底。
+    没有 lifecycle 的老数据：因子 1.0——"不知道结没结" ≠ "已经结了"，同样不许凭空打折。
     """
 
     event_time = event_time_from_payload(row.date_range_json)
     age = age_in_days(event_time, now)
     weight = recency_weight(age)
+    lifecycle, lifecycle_reason = lifecycle_from_payload(row.date_range_json)
     return {
         "event_time": event_time,
         "age_days": None if age is None else round(age, 1),
         "recency_weight": round(weight, 6),
-        "priority_score": priority_score(_risk_level(row), weight),
+        "lifecycle": lifecycle,
+        "lifecycle_reason": lifecycle_reason,
+        "priority_score": priority_score(_risk_level(row), weight, lifecycle),
     }
 
 
 def sort_event_rows(rows: list[PublicEvent], now: datetime) -> list[PublicEvent]:
-    """前端看板的顺序：**展示优先级**（严重性 × 时效性）优先，同优先级按热度。
+    """前端看板的顺序：**展示优先级**（严重性 × 时效性 × 生命周期）优先，同优先级按热度。
 
-    与核心 `clustering.sort_events` 同一口径（severity_weight × recency_weight），只是这里
-    的输入是数据库行。**必须在这里也排一遍**：核心的排序只决定写库顺序，写完就被
-    `ORDER BY created_at DESC` 冲掉了——前端 `fetchPublishedEvents()` 拿到的是这个查询的顺序，
-    所以"近期舆情优先"这件事只有在这里生效才算数。
+    与核心 `clustering.sort_events` 同一口径
+    （severity_weight × recency_weight × lifecycle_weight），只是这里的输入是数据库行。
+    **必须在这里也排一遍**：核心的排序只决定写库顺序，写完就被 `ORDER BY created_at DESC`
+    冲掉了——前端 `fetchPublishedEvents()` 拿到的是这个查询的顺序，所以"近期舆情优先"和
+    "悬而未决的事不沉底"这两件事，只有在这里生效才算数。
 
-    严重性和热度**不被时间打折**（它们照原样返回给用户展示）；时间只影响顺序。
+    严重性和热度**不被时间或状态打折**（它们照原样返回给用户展示）；时效性和生命周期只影响顺序。
     """
 
     return sorted(
         rows,
         key=lambda row: (
-            priority_score(_risk_level(row), recency_weight(age_in_days(
-                event_time_from_payload(row.date_range_json), now
-            ))),
+            priority_score(
+                _risk_level(row),
+                recency_weight(
+                    age_in_days(event_time_from_payload(row.date_range_json), now)
+                ),
+                lifecycle_from_payload(row.date_range_json)[0],
+            ),
             float(row.heat_score or 0.0),
             int(row.id or 0),
         ),
@@ -274,6 +285,12 @@ def _event_item(
         "event_time": recency["event_time"],
         "age_days": recency["age_days"],
         "recency_weight": recency["recency_weight"],
+        # 生命周期（第四根轴）：这件事**完了没有** + 凭什么这么判。
+        # 「已了结」的 3.5 个月前的火情该沉下去，「悬而未决」的 2 个月前的举报不该——
+        # 管理员在看板上必须能看到理由，否则"为什么这条老事件还在最上面"没人解释得了。
+        # "" = 未研判（LLM 关掉/失败/老数据）：因子 1.0，排序与改造前相同。
+        "lifecycle": recency["lifecycle"],
+        "lifecycle_reason": recency["lifecycle_reason"],
         "priority_score": recency["priority_score"],
         "confidence": row.confidence,
         "source_count": source_count,

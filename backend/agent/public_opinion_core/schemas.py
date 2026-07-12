@@ -81,7 +81,14 @@ class OpinionEvent:
     age_days: float | None = None
     # 时效权重 0.5 ** (age_days / half_life)，钳在 [min_weight, 1.0]。默认 1.0 = 未标注/不打折。
     recency_weight: float = 1.0
-    # 展示优先级 = severity_weight(risk_level) × recency_weight，事件排序的第一排序键。
+    # ---- 生命周期（第四根轴，见 llm_lifecycle.py）----
+    # 事件状态：resolved（已了结）/ ongoing（悬而未决）/ escalating（持续发酵）。
+    # "" = 未研判（LLM 关掉/失败/老数据）-> 因子 1.0 -> 排序退化回改造前。**落库**（它是对
+    # 内容的判断，不是 now 的函数）。
+    lifecycle: str = ""
+    # 状态的人话理由（给管理员看的："凭什么这条 3 个月前的事还在前面"）。
+    lifecycle_reason: str = ""
+    # 展示优先级 = severity_weight × recency_weight × lifecycle_weight，事件排序的第一排序键。
     priority_score: float = 0.0
     source_keywords: list[str] = field(default_factory=list)
     top_tags: list[dict[str, Any]] = field(default_factory=list)

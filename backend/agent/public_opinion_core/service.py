@@ -10,6 +10,7 @@ from typing import Any
 
 from .adapter import processed_posts_to_notes
 from .clustering import classify_event, cluster_notes, sort_events
+from .llm_lifecycle import LifecycleAssessor, assess_events_lifecycle
 from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner
 from .llm_risk import DEFAULT_MAX_TEXTS, RiskAssessor, assess_events_risk
 from .memory import annotate_events_with_memory, build_snapshot
@@ -56,6 +57,7 @@ class PublicOpinionAgentService:
         refine_min_size: int | None = None,
         risk_assessor: RiskAssessor | None = None,
         risk_max_texts: int | None = None,
+        lifecycle_assessor: LifecycleAssessor | None = None,
         now: datetime | None = None,
         recency_half_life_days: float | None = None,
     ) -> AnalyzeResult:
@@ -157,9 +159,29 @@ class PublicOpinionAgentService:
                 # 一个事件都没判成（全部超时/幻觉）时模式如实记成 rules：降级必须看得见。
                 risk_mode = "llm"
 
+        # 事件状态研判（第四根轴）：这件事**完了没有**。时效衰减只看年龄，分不出「3.5 个月前
+        # 已经了结的火情」和「2 个月前仍无结论的实名举报」——而这个区别恰恰决定了看板要不要
+        # 继续把它顶在上面。它**只**写 lifecycle / lifecycle_reason，随后经 lifecycle_weight
+        # 进入 priority_score（严重性、热度、时效算术一个字节都不碰）。
+        # assessor 为 None 或逐事件失败时，该事件保持"未研判"（因子 1.0 = 改造前的行为）。
+        lifecycle_mode = "none"
+        lifecycle_assessed = 0
+        if events and lifecycle_assessor is not None:
+            lifecycle_assessed = assess_events_lifecycle(
+                events,
+                lifecycle_assessor,
+                notes_by_id={note.note_id: note for note in notes},
+                warnings=warnings,
+                max_texts=risk_max_texts if risk_max_texts is not None else DEFAULT_MAX_TEXTS,
+            )
+            if lifecycle_assessed:
+                # 一个都没判成（全部超时/幻觉）时如实记成 none：降级必须看得见，不许假装 AI 上过。
+                lifecycle_mode = "llm"
+
         # 事件时效性：给每个事件盖上 age_days / recency_weight / priority_score，然后**重排**。
-        # 必须排在风险研判**之后**：priority = severity_weight(risk_level) × recency_weight，
-        # 风险被 LLM 重判过，优先级得用新的严重性算。
+        # 必须排在风险研判和状态研判**之后**：
+        #   priority = severity_weight(risk_level) × recency_weight × lifecycle_weight(lifecycle)
+        # 风险和状态都被 LLM 判过，优先级得用新的严重性和新的状态算。
         # 只写这三个新字段：risk_*（严重性不因时间打折）和 heat_*（实测量）一个字节都不碰。
         half_life = (
             recency_config()["half_life_days"]
@@ -198,6 +220,13 @@ class PublicOpinionAgentService:
                 # 风险来源：llm = 事件风险由大模型研判；rules = 关键词表 + 互动量加分（旧口径）。
                 "risk_mode": risk_mode,
                 "risk_assessed": risk_assessed,
+                # 状态研判：llm = 事件状态由大模型判过；none = 没判成（未配置/全部失败），
+                # 此时生命周期因子恒为 1.0，排序退化回改造前。lifecycle_counts 是各状态的事件数。
+                "lifecycle_mode": lifecycle_mode,
+                "lifecycle_assessed": lifecycle_assessed,
+                "lifecycle_counts": dict(
+                    Counter(event.lifecycle for event in events if event.lifecycle)
+                ),
                 # 时效性：本次排序用的半衰期与"现在"。0 = 关掉衰减（消融对照臂）。
                 # 记进 agent_run_logs 才能事后复现"这一版看板为什么是这个顺序"。
                 "recency_half_life_days": half_life,

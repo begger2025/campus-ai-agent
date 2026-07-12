@@ -14,14 +14,18 @@ LLM 研判的严重性、排序是 `风险等级 -> ranking_score`——没有�
 「这个事件 107 天前发生，半衰期 30 天，所以时效权重 = 0.5^(107/30) = 0.084」是站得住的答案，
 「模型觉得它不够新」不是。（严重性研判和离群剔除该用 LLM 的地方已经在用了——这里不是那种地方。）
 
-**三根正交的轴，互不改写：**
+**四根正交的轴，互不改写：**
 
     严重性 risk_level / risk_score  —— LLM 研判「学校要不要立即处置」。**不衰减**：
                                        宿舍火灾不会因为过了三个月就变得不严重。
     流行度 heat_score / heat_rank   —— 互动量的算术，是实测事实，展示给用户。**不改写**。
-    时效性 recency_weight（本模块） —— 事件多新。**新增的第三根轴**，只进排序。
+    时效性 recency_weight（本模块） —— 事件多新。纯算术，只进排序。
+    生命周期 lifecycle（第四根轴） —— 这件事**完了没有**。LLM 研判（见 llm_lifecycle.py），
+                                       让「悬而未决」抗衰减、「已了结」加速沉底。因子表在本模块，
+                                       因为它是**排序算术**的一部分（同 SEVERITY_WEIGHTS 的分工）。
 
-排序键 = `severity_weight(risk_level) × recency_weight`（= `priority_score`）。
+排序键 = `severity_weight(risk_level) × recency_weight × lifecycle_weight(lifecycle)`
+（= `priority_score`）。生命周期未研判时因子恒为 1.0，公式逐位退化回改造前的两轴版本。
 `severity_weight` 是 low/medium/high -> 1/3/9 的单调映射：**权重全为 1 时（未标注 /
 关掉衰减 / 全无时间戳），排序逐位退化回改造前的「风险等级优先」口径**——不是巧合，是设计约束。
 而衰减的动态范围（1 -> 1e-6）远大于严重性的（1 -> 9），所以一个足够旧的 high 一定会被
@@ -74,6 +78,29 @@ STRATEGY_ENV = "EVENT_RECENCY_TIMESTAMP"
 # 所以时效性可以把一个足够旧的 high 压到今天的 low 之下——这是**要的**行为，不是副作用。
 SEVERITY_WEIGHTS: dict[str, float] = {"high": 9.0, "medium": 3.0, "low": 1.0}
 UNKNOWN_SEVERITY_WEIGHT = 1.0
+
+# ---- 生命周期（第四根轴）：状态 -> 排序权重。研判本身在 llm_lifecycle.py，这里只有算术。----
+#
+# 衰减只看年龄，可年龄答不了这个问题：3.5 个月前的「东校区宿舍火情」（火已扑灭、校方已通报、
+# 无伤亡、已立案）**事情结束了**；2.1 个月前的「中大杰青实名举报」（调查无结论）**口子还开着**。
+# 同样的年龄、同样的 high，看板对它们的态度不该一样——「已了结」和「悬而未决」是对内容的判断。
+#
+# **为什么是 2 的幂**：因子可以直接翻译成半衰期，这是答辩上唯一站得住的解释方式——
+#   ×2   ⇔ 把事件当作**年轻了一个半衰期（21 天）**：0.5**((age-21)/21) == 2 × 0.5**(age/21)
+#   ×4   ⇔ 年轻两个半衰期（42 天）
+#   ×0.5 ⇔ 当作老了一个半衰期
+# 于是「悬而未决」的含义是精确的：它抵得过 3 周的沉底，不多不少。
+#
+# **量级的上界是刻意压住的**：整根轴的动态范围 8×（0.5 -> 4）**小于**严重性的 9×（low -> high），
+# 所以「持续发酵的低风险」永远压不过「已了结的高风险」——生命周期是第四根轴，不是推翻严重性的后门。
+# （它确实能翻转相邻档：一个持续发酵的 medium 可以压过一个已了结的 high——这是**要的**行为：
+#  火已经灭了、通报也发了，学校不需要再对它做动作；那个还在发酵的争议需要。）
+#
+# 未研判（"" / None / LLM 挂了 / 库里是脏值）-> 1.0：**恒等**。不知道结没结 ≠ 已经结了，
+# 不许凭空把一个事件打折沉底（同 recency_weight 对未知年龄、platform_weights 对未知平台的口径）。
+LIFECYCLE_WEIGHTS: dict[str, float] = {"escalating": 4.0, "ongoing": 2.0, "resolved": 0.5}
+UNKNOWN_LIFECYCLE_WEIGHT = 1.0
+VALID_LIFECYCLES = tuple(LIFECYCLE_WEIGHTS)
 
 SECONDS_PER_DAY = 86400.0
 
@@ -206,13 +233,35 @@ def severity_weight(risk_level: str) -> float:
     return SEVERITY_WEIGHTS.get(str(risk_level or "").strip().lower(), UNKNOWN_SEVERITY_WEIGHT)
 
 
-def priority_score(risk_level: str, weight: float) -> float:
-    """展示优先级 = 严重性权重 × 时效权重。事件排序的第一排序键（见 clustering.sort_events）。
+def lifecycle_weight(lifecycle: str | None) -> float:
+    """生命周期的排序权重（resolved/ongoing/escalating -> 0.5/2/4；未研判 -> 1.0）。
+
+    **只用于排序**：不改写 risk_*（严重性）、heat_*（流行度）、recency_weight（时效性）。
+    模型自创的状态（"dormant"/"持续发酵"）落到 1.0 —— 编出来的状态不许变成一个因子。
+    """
+
+    return LIFECYCLE_WEIGHTS.get(
+        str(lifecycle or "").strip().lower(), UNKNOWN_LIFECYCLE_WEIGHT
+    )
+
+
+def priority_score(risk_level: str, weight: float, lifecycle: str | None = None) -> float:
+    """展示优先级 = 严重性权重 × 时效权重 × 生命周期权重。事件排序的第一排序键。
+
+    四根正交的轴，每根都能单独解释给管理员听：
+
+        severity_weight(risk_level)  这件事有多严重（LLM 研判，不随时间打折）
+        recency_weight(age_days)     这件事多新（纯算术，0.5 ** (age/半衰期)）
+        lifecycle_weight(lifecycle)  这件事完了没有（LLM 研判，让悬而未决的事抗衰减）
+        （ranking_score 作为同优先级时的兜底键，见 sort_events）
+
+    `lifecycle=None`（未研判 / LLM 不可用 / 老数据）-> 因子 1.0 -> 逐位退化回改造前的
+    `severity × recency`。这是降级保证：AI 不可用时排序不变，而不是变成随机。
 
     不做 round：地板价 1e-6 × 1.0 = 1e-6，四舍五入到几位小数都会把陈旧事件之间的顺序压平。
     """
 
-    return severity_weight(risk_level) * float(weight)
+    return severity_weight(risk_level) * float(weight) * lifecycle_weight(lifecycle)
 
 
 def annotate_events_with_recency(
@@ -234,7 +283,12 @@ def annotate_events_with_recency(
         event.recency_weight = recency_weight(
             event.age_days, half_life_days=half_life_days, min_weight=min_weight
         )
-        event.priority_score = priority_score(event.risk_level, event.recency_weight)
+        # 生命周期（第四根轴）已经由 llm_lifecycle 盖在事件上（未研判时是 ""，因子 1.0）：
+        # 它进 priority_score，不进 recency_weight —— 时效权重必须保持"只是年龄的函数"，
+        # 否则「这个事件 64 天前发生，半衰期 21 天，所以权重 0.12」这句话就不再成立了。
+        event.priority_score = priority_score(
+            event.risk_level, event.recency_weight, event.lifecycle
+        )
     return events
 
 
@@ -301,19 +355,48 @@ def event_time_from_payload(date_range_json: str | None) -> str:
     return ""
 
 
+def lifecycle_from_payload(date_range_json: str | None) -> tuple[str, str]:
+    """从 `public_events.date_range_json` 里取事件状态 + 理由（读侧排序与展示用）。
+
+    落在 `date_range_json` 里的理由和 `event_time` 一样：**public_events 不加列**（加列要改
+    共享 MySQL 的表结构，而这个库是全组共用的），而这个字段本来就装着事件的"时间维度"——
+    状态正是时间这根轴上的修饰量（它决定事件抗不抗衰减）。
+
+    库里的脏值（人手改过、老版本写的、模型自创的状态）一律当作**未研判**返回 ""：
+    不在枚举里的状态永远不许变成一个排序因子。
+    """
+
+    if not date_range_json:
+        return "", ""
+    try:
+        data = json.loads(date_range_json)
+    except (TypeError, ValueError):
+        return "", ""
+    if not isinstance(data, dict):
+        return "", ""
+    lifecycle = str(data.get("lifecycle") or "").strip().lower()
+    if lifecycle not in VALID_LIFECYCLES:
+        return "", ""
+    return lifecycle, str(data.get("lifecycle_reason") or "").strip()
+
+
 __all__ = [
     "DEFAULT_HALF_LIFE_DAYS",
     "DEFAULT_MIN_WEIGHT",
     "DEFAULT_STRATEGY",
     "HALF_LIFE_ENV",
+    "LIFECYCLE_WEIGHTS",
     "MIN_WEIGHT_ENV",
     "SEVERITY_WEIGHTS",
     "STRATEGY_ENV",
+    "VALID_LIFECYCLES",
     "VALID_STRATEGIES",
     "age_in_days",
     "annotate_events_with_recency",
     "event_reference_time",
     "event_time_from_payload",
+    "lifecycle_from_payload",
+    "lifecycle_weight",
     "note_time",
     "parse_time",
     "priority_score",

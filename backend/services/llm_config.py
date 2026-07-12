@@ -108,3 +108,9 @@ EVENT_RISK_ENABLED = _read_bool("EVENT_RISK_ENABLED", True)
 
 # 一个事件最多送几条帖子给模型（严重性藏在少数几条帖子里，读完 91 条纯属烧钱）。
 EVENT_RISK_MAX_TEXTS = max(_read_int("EVENT_RISK_MAX_TEXTS", DEFAULT_RISK_MAX_TEXTS), 1)
+
+# ---- 事件状态研判（生命周期：这件事完了没有）----
+# 复用同一组 EVENT_LLM_*，也复用 EVENT_RISK_MAX_TEXTS（读的是同一批成员帖，只是问题不同）。
+# 关掉即回到"未研判"：生命周期因子恒为 1.0，排序逐位退化回「严重性 × 时效性」（改造前）。
+# 不关也会自动逐事件降级——LLM 挂了事件照出，只是那个事件不带状态（见 llm_lifecycle.py）。
+EVENT_LIFECYCLE_ENABLED = _read_bool("EVENT_LIFECYCLE_ENABLED", True)

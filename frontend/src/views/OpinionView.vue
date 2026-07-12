@@ -43,6 +43,14 @@
                   :class="['event-age', { 'event-age--stale': isStale(event.age_days) }]"
                   :title="event.event_time ? `事件代表时间（成员帖发布时间中位数）：${formatEventTime(event.event_time)}` : '该事件没有可用的发布时间'"
                 >· {{ formatAge(event.age_days) }}</span>
+                <!-- 状态要看得见：一个 3.5 个月前的火情排第 4、一个 2 个月前的举报排第 1，
+                     光看年龄解释不了这个顺序——管理员有权一眼看到「已了结」还是「悬而未决」。
+                     未研判（LLM 关掉/失败/老数据）时不显示徽标：不知道结没结 ≠ 已经结了。 -->
+                <span
+                  v-if="hasLifecycle(event.lifecycle)"
+                  :class="['lifecycle-tag', `lifecycle-tag--${event.lifecycle}`]"
+                  :title="lifecycleTitle(event.lifecycle, event.lifecycle_reason)"
+                >{{ lifecycleLabel(event.lifecycle) }}</span>
               </div>
             </div>
           </div>
@@ -60,9 +68,20 @@
             <div class="detail-header">
               <h2>{{ selectedEvent.title }}</h2>
               <span :class="['risk-tag', `risk-tag--${selectedEvent.risk_level}`]">{{ riskLabel(selectedEvent.risk_level) }}</span>
+              <span
+                v-if="hasLifecycle(selectedEvent.lifecycle)"
+                :class="['lifecycle-tag', `lifecycle-tag--${selectedEvent.lifecycle}`]"
+                :title="lifecycleTitle(selectedEvent.lifecycle, selectedEvent.lifecycle_reason)"
+              >{{ lifecycleLabel(selectedEvent.lifecycle) }}</span>
             </div>
 
             <p class="detail-summary">{{ selectedEvent.summary }}</p>
+
+            <!-- 「凭什么这条 3 个月前的事还在前面」：模型给的理由，原样摆出来。 -->
+            <p v-if="hasLifecycle(selectedEvent.lifecycle)" class="detail-lifecycle">
+              <strong>{{ lifecycleLabel(selectedEvent.lifecycle) }}</strong>
+              <span v-if="selectedEvent.lifecycle_reason">· {{ selectedEvent.lifecycle_reason }}</span>
+            </p>
 
             <div class="detail-metrics">
               <el-tooltip :content="`${HEAT_TOOLTIP}。精确值：${selectedEvent.heat_score}`" placement="top" :show-after="150">
@@ -165,6 +184,7 @@ import { ElMessage } from 'element-plus'
 import { Pointer } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { formatAge, formatEventTime, isStale } from '@/utils/age'
+import { hasLifecycle, lifecycleLabel, lifecycleTitle } from '@/utils/lifecycle'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { sourceOptions } from '@/mock/events'
 import { fetchPublishedEvents } from '@/api/events'
@@ -397,6 +417,28 @@ function sentimentLabel(s) {
 /* 事件年龄：陈旧的（>= 90 天）标黄，用户一眼看得出这不是今天的舆情 */
 .event-age { color: var(--color-text-muted); }
 .event-age--stale { color: var(--color-warning-text); font-weight: 600; }
+
+/* 事件状态（第四根轴）：已了结 = 灰（学校不必再动作）；悬而未决/持续发酵 = 醒目（口子还开着）。 */
+.lifecycle-tag {
+  display: inline-block;
+  padding: 0 6px;
+  height: 18px;
+  line-height: 18px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: help;
+}
+
+.lifecycle-tag--resolved { color: var(--color-text-muted); background: var(--color-fill-2, #f2f3f5); border: 1px solid #dcdfe6; }
+.lifecycle-tag--ongoing { color: var(--color-warning-text); background: var(--color-warning-bg); border: 1px solid #ecd9ae; }
+.lifecycle-tag--escalating { color: var(--color-danger-text); background: var(--color-danger-bg); border: 1px solid #f4c2c4; }
+
+.detail-lifecycle {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
 
 /* ——— 中栏：事件详情 ——— */
 .detail-header {

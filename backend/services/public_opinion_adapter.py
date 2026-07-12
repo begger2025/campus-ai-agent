@@ -25,6 +25,7 @@ from backend.database import DATA_DIR
 from backend.models import EventPostLink, ProcessedPost, PublicEvent
 from backend.services.comment_loader import fetch_top_comments
 from backend.services.embedding import get_embedder
+from backend.services.event_lifecycle import get_lifecycle_assessor
 from backend.services.event_refiner import get_cluster_refiner
 from backend.services.event_risk import get_risk_assessor
 from backend.services.llm_config import (
@@ -442,6 +443,10 @@ def _merge_output_summary(raw_summary: Any, result: Any) -> str:
     # 事件风险来自大模型研判还是关键词规则；risk_assessed = 成功研判的事件数。
     summary["risk_mode"] = extra.get("risk_mode", "rules")
     summary["risk_assessed"] = extra.get("risk_assessed", 0)
+    # 事件状态：llm = 状态由大模型研判；none = 没判成（未配置/全部失败），因子恒 1.0。
+    summary["lifecycle_mode"] = extra.get("lifecycle_mode", "none")
+    summary["lifecycle_assessed"] = extra.get("lifecycle_assessed", 0)
+    summary["lifecycle_counts"] = extra.get("lifecycle_counts", {})
     return json.dumps(summary, ensure_ascii=False)
 
 
@@ -511,6 +516,11 @@ def run_public_opinion_analysis(
         # 未配 key / 关闭 / 调用失败时逐事件自动降级回规则风险，事件照出（见 llm_risk.py）。
         risk_assessor=get_risk_assessor() if use_llm else None,
         risk_max_texts=EVENT_RISK_MAX_TEXTS,
+        # LLM 事件状态研判（第四根轴）：时效衰减只看年龄，分不出「3.5 个月前**已了结**的宿舍
+        # 火情」（火已灭、已通报、无伤亡、已立案 —— 学校不必再动作）和「2 个月前**仍无结论**的
+        # 实名举报」（口子还开着）。「已了结 vs 悬而未决」是对内容的判断，时间戳和词表都答不了。
+        # 未配 key / 关闭 / 调用失败时逐事件保持"未研判"（因子 1.0 = 排序退化回改造前）。
+        lifecycle_assessor=get_lifecycle_assessor() if use_llm else None,
     )
     result.warnings = truncation_warnings + list(result.warnings)
     if persist and result.snapshot is not None:
@@ -559,6 +569,9 @@ def run_public_opinion_analysis(
                 "event_time": event.event_time,
                 "age_days": event.age_days,
                 "recency_weight": event.recency_weight,
+                # 生命周期（第四根轴）：这件事完了没有 + 凭什么这么判。"" = 未研判（因子 1.0）。
+                "lifecycle": event.lifecycle,
+                "lifecycle_reason": event.lifecycle_reason,
                 "priority_score": event.priority_score,
                 # 跨次运行记忆标注（week3 记忆模块）
                 "trend": event.trend,
@@ -591,6 +604,10 @@ def run_public_opinion_analysis(
             # 事件风险：llm = 大模型研判严重性；rules = 关键词表 + 互动量加分（旧口径）。
             "risk": extra.get("risk_mode", "rules"),
             "risk_assessed": extra.get("risk_assessed", 0),
+            # 事件状态（生命周期）：llm = 大模型判过「这件事完了没有」；none = 未研判（因子 1.0）。
+            "lifecycle": extra.get("lifecycle_mode", "none"),
+            "lifecycle_assessed": extra.get("lifecycle_assessed", 0),
+            "lifecycle_counts": extra.get("lifecycle_counts", {}),
         },
         "payload_counts": {
             "public_events": len(event_payloads),

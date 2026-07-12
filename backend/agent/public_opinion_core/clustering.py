@@ -162,12 +162,21 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
 
 
 def sort_events(events: list[OpinionEvent]) -> list[OpinionEvent]:
-    """事件排序：**展示优先级**（严重性 × 时效性）优先，同优先级按 ranking_score。
+    """事件排序：**展示优先级**（严重性 × 时效性 × 生命周期）优先，同优先级按 ranking_score。
 
-        priority = severity_weight(risk_level) × recency_weight
-                 = {low: 1, medium: 3, high: 9} × 0.5 ** (age_days / half_life)
+        priority = severity_weight(risk_level) × recency_weight × lifecycle_weight(lifecycle)
+                 = {low: 1, medium: 3, high: 9}
+                   × 0.5 ** (age_days / half_life)
+                   × {resolved: 0.5, ongoing: 2, escalating: 4, 未研判: 1}
 
-    两条性质，缺一不可：
+    第三个因子（生命周期）修的是时效衰减的一个真实缺陷：衰减只看年龄，于是一个 3.5 个月前
+    **已经了结**的火情和一个 2 个月前**仍无结论**的实名举报只按"谁更新"排。「已了结」还是
+    「悬而未决」是对内容的判断，只有读过帖子的模型答得了（见 llm_lifecycle.py）。
+
+    三条性质，缺一不可：
+
+    0. **未研判的事件（lifecycle="" ）因子恒为 1.0**：LLM 关掉/失败/老数据时，公式逐位退化回
+       `severity × recency`——降级不改变既有顺序。
 
     1. **未标注时效性的事件（recency_weight 默认 1.0）排序与改造前逐位相同**：severity_weight
        在 low<medium<high 上单调，权重全为 1 时第一排序键等价于原来的 risk_rank(3/2/1)，
@@ -184,7 +193,7 @@ def sort_events(events: list[OpinionEvent]) -> list[OpinionEvent]:
     return sorted(
         events,
         key=lambda event: (
-            priority_score(event.risk_level, event.recency_weight),
+            priority_score(event.risk_level, event.recency_weight, event.lifecycle),
             event.ranking_score,
             event.heat_rank,
             event.heat_score,

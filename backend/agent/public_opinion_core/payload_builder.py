@@ -40,6 +40,13 @@ def build_public_event_payloads(result: AnalyzeResult) -> list[dict[str, Any]]:
                         # ——它们由读侧（GET /api/events）用请求时刻现算，见 recency.py。
                         # public_events 没有新增列：date_range_json 本来就装着时间信息。
                         "event_time": event.event_time,
+                        # 生命周期（第四根轴）：这件事**完了没有**（resolved/ongoing/escalating）。
+                        # 它是对内容的判断（不是 now 的函数），所以**落库**——读侧（GET /api/events
+                        # 的 sort_event_rows）要用它算优先级，前端要用它显示「悬而未决」。
+                        # 同样不加列：状态是时间这根轴上的修饰量，和 event_time 装在一起。
+                        # 未研判时是空串 -> 读回来因子 1.0 -> 排序退化回改造前。
+                        "lifecycle": event.lifecycle,
+                        "lifecycle_reason": event.lifecycle_reason,
                     }
                 ),
                 "source_keywords_json": _json_dumps(event.source_keywords),
