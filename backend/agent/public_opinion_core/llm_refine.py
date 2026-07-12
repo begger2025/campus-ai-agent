@@ -19,6 +19,16 @@
 把簇拆开，并用它给的标题。核心包保持零依赖：refiner 是**注入**的 Callable（同 service.py
 的 Embedder / SentimentClassifier），None = 跳过精修、保留 embedding 结果。
 
+**离群剔除**（`unrelated` 剔除桶）：模型还可以说"这条帖子在这个簇里哪个话题都不属于"。
+真实缺陷——已发布的事件「东校区宿舍火灾」的 4 条代表内容里，有一条是 2023-08-31 的
+`#中大宿舍实拍`（一张与火灾无关的宿舍照片，embedding 把它和火灾聚在一起，只因为都写着
+「宿舍」）。原先的契约里模型**无法表达"哪个话题都不属于"**：要么硬塞进某个话题，要么漏掉
+（而漏掉的按契约要"原样保留为残余簇"）——照片怎么都留在事件里。现在它可以被**剔出事件**：
+各自单独成簇 → 一条无关的帖子不是公共事件 → 被既有的 min_cluster_size 压制掉。
+**剔除 ≠ 删除**：帖子仍在 processed_posts 里、仍计入情感与热度，只是不再冒充事件的证据。
+剔除是**保守**的：剔错一条真实成员（事件丢证据）比留下一条边缘帖更糟，故设剔除上限
+（见 EJECT_MAX_RATIO），越上限则整份结果作废、退回 embedding。
+
 **模型会失败，失败不许拖垮流水线。** LLM 的输出在被信任之前必须先对着**真实输入**验证一遍：
 
   - 编造的帖子编号（返回第 99 号，可这个簇只有 8 条）→ 整簇精修作废，退回 embedding 结果；
@@ -39,9 +49,23 @@ from .schemas import OpinionNote
 
 # (一个簇的帖子文本，规范顺序) -> 话题列表；每个话题是
 #   {"title": str, "members": [1-based 编号...], "miscellaneous": bool}
+# 特例——**剔除桶**：{"members": [...], "unrelated": True}（title 可省）表示"这些帖子
+#   在这个簇里哪个话题都不属于"，它们会被**移出事件**（见 _refine_one 的离群剔除）。
 # 由运行环境注入（见 backend/services/event_refiner.py），核心不认识 HTTP、模型名和 API key。
 # 返回 None / 抛异常 = 本次精修不可用，调用方保留 embedding 的簇。
 ClusterRefiner = Callable[[list[str]], "Sequence[Mapping[str, Any]] | None"]
+
+# 一次最多能从一个簇里剔掉多大比例的成员；超过 = 整份精修结果作废，退回 embedding + warning。
+#
+# 取 1/3，理由是**这两类错误不对称**：
+#   - 留下一条边缘帖：事件多一条弱证据，读者自己能看出来；
+#   - 剔掉一条真实成员：事件**丢掉真实证据**，而且丢得无声无息——这更糟。
+# 所以剔除只被允许当"少数派修正"：簇是 embedding 按真实相似度聚出来的，模型的活是
+# 拂掉边缘的污染（火灾簇里那 1 张 2023 年的照片 = 4 选 1 = 25%），不是推翻聚类。
+# 一个模型要说"这个簇里多数帖子都不属于这个簇"，那它在反对的是聚类本身，不是在指认离群点
+# ——此时正确的动作是**退回 embedding 结果**（当前已发布的行为，已知可用），而不是让一次
+# 可能失灵的模型调用拆掉一个真实事件。剔 80% 的模型是坏了，不是有洞察。
+EJECT_MAX_RATIO = 1 / 3
 
 # 只精修够大的簇。8 的来由（297 条语料实测，簇大小 91/59/24/15/13/11/10 | 7/7/6/3/3/2/2）：
 #   - 下界是**算术**决定的：一个簇要能拆出两个"公共事件"，至少得有 2 × EVENT_MIN_CLUSTER_SIZE
@@ -82,8 +106,8 @@ def refine_clusters(
     min_size: int = DEFAULT_REFINE_MIN_SIZE,
     max_members: int = DEFAULT_REFINE_MAX_MEMBERS,
     warnings: list[str] | None = None,
-) -> tuple[list[dict], int]:
-    """把够大的簇交给 LLM 重新分组；返回（新的簇列表, 被成功精修的簇数）。
+) -> tuple[list[dict], int, int]:
+    """把够大的簇交给 LLM 重新分组；返回（新的簇列表, 被成功精修的簇数, 被剔除的帖子数）。
 
     ``make_cluster`` 由 semantic_clustering 注入（本模块不 import 它，避免循环依赖）：
     拆出来的子簇必须**重算质心**——质心要写进记忆快照供下一次运行对齐，拿父簇的质心
@@ -92,9 +116,10 @@ def refine_clusters(
 
     warnings = warnings if warnings is not None else []
     if refiner is None or not clusters:
-        return clusters, 0
+        return clusters, 0, 0
 
     refined_count = 0
+    ejected_count = 0
     result: list[dict] = []
     for cluster in clusters:
         notes = cluster["notes"]
@@ -108,17 +133,19 @@ def refine_clusters(
             result.append(cluster)
             continue
 
-        groups = _refine_one(cluster, refiner, warnings, make_cluster)
-        if groups is None:
+        outcome = _refine_one(cluster, refiner, warnings, make_cluster)
+        if outcome is None:
             result.append(cluster)
             continue
+        groups, ejected = outcome
         result.extend(groups)
         refined_count += 1
+        ejected_count += ejected
 
     result = _merge_same_topic(result, make_cluster)
     # 输出顺序必须唯一（和 _merge_clusters 出口一致）：按（成员数降序, 签名）排。
     result.sort(key=lambda item: (-len(item["notes"]), _signature(item)))
-    return result, refined_count
+    return result, refined_count, ejected_count
 
 
 def _merge_same_topic(
@@ -157,8 +184,14 @@ def _refine_one(
     refiner: ClusterRefiner,
     warnings: list[str],
     make_cluster: Callable[[list[tuple[OpinionNote, int, list[float]]]], dict],
-) -> list[dict] | None:
-    """精修一个簇；None = 这次不可信，调用方保留原簇。"""
+) -> tuple[list[dict], int] | None:
+    """精修一个簇；None = 这次不可信，调用方保留原簇。
+
+    返回（子簇列表, 被剔除的帖子数）。**离群剔除**：模型判为"哪个话题都不属于"的帖子
+    不进任何话题，各自单独成簇——一条无关的帖子不是"公共事件"，它随即被既有的
+    min_cluster_size 压制掉（压制数已在 warnings 里报数）。剔除 ≠ 删除：帖子仍在
+    processed_posts 里，仍计入情感统计和热度，只是不再冒充这个事件的证据。
+    """
 
     members = cluster["members"]
     notes = cluster["notes"]
@@ -171,15 +204,26 @@ def _refine_one(
         )
         return None
 
-    topics = _validate_topics(raw, len(notes))
-    if topics is None:
+    validated = _validate_topics(raw, len(notes))
+    if validated is None:
         warnings.append(
             f"llm refine returned unusable output for a {len(notes)}-note cluster, "
             "kept embedding clusters"
         )
         return None
+    topics, ejected = validated
 
-    assigned: set[int] = set()
+    # 剔除上限：模型要剔掉一个簇的大半，那它在反对聚类本身，不是在指认离群点——整份作废。
+    # （剔错一条真实成员 = 事件丢证据，比留下一条边缘帖更糟；见 EJECT_MAX_RATIO。）
+    if len(ejected) > len(notes) * EJECT_MAX_RATIO:
+        warnings.append(
+            f"llm refine tried to eject {len(ejected)} of {len(notes)} notes, over the "
+            f"cap ({EJECT_MAX_RATIO:.0%}) — discarded the whole response, kept embedding clusters"
+            f"（剔除过多，疑似模型失灵）"
+        )
+        return None
+
+    assigned: set[int] = set(ejected)
     groups: list[dict] = []
     for title, indices, miscellaneous in topics:
         assigned.update(indices)
@@ -187,6 +231,16 @@ def _refine_one(
         group["llm_title"] = title
         group["llm_miscellaneous"] = miscellaneous
         groups.append(group)
+
+    if ejected:
+        # 各自单独成簇：它们和这个事件无关，彼此之间也没被模型认成一件事。
+        # 不带 llm_title —— 不参与按标题合并，也不会被当成"精修出来的事件"。
+        groups.extend(make_cluster([members[index - 1]]) for index in ejected)
+        preview = "、".join(refiner_input_texts([notes[index - 1] for index in ejected])[:3])
+        warnings.append(
+            f"llm refine ejected {len(ejected)} of {len(notes)} notes as unrelated to any topic "
+            f"（离群剔除：不属于本事件，已移出代表内容，帖子本身保留）: {preview}"
+        )
 
     # 模型漏掉的帖子：一条都不许消失，原样留成一个残余簇（沿用 embedding 的命名口径）。
     leftover = [index for index in range(1, len(notes) + 1) if index not in assigned]
@@ -196,13 +250,19 @@ def _refine_one(
             f"（未分配帖子已原样保留为残余簇）"
         )
         groups.append(make_cluster([members[index - 1] for index in leftover]))
-    return groups
+    return groups, len(ejected)
 
 
-def _validate_topics(raw: Any, member_count: int) -> list[tuple[str, list[int], bool]] | None:
+def _validate_topics(
+    raw: Any, member_count: int
+) -> tuple[list[tuple[str, list[int], bool]], list[int]] | None:
     """把模型的原始输出对着**真实簇成员**验一遍；None = 不可信。
 
     这是本模块的安全边界：编号只有落在 [1, member_count] 且互不重复时才允许动真实数据。
+    剔除名单（{"unrelated": true}）和话题分配走**同一套编号校验**，且共用一个 ``seen`` 集合
+    ——一条帖子不可能既属于某个话题又"哪个话题都不属于"，两边撞车即整簇作废。
+
+    返回（话题列表, 被剔除的编号）；一个编号都没分配到话题（模型只剔除、不干活）也算不可信。
     """
 
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or not raw:
@@ -210,11 +270,14 @@ def _validate_topics(raw: Any, member_count: int) -> list[tuple[str, list[int], 
 
     seen: set[int] = set()
     topics: list[tuple[str, list[int], bool]] = []
+    ejected: list[int] = []
     for item in raw:
         if not isinstance(item, Mapping):
             return None
+        unrelated = bool(item.get("unrelated"))
         title = str(item.get("title") or "").strip()
-        if not title:
+        # 剔除桶没有话题可言，不要求标题；普通话题必须有标题（空标题 = 不可信）。
+        if not title and not unrelated:
             return None
         members = item.get("members")
         if not isinstance(members, Sequence) or isinstance(members, (str, bytes)):
@@ -227,15 +290,21 @@ def _validate_topics(raw: Any, member_count: int) -> list[tuple[str, list[int], 
                 return None
             if not 1 <= value <= member_count:  # 编造出来的帖子编号
                 return None
-            if value in seen:  # 同一条帖子被塞进两个话题
+            if value in seen:  # 同一条帖子被塞进两个话题（或既进话题又被剔除）
                 return None
             seen.add(value)
             indices.append(value)
         if not indices:  # 空话题：无成员的标题不构成事件
             continue
+        if unrelated:
+            ejected.extend(indices)
+            continue
         topics.append((title, sorted(indices), bool(item.get("miscellaneous"))))
 
-    return topics or None
+    # 一个话题都没给：模型没干活（哪怕它剔了几条），不能拿它去动真实数据。
+    if not topics:
+        return None
+    return topics, sorted(ejected)
 
 
 def _signature(cluster: dict) -> tuple[str, ...]:

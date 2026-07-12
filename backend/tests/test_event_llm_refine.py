@@ -26,6 +26,7 @@ from typing import Any
 
 from backend.agent.public_opinion_core.llm_refine import (
     DEFAULT_REFINE_MIN_SIZE,
+    EJECT_MAX_RATIO,
     refiner_input_texts,
 )
 from backend.agent.public_opinion_core.schemas import AnalyzeRequest, OpinionNote
@@ -243,6 +244,199 @@ class RefineFailureTest(unittest.TestCase):
         self.assertTrue(any("未分配" in warning or "unassigned" in warning for warning in result.refine_warnings))
 
 
+class RefineEjectionTest(unittest.TestCase):
+    """离群剔除：模型可以说"这条帖子哪个话题都不属于"，它就不再冒充这个事件的证据。
+
+    真实缺陷（已发布的事件「东校区宿舍火灾」）：4 条代表内容里有 3 条是 2026-03-24~26 的
+    真实火情，第 4 条是
+
+        快手 · #中大宿舍实拍 · @安好 · 2023-08-31 · 赞146
+
+    一张 2023 年的宿舍照片，和火灾毫无关系——embedding 把它和火灾聚在一起，只因为两边
+    都写着「宿舍」。精修层却**无法表达"它哪个话题都不属于"**：模型要么把它塞进某个话题，
+    要么漏掉它（漏掉的按契约"不丢，留作残余簇"），于是它稳稳地留在事件里。
+
+    这一层加的能力：模型可以把一条帖子标成 unrelated → 它被**从事件里剔除**。
+    剔除 ≠ 删除：帖子仍在 processed_posts、仍计入情感统计与热度，只是不再作为事件证据。
+    一条孤零零的无关照片本来就不是"公共事件"，它自然被 EVENT_MIN_CLUSTER_SIZE 压制掉。
+    """
+
+    # 事件「东校区宿舍火灾」的真实成员构成：3 条火情 + 1 条 2023 年的宿舍照片。
+    FIRE_TITLES = [
+        "中山大学东校区宿舍发生火情，现场楼道浓烟滚滚",
+        "中山大学广州校区宿舍发生火灾，消防及时到场处置",
+        "中山大学宿舍起火 校方通报：现场无人员伤亡",
+        "#中大宿舍实拍",  # 2023-08-31，与火灾无关
+    ]
+
+    @staticmethod
+    def fire_refiner(texts: list[str]) -> list[dict[str, Any]]:
+        """模型的替身：认出 3 条火情是一件事，第 4 条哪件事都不是。"""
+
+        return [
+            {"title": "东校区宿舍火灾", "members": [1, 2, 3]},
+            {"members": [4], "unrelated": True},
+        ]
+
+    def fire(self, **kwargs):
+        return cluster(make_notes(self.FIRE_TITLES), refiner=self.fire_refiner, **kwargs)
+
+    def test_unrelated_post_is_ejected_from_the_event(self) -> None:
+        """缺陷本体：火灾事件里不许再站着那张 2023 年的照片。"""
+
+        result = self.fire(min_cluster_size=2)
+
+        self.assertEqual(titles(result), ["东校区宿舍火灾"])
+        fire_event = result.events[0]
+        self.assertEqual(fire_event.source_count, 3)  # 4 -> 3
+        self.assertNotIn("n03", fire_event.extra["note_ids"])  # 那张照片
+        self.assertEqual(result.refined_clusters, 1)
+
+    def test_ejected_post_is_counted_and_surfaced_never_silently_dropped(self) -> None:
+        """剔除必须留痕：计数 + warning。悄悄消失的真实数据是不可接受的。"""
+
+        result = self.fire(min_cluster_size=2)
+
+        self.assertEqual(result.ejected_notes, 1)
+        self.assertTrue(
+            any("eject" in warning or "剔除" in warning for warning in result.refine_warnings),
+            f"剔除必须留下 warning，实际：{result.refine_warnings}",
+        )
+        # 剔除出来的单帖簇走的是既有的 min_cluster_size 压制通道（它已经在报数了）。
+        self.assertEqual(result.suppressed_clusters, 1)
+
+    def test_ejected_post_is_not_deleted_from_the_corpus(self) -> None:
+        """剔除 ≠ 删除：min_cluster_size=1（库默认，"每个簇都是事件"）时它仍是一条独立的帖子。
+
+        它只是不再**属于火灾事件**——这正是"剔除"与"删除"的分界线。
+        """
+
+        result = self.fire(min_cluster_size=1)
+
+        fire_event = next(event for event in result.events if event.title == "东校区宿舍火灾")
+        self.assertEqual(fire_event.source_count, 3)
+        self.assertNotIn("n03", fire_event.extra["note_ids"])
+        # 守恒：帖子没有蒸发，它自己单独成簇（而不是消失）。
+        self.assertEqual(sum(event.source_count for event in result.events), 4)
+        self.assertIn("n03", note_ids(result))
+
+    def test_ejection_is_capped_a_model_that_ejects_most_of_a_cluster_is_malfunctioning(self) -> None:
+        """模型要剔掉一个簇的大半 → 整份结果作废，退回 embedding，并留 warning。
+
+        剔错一条真实成员比留下一条边缘成员更糟（事件会丢掉真实证据）。剔除 6/8 = 75%
+        不是"洞察"，是模型坏了。
+        """
+
+        def over_ejector(texts: list[str]) -> list[dict[str, Any]]:
+            return [
+                {"title": "作息调整争议", "members": [1, 2]},
+                {"members": [3, 4, 5, 6, 7, 8], "unrelated": True},
+            ]
+
+        result = cluster(make_notes(MIXED_TITLES), refiner=over_ejector)
+
+        # 退回 embedding 的原簇：8 条帖子一条不少，标题还是词频标题。
+        self.assertEqual(len(result.events), 1)
+        self.assertEqual(result.events[0].source_count, 8)
+        self.assertTrue(result.events[0].title.endswith("相关讨论"))
+        self.assertEqual(result.refined_clusters, 0)
+        self.assertEqual(result.ejected_notes, 0)
+        self.assertTrue(
+            any("cap" in warning or "过多" in warning for warning in result.refine_warnings),
+            f"越过上限必须留下 warning，实际：{result.refine_warnings}",
+        )
+
+    def test_ejection_within_the_cap_is_honored(self) -> None:
+        """8 帖的簇剔 2 条（25%）在上限内 —— 正常工作，不作废。"""
+
+        def two_ejector(texts: list[str]) -> list[dict[str, Any]]:
+            return [
+                {"title": "作息调整争议", "members": [1, 2, 3, 4, 5, 6]},
+                {"members": [7, 8], "unrelated": True},
+            ]
+
+        result = cluster(make_notes(MIXED_TITLES), refiner=two_ejector, min_cluster_size=2)
+
+        self.assertEqual(titles(result), ["作息调整争议"])
+        self.assertEqual(result.events[0].source_count, 6)
+        self.assertEqual(result.ejected_notes, 2)
+        self.assertEqual(result.refined_clusters, 1)
+
+    def test_cap_is_a_minority_of_the_cluster(self) -> None:
+        """上限的语义：剔除的只能是少数派。多数派"不属于本簇"意味着聚类本身错了，
+        那时该退回的是 embedding 结果，而不是让模型拆掉一个真实事件。"""
+
+        self.assertGreater(EJECT_MAX_RATIO, 0.0)
+        self.assertLessEqual(EJECT_MAX_RATIO, 1 / 3 + 1e-9)
+
+
+class RefineEjectionValidationTest(unittest.TestCase):
+    """剔除名单和话题分配一样，必须对着**真实成员**核对；对不上就整簇作废。
+
+    绝不能让一个编造出来的编号去删掉一条真实帖子。
+    """
+
+    def assert_fell_back(self, refiner) -> None:
+        result = cluster(make_notes(MIXED_TITLES), refiner=refiner)
+        self.assertEqual(len(result.events), 1)
+        self.assertEqual(result.events[0].source_count, 8)  # 一条都没动
+        self.assertEqual(result.refined_clusters, 0)
+        self.assertEqual(result.ejected_notes, 0)
+        self.assertTrue(result.refine_warnings, "失败必须留下 warning")
+
+    def test_ejecting_an_invented_post_number(self) -> None:
+        self.assert_fell_back(
+            Recorder(
+                response=[
+                    {"title": "作息调整争议", "members": [1, 2, 3]},
+                    {"members": [99], "unrelated": True},  # 这个簇只有 8 条
+                ]
+            )
+        )
+
+    def test_a_post_cannot_be_both_ejected_and_assigned_to_a_topic(self) -> None:
+        self.assert_fell_back(
+            Recorder(
+                response=[
+                    {"title": "作息调整争议", "members": [1, 2, 3]},
+                    {"members": [3], "unrelated": True},  # 3 号既在话题里又被剔除
+                ]
+            )
+        )
+
+    def test_ejecting_a_non_integer_post_number(self) -> None:
+        self.assert_fell_back(
+            Recorder(
+                response=[
+                    {"title": "作息调整争议", "members": [1, 2, 3]},
+                    {"members": ["第四条"], "unrelated": True},
+                ]
+            )
+        )
+
+    def test_ejection_without_any_topic_is_discarded(self) -> None:
+        """模型只剔除、一个话题都不给：这不是"洞察"，是没干活——整簇作废。"""
+
+        self.assert_fell_back(Recorder(response=[{"members": [1], "unrelated": True}]))
+
+    def test_ejection_plus_topics_must_reconcile_against_the_real_member_list(self) -> None:
+        """剔除 + 话题分配 + 残余簇 = 全体成员，一条不多一条不少。"""
+
+        def refiner(texts: list[str]) -> list[dict[str, Any]]:
+            return [
+                {"title": "作息调整争议", "members": [4, 5, 6]},
+                {"members": [1], "unrelated": True},
+                # 2、3、7、8 号模型没提 -> 残余簇（既有契约：漏掉的不丢）
+            ]
+
+        result = cluster(make_notes(MIXED_TITLES), refiner=refiner, min_cluster_size=1)
+        self.assertEqual(sum(event.source_count for event in result.events), 8)
+        self.assertEqual(note_ids(result), {f"n{index:02d}" for index in range(8)})
+        self.assertEqual(result.ejected_notes, 1)
+        schedule = next(event for event in result.events if event.title == "作息调整争议")
+        self.assertNotIn("n00", schedule.extra["note_ids"])
+
+
 class RefinedTitleTest(unittest.TestCase):
     """精修出来的标题必须干净：不许重名，也不许在消歧时把「…相关讨论」的套话粘回来。
 
@@ -320,6 +514,22 @@ class ServiceWiringTest(unittest.TestCase):
         self.assertEqual(len(result.events), 3)
         self.assertEqual(result.run_log.extra["clustering_mode"], "semantic+llm")
         self.assertEqual(result.run_log.extra["refined_clusters"], 1)
+
+    def test_ejected_notes_are_reported_in_the_run_log(self) -> None:
+        """被剔除的帖子数进 run_log（-> agent_run_logs）：答辩时看得见"这次剔了几条"。"""
+
+        def ejector(texts: list[str]) -> list[dict[str, Any]]:
+            return [
+                {"title": "作息调整争议", "members": list(range(1, len(texts))),},
+                {"members": [len(texts)], "unrelated": True},
+            ]
+
+        result = self.analyze(cluster_refiner=ejector, min_cluster_size=2)
+        self.assertEqual(result.run_log.extra["ejected_notes"], 1)
+        self.assertTrue(any("eject" in w or "剔除" in w for w in result.warnings))
+
+    def test_no_refiner_reports_zero_ejected(self) -> None:
+        self.assertEqual(self.analyze().run_log.extra["ejected_notes"], 0)
 
     def test_failed_refiner_degrades_to_semantic_and_warns(self) -> None:
         result = self.analyze(cluster_refiner=Recorder(error=RuntimeError("502 bad gateway")))

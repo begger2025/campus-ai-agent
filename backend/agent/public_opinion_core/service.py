@@ -85,6 +85,7 @@ class PublicOpinionAgentService:
         sentiment_overridden = 0
         suppressed_clusters = 0
         refined_clusters = 0
+        ejected_notes = 0
         if notes:
             notes = score_notes(notes)
             notes = analyze_notes_sentiment_and_risk(notes)
@@ -104,7 +105,7 @@ class PublicOpinionAgentService:
                 refine_min_size,
             )
             if semantic is not None:
-                events, centroids, suppressed_clusters, refined_clusters = semantic
+                events, centroids, suppressed_clusters, refined_clusters, ejected_notes = semantic
                 # LLM 一个簇都没精修成（超时/幻觉/全部作废）时，产出的就是纯 embedding 结果，
                 # 模式如实记成 "semantic"——降级必须在日志里看得见，不能假装 AI 上过。
                 clustering_mode = "semantic+llm" if refined_clusters else "semantic"
@@ -117,9 +118,18 @@ class PublicOpinionAgentService:
                 )
         if suppressed_clusters:
             suppressed_notes = len(notes) - sum(event.source_count for event in events)
+            # 离群剔除出来的单帖簇正是从这条通道被压制掉的：把它的份额挑明，
+            # 否则读日志的人只看到"少了几条帖子"，看不出其中几条是被 LLM 判定为不属于事件的。
+            ejected_note = (
+                f"（其中 {ejected_notes} 条是 LLM 判为「不属于任何事件」而剔除的离群帖："
+                f"帖子仍在语料中，只是不再充当事件证据）"
+                if ejected_notes
+                else ""
+            )
             warnings.append(
                 f"suppressed {suppressed_clusters} clusters ({suppressed_notes} notes) "
                 f"smaller than min_cluster_size={minimum}: they are not public events"
+                f"{ejected_note}"
             )
 
         # 事件级 LLM 风险研判：把"这件事有多严重"从六个电诈词 + 互动量加分里解放出来。
@@ -174,6 +184,8 @@ class PublicOpinionAgentService:
                 "min_cluster_size": minimum,
                 "suppressed_clusters": suppressed_clusters,
                 "refined_clusters": refined_clusters,
+                # 被 LLM 剔出事件的离群帖数（剔除 ≠ 删除：帖子仍在 processed_posts 里）。
+                "ejected_notes": ejected_notes,
             },
         )
 
@@ -228,7 +240,7 @@ class PublicOpinionAgentService:
         warnings: list[str],
         cluster_refiner: ClusterRefiner | None = None,
         refine_min_size: int | None = None,
-    ) -> tuple[list, dict[str, list[float]], int, int] | None:
+    ) -> tuple[list, dict[str, list[float]], int, int, int] | None:
         """Run semantic clustering if an embedder is supplied; None means fall back to rules."""
 
         if embedder is None:
@@ -256,8 +268,15 @@ class PublicOpinionAgentService:
             warnings.append(f"semantic clustering unavailable, fell back to rules: {type(exc).__name__}: {exc}")
             return None
         # 精修的降级记录进 warnings（-> agent_run_logs）：LLM 挂了不影响事件产出，但必须留痕。
+        # 离群剔除也在这里留痕（剔了哪几条、剔了几条）：被移出事件的帖子绝不允许无声消失。
         warnings.extend(result.refine_warnings)
-        return result.events, result.centroids, result.suppressed_clusters, result.refined_clusters
+        return (
+            result.events,
+            result.centroids,
+            result.suppressed_clusters,
+            result.refined_clusters,
+            result.ejected_notes,
+        )
 
     def _filter_notes(self, notes: list[OpinionNote], request: AnalyzeRequest) -> list[OpinionNote]:
         keyword = clean_text(request.keyword)

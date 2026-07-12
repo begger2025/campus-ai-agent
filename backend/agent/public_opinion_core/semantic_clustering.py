@@ -83,6 +83,9 @@ class SemanticClusterResult:
     suppressed_clusters: int = 0
     # 被 LLM 成功精修（拆分/改名）的簇数；0 = 纯 embedding 结果。
     refined_clusters: int = 0
+    # 被 LLM 判为"哪个话题都不属于"而移出事件的帖子数（离群剔除）。帖子本身不删，
+    # 只是不再充当事件证据；它们各自单独成簇后由 min_cluster_size 压制掉。
+    ejected_notes: int = 0
     # 精修过程中的降级记录（超时、幻觉编号、漏帖……），由调用方并进 warnings。
     refine_warnings: list[str] = field(default_factory=list)
 
@@ -110,8 +113,11 @@ def cluster_notes_semantic(
     # 并按词频 top-1 命名成「饭堂相关讨论」（里面没有一条食堂帖）。精修在**压制之前**跑：
     # 拆出来的子话题要和别的簇一样，接受 min_cluster_size 的检验（1 帖的话题不是公共事件）。
     # refiner is None（未配 key / 关闭）时这一步是恒等变换，结果与纯 embedding 完全一致。
+    # 精修还负责**离群剔除**：模型判为"哪个话题都不属于"的帖子（火灾簇里那张 2023 年的
+    # 宿舍照片）被移出事件、各自单独成簇，随即被下面的 min_cluster_size 压制——
+    # 一条无关的帖子不是公共事件。帖子本身仍在语料里（情感/热度照算），只是不再当证据。
     refine_warnings: list[str] = []
-    clusters, refined = refine_clusters(
+    clusters, refined, ejected = refine_clusters(
         clusters,
         refiner,
         make_cluster=_make_cluster,
@@ -153,6 +159,7 @@ def cluster_notes_semantic(
         suppressed_clusters=suppressed,
         refined_clusters=refined,
         refine_warnings=refine_warnings,
+        ejected_notes=ejected,
     )
 
 

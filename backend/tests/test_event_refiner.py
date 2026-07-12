@@ -90,6 +90,53 @@ class RefinerCallTest(unittest.TestCase):
             self.assertIsNone(event_refiner.refine_cluster_topics(TEXTS))
 
 
+class RefinerEjectionTest(unittest.TestCase):
+    """离群剔除的接线：模型的 unrelated 名单翻译成核心包认识的"剔除桶"。
+
+    模型侧的 JSON 用一个顶层 `unrelated` 数组表达"这些帖子哪个话题都不属于"（比让它给一个
+    假话题起名字更好答）；核心包的契约是一串话题项，因此在这里把它翻成
+    {"members": [...], "unrelated": true} 追加进去。编号是否对得上真实帖子由核心包验。
+    """
+
+    def test_prompt_asks_the_model_to_name_posts_that_belong_to_no_topic(self) -> None:
+        with mock.patch.object(event_refiner, "call_llm", return_value=reply({"topics": []})) as call:
+            event_refiner.refine_cluster_topics(TEXTS)
+
+        prompt = "\n".join(message["content"] for message in call.call_args.args[0])
+        self.assertIn("unrelated", prompt)
+        self.assertIn("不属于", prompt)
+        # 保守：宁可留下一条边缘帖，也不要剔掉一条真实成员。
+        self.assertIn("宁可", prompt)
+
+    def test_unrelated_members_become_an_ejection_bucket(self) -> None:
+        payload = {
+            "topics": [
+                {"title": "校区与报考信息", "members": [1]},
+                {"title": "作息调整争议", "members": [2]},
+            ],
+            "unrelated": [3],
+        }
+        with mock.patch.object(event_refiner, "call_llm", return_value=reply(payload)):
+            topics = event_refiner.refine_cluster_topics(TEXTS)
+
+        self.assertEqual(topics[:2], payload["topics"])
+        self.assertEqual(topics[-1], {"members": [3], "unrelated": True})
+
+    def test_no_unrelated_key_keeps_the_old_shape(self) -> None:
+        payload = {"topics": [{"title": "作息调整争议", "members": [1, 2, 3]}]}
+        with mock.patch.object(event_refiner, "call_llm", return_value=reply(payload)):
+            topics = event_refiner.refine_cluster_topics(TEXTS)
+
+        self.assertEqual(topics, payload["topics"])
+
+    def test_empty_or_malformed_unrelated_is_ignored(self) -> None:
+        for unrelated in ([], "3", None):
+            payload = {"topics": [{"title": "作息调整争议", "members": [1, 2, 3]}], "unrelated": unrelated}
+            with mock.patch.object(event_refiner, "call_llm", return_value=reply(payload)):
+                topics = event_refiner.refine_cluster_topics(TEXTS)
+            self.assertEqual(topics, payload["topics"], f"unrelated={unrelated!r}")
+
+
 class CallLlmModelOverrideTest(unittest.TestCase):
     """call_llm 要能按调用指定模型/端点，事件精修才能用 EVENT_LLM_MODEL 而不是全局 OPENAI_MODEL。"""
 
