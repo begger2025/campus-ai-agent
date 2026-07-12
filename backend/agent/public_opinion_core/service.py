@@ -38,6 +38,7 @@ class PublicOpinionAgentService:
         previous_snapshot: MemorySnapshot | None = None,
         embedder: Embedder | None = None,
         cluster_threshold: float | None = None,
+        merge_threshold: float | None = None,
         align_threshold: float | None = None,
         sentiment_classifier: SentimentClassifier | None = None,
         min_cluster_size: int | None = None,
@@ -81,6 +82,7 @@ class PublicOpinionAgentService:
                 embedder,
                 previous_snapshot,
                 cluster_threshold,
+                merge_threshold,
                 align_threshold,
                 minimum,
                 warnings,
@@ -177,6 +179,7 @@ class PublicOpinionAgentService:
         embedder: Embedder | None,
         previous_snapshot: MemorySnapshot | None,
         cluster_threshold: float | None,
+        merge_threshold: float | None,
         align_threshold: float | None,
         min_cluster_size: int,
         warnings: list[str],
@@ -195,6 +198,8 @@ class PublicOpinionAgentService:
             }
             if cluster_threshold is not None:
                 kwargs["cluster_threshold"] = cluster_threshold
+            if merge_threshold is not None:
+                kwargs["merge_threshold"] = merge_threshold
             if align_threshold is not None:
                 kwargs["align_threshold"] = align_threshold
             result = cluster_notes_semantic(notes, [list(vector) for vector in vectors], **kwargs)

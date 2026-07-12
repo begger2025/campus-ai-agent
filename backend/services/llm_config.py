@@ -12,6 +12,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from backend.agent.public_opinion_core.semantic_clustering import (
+    DEFAULT_MERGE_THRESHOLD,
+    MERGE_THRESHOLD_ENV,
+)
+
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = ROOT / os.getenv("DATA_DIR", "data")
@@ -63,6 +68,11 @@ EMBEDDING_ENABLED = _read_bool("EMBEDDING_ENABLED", True)
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-zh-v1.5")
 EMBEDDING_CLUSTER_THRESHOLD = _read_float("EMBEDDING_CLUSTER_THRESHOLD", 0.6)
 EMBEDDING_ALIGN_THRESHOLD = _read_float("EMBEDDING_ALIGN_THRESHOLD", 0.75)
+
+# 贪心聚类之后的**质心合并**阈值：两个簇的质心相似度 ≥ 它就合成一个事件。
+# 单趟贪心没有回头路，同一个话题会按输入顺序裂成好几个簇（真实数据上出现过 4 个
+# 「宿舍相关讨论」并列）。合并 pass 负责把它们缝回去；1.0 = 关闭合并。
+EMBEDDING_MERGE_THRESHOLD = _read_float(MERGE_THRESHOLD_ENV, DEFAULT_MERGE_THRESHOLD)
 
 # 成为一个 public_event 至少要有几条帖子。1 = 不压制（单帖也能成事件，旧行为）。
 # 默认 2：一条帖子不是"公共事件"，只是一条帖子——公共事件的最低含义是"不止一个人在说"。

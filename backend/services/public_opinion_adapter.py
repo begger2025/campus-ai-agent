@@ -28,6 +28,7 @@ from backend.services.embedding import get_embedder
 from backend.services.llm_config import (
     EMBEDDING_ALIGN_THRESHOLD,
     EMBEDDING_CLUSTER_THRESHOLD,
+    EMBEDDING_MERGE_THRESHOLD,
     EVENT_MIN_CLUSTER_SIZE,
 )
 from backend.services.log_service import write_event_review_log
@@ -447,6 +448,8 @@ def run_public_opinion_analysis(
         embedder=get_embedder(),
         # 阈值随数据分布标定：真实小红书帖带话题标签/表情，基线相似度偏高，见 .env。
         cluster_threshold=EMBEDDING_CLUSTER_THRESHOLD,
+        # 贪心之后再把质心足够像的簇合并：没有这一步，同一个话题会裂成多个同名事件。
+        merge_threshold=EMBEDDING_MERGE_THRESHOLD,
         align_threshold=EMBEDDING_ALIGN_THRESHOLD,
         # 单帖不成事件（默认 2）：一条帖子自成一簇时不产出 public_event。
         min_cluster_size=EVENT_MIN_CLUSTER_SIZE,
