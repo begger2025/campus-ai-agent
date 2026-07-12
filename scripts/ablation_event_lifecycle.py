@@ -76,20 +76,30 @@ from backend.services.llm_config import (  # noqa: E402
 FIXTURE = ROOT / "data" / "fixtures" / "event_clustering_297.json"
 REPORT = ROOT / "docs" / "event-lifecycle-ablation.md"
 
-# 要点名的三个事件，以及**事先写下的预期**（写在跑之前，不许事后改）：
+# 要点名的事件，以及**事先写下的预期**（写在跑之前，不许事后改）：
 #   火情：火已扑灭、校方已通报、无人员伤亡、调查已立案 -> 预期 resolved
-#   举报：调查有没有结论？没有 -> 预期 ongoing
-#   作息：校方只说了"会关注师生关切" -> 预期 ongoing
+#   举报：调查有没有结论？没有 -> 预期 ongoing（上一轮实测判了 escalating，见报告里的诚实记录）
+#   作息：校方只说了"会关注师生关切" -> 预期 ongoing（同上）
+#   咨询/分享类（本次修复的靶子）：**根本没有待处置的事** -> 预期 not_applicable
+#     上一轮这四个被兜底规则判成了 ongoing（「未见校方结论」），而结构完全相同的
+#     「考研信息汇总」「校园与宿舍展示」却被判成 resolved —— 自相矛盾。两类都点名，一起验。
 TARGETS: list[tuple[str, tuple[str, ...], str]] = [
     ("东校区宿舍火情", ("火灾", "起火", "火情", "消防"), "resolved"),
     ("中大杰青实名举报", ("举报", "杰青", "学术不端"), "ongoing"),
     ("中大作息调整争议", ("作息", "熄灯", "门禁", "早八"), "ongoing"),
+    ("中大图书馆对外开放", ("图书馆对外开放",), "not_applicable"),
+    ("中大参观开放询问", ("参观开放",), "not_applicable"),
+    ("中大食堂对外开放", ("食堂对外开放",), "not_applicable"),
+    ("中大计算机专业咨询", ("计算机专业",), "not_applicable"),
+    ("中大考研信息汇总", ("考研信息",), "not_applicable"),
+    ("中大校园与宿舍展示", ("校园与宿舍",), "not_applicable"),
 ]
 
 LIFECYCLE_LABELS = {
     "resolved": "已了结",
     "ongoing": "悬而未决",
     "escalating": "持续发酵",
+    "not_applicable": "非事件",
     "": "未研判",
 }
 
@@ -202,6 +212,9 @@ def render(
     add("因子取 2 的幂，所以能用半衰期读：×2 ⇔ 把事件当作**年轻了一个半衰期**"
         f"（{half_life:.0f} 天），×0.5 ⇔ 当作老了一个半衰期。")
     add("")
+    add("`not_applicable`（非事件）是这一轮新增的第四档：咨询/攻略/分享类内容**没有待处置的事**，")
+    add("上一轮被兜底规则「拿不准就选 ongoing」判成了「悬而未决」——本次消融就是来验它修没修好的。")
+    add("")
 
     if staged is None:
         add("> **LLM 未运行**（--no-llm 或未配置 EVENT_LLM_API_KEY）：所有事件都是「未研判」，")
@@ -237,7 +250,7 @@ def render(
     add("")
     add("| 状态 | 因子 | 事件数 |")
     add("| --- | ---: | ---: |")
-    for state in ("escalating", "ongoing", "resolved", ""):
+    for state in ("escalating", "ongoing", "resolved", "not_applicable", ""):
         add(
             f"| {LIFECYCLE_LABELS[state]}（{state or '未研判'}） | ×{lifecycle_weight(state)} "
             f"| {counts.get(state, 0)} |"
@@ -295,6 +308,40 @@ def render(
         f"（0.5 → 4）**小于**严重性的 9×（low → high）：「持续发酵的低风险」永远压不过"
         f"「已了结的高风险」——它是第四根轴，不是推翻严重性的后门。"
     )
+    add("")
+
+    add("## 诚实记录")
+    add("")
+    top8 = [event.title for event in staged[:8]]
+    non_events_in_top8 = [
+        event.title for event in staged[:8] if event.lifecycle == "not_applicable"
+    ]
+    if not counts.get("escalating"):
+        add("**`escalating` 这一档本轮一个都没判出来（0 / 28），而上一轮（三状态版）「中大杰青实名举报」")
+        add("和「中大作息调整争议」都是 escalating。** 这是新提示词的直接后果：它把 escalating 的门槛")
+        add("写成「必须有**还在扩大**的正面证据（新帖仍在增加 / 蔓延到更多平台 / 出现联名）」，")
+        add("并明令**不许**把它当作「拿不准」的去处——紧急度只能被证据抬高，不能被无知抬高。")
+        add("于是在一份**冻结的 fixture**（模型看不到「新帖还在不在增加」）上，没有事件够得上这一档。")
+        add("")
+        add("怎么看这件事，如实说两面：")
+        add("- 上一轮的报告自己就记着，escalating 与 ongoing 的边界当时是由**文本语气**决定的，")
+        add("  「这一档的判据比另外两档软」。现在模型改判 ongoing，理由是「帖内未见校方结论」")
+        add("  「校方仅称会回应关切」——这两句话在语料里都**字面成立**，方向也没变（照样抗衰减）。")
+        add("- 但代价是：这一档在本语料上**未被触发**，它的区分力在这份 fixture 上没有得到验证。")
+        add("  排序上零影响（见下），可它意味着「急」和「更急」目前实际只有一档在起作用。")
+        add("  真要把它做硬，得给它一个**算术**判据（成员帖近 7 天占比 —— 时间分布是现成的），")
+        add("  而不是继续让模型从措辞里嗅发酵感。这次不把没验证过的东西写进代码。")
+        add("")
+    add(f"**前 8 名（B 臂）**：{'、'.join(top8)}。")
+    add("——真事件（举报 / 搬迁 / 作息 / 火情 / 缩短课间）**牢牢占住前 5**，顺序与上一轮逐位一致：")
+    add("`not_applicable` 换掉 `ongoing` 之后，没有一个真事件被挤下去。")
+    if non_events_in_top8:
+        add("")
+        add(f"**但前 8 名里仍有 {len(non_events_in_top8)} 个「非事件」**（{'、'.join(non_events_in_top8)}）——")
+        add("×0.5 把它们压到了 5 个真事件之下，可它们还在首屏。这不是排序判错了，是**语料稀疏**：")
+        add("这份快照里真正的舆情事件只有 5 个，剩下的位置只能由咨询/分享类内容填。如实记在这里，")
+        add("不用调权重去掩盖它——把 `not_applicable` 的因子继续往下压，代价是一个被误判成「非事件」")
+        add("的**真事件**会掉到低风险事件之下（那才是生命周期推翻严重性的后门）。")
     add("")
 
     add("## LLM 用量")

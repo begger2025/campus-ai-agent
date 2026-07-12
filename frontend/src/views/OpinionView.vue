@@ -418,7 +418,8 @@ function sentimentLabel(s) {
 .event-age { color: var(--color-text-muted); }
 .event-age--stale { color: var(--color-warning-text); font-weight: 600; }
 
-/* 事件状态（第四根轴）：已了结 = 灰（学校不必再动作）；悬而未决/持续发酵 = 醒目（口子还开着）。 */
+/* 事件状态（第四根轴）：已了结 / 非事件 = 灰（学校不必动作）；悬而未决/持续发酵 = 醒目（口子还开着）。
+   「非事件」比「已了结」还要淡一档：它连"曾经是一件事"都不是（咨询/攻略/分享）。 */
 .lifecycle-tag {
   display: inline-block;
   padding: 0 6px;
@@ -433,6 +434,7 @@ function sentimentLabel(s) {
 .lifecycle-tag--resolved { color: var(--color-text-muted); background: var(--color-fill-2, #f2f3f5); border: 1px solid #dcdfe6; }
 .lifecycle-tag--ongoing { color: var(--color-warning-text); background: var(--color-warning-bg); border: 1px solid #ecd9ae; }
 .lifecycle-tag--escalating { color: var(--color-danger-text); background: var(--color-danger-bg); border: 1px solid #f4c2c4; }
+.lifecycle-tag--not_applicable { color: var(--color-text-muted); background: transparent; border: 1px dashed #dcdfe6; font-weight: 500; }
 
 .detail-lifecycle {
   margin: 0 0 12px;

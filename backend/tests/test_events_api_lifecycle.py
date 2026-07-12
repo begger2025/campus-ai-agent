@@ -88,6 +88,30 @@ class EventsApiLifecycleTest(unittest.TestCase):
                     source_count=2,
                     date_range_json=date_range("2026-05-09T10:00:00"),
                 ),
+                # 咨询贴：**根本不是一件要学校处置的事**。同龄同险（与举报比只差状态），
+                # 改造前它会被判 ongoing 拿到 ×2 —— 现在是 not_applicable（×0.5）。
+                PublicEvent(
+                    title="中大图书馆对外开放咨询",
+                    status="published",
+                    risk_level="high",
+                    risk_score=90.0,
+                    heat_score=1.0,
+                    source_count=2,
+                    date_range_json=date_range(
+                        "2026-05-09T10:00:00", "not_applicable", "咨询开放政策，无待处置诉求"
+                    ),
+                ),
+                # 库里的脏值（人手改过 / 老版本 / 模型自创）：退回**未研判**（1.0），
+                # 不许被静悄悄当成 not_applicable 打折。
+                PublicEvent(
+                    title="脏状态的事件",
+                    status="published",
+                    risk_level="high",
+                    risk_score=90.0,
+                    heat_score=4000.0,
+                    source_count=2,
+                    date_range_json=date_range("2026-05-09T10:00:00", "dormant", "模型自创"),
+                ),
             ]
         )
         db.commit()
@@ -118,11 +142,50 @@ class EventsApiLifecycleTest(unittest.TestCase):
         self.assertEqual(ordered[-1].title, "东校区宿舍火情")
 
     def test_unassessed_legacy_row_sits_between_them(self) -> None:
-        """没有状态 = 因子 1.0（不打折也不加成）：同龄的 ongoing 压过它，它压过已了结的旧事件。"""
+        """没有状态 = 因子 1.0（不打折也不加成）：同龄的 ongoing 压过它，它压过已了结的旧事件。
+
+        四个同龄同险的行只差状态，顺序因此**只由生命周期因子决定**（同因子时按热度）：
+        ongoing ×2 > 未研判 ×1（热度 5000）> 脏值 ×1（热度 4000，退回未研判）> 咨询 ×0.5。
+        已了结的火情又老一个多月，垫底。
+        """
 
         ordered = [row.title for row in api_router.sort_event_rows(self.rows(), now=NOW)]
 
-        self.assertEqual(ordered, ["中大杰青实名举报", "无状态的旧事件", "东校区宿舍火情"])
+        self.assertEqual(
+            ordered,
+            [
+                "中大杰青实名举报",
+                "无状态的旧事件",
+                "脏状态的事件",
+                "中大图书馆对外开放咨询",
+                "东校区宿舍火情",
+            ],
+        )
+
+    def test_a_question_is_not_labelled_unresolved(self) -> None:
+        """缺陷现场：咨询贴曾挂着「悬而未决」的徽标。现在它如实说自己不是一件待处置的事。"""
+
+        items = {item["title"]: item for item in self.client.get("/api/events").json()["data"]["items"]}
+        asked = items["中大图书馆对外开放咨询"]
+
+        self.assertEqual(asked["lifecycle"], "not_applicable")
+        self.assertEqual(asked["lifecycle_reason"], "咨询开放政策，无待处置诉求")
+        # 同龄同险，只差状态：咨询 ×0.5 vs 悬而未决 ×2 —— 相差正好 4 倍。
+        self.assertAlmostEqual(
+            items["中大杰青实名举报"]["priority_score"], asked["priority_score"] * 4.0, places=6
+        )
+
+    def test_dirty_lifecycle_in_the_database_falls_back_to_unassessed(self) -> None:
+        """脏值退回未研判（因子 1.0），**不是**静悄悄变成 not_applicable（那会凭空打 5 折）。"""
+
+        items = {item["title"]: item for item in self.client.get("/api/events").json()["data"]["items"]}
+
+        self.assertEqual(items["脏状态的事件"]["lifecycle"], "")
+        self.assertAlmostEqual(
+            items["脏状态的事件"]["priority_score"],
+            items["无状态的旧事件"]["priority_score"],
+            places=6,
+        )
 
     def test_payload_exposes_lifecycle_and_reason(self) -> None:
         items = {item["title"]: item for item in self.client.get("/api/events").json()["data"]["items"]}

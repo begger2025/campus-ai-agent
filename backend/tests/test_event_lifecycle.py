@@ -67,6 +67,12 @@ REPORT_NOTES = [
     note("xhs:2", "举报两个月了，中大还没有给出调查结论", publish_time="2026-05-10 10:00:00"),
 ]
 
+# 咨询：**这根本不是一件要学校处置的事**（问问题，不是提诉求）——既不是悬而未决，也不是已了结。
+QUESTION_NOTES = [
+    note("xhs:9", "请问中大图书馆对校外人员开放吗？需要预约吗", publish_time="2026-05-09 10:00:00"),
+    note("xhs:10", "中大南校区可以随便参观吗，食堂能不能刷现金", publish_time="2026-05-10 10:00:00"),
+]
+
 
 def fire_event():
     event = build_event_from_group("sem:fire", "东校区宿舍火情", "semantic", list(FIRE_NOTES))
@@ -80,6 +86,14 @@ def report_event():
     return event
 
 
+def question_event():
+    event = build_event_from_group(
+        "sem:ask", "中大图书馆对外开放咨询", "semantic", list(QUESTION_NOTES)
+    )
+    event.risk_level, event.risk_score = "low", 10.0
+    return event
+
+
 def verdict(**overrides) -> dict:
     payload = {"lifecycle": "ongoing", "lifecycle_reason": "校方未给出调查结论，诉求仍未回应"}
     payload.update(overrides)
@@ -89,8 +103,23 @@ def verdict(**overrides) -> dict:
 class LifecycleWeightTest(unittest.TestCase):
     """因子的形状与量级：纯算术，可用半衰期解释。"""
 
-    def test_states_are_exactly_three(self) -> None:
-        self.assertEqual(set(VALID_LIFECYCLES), {"resolved", "ongoing", "escalating"})
+    def test_states_are_exactly_four(self) -> None:
+        """第四个状态 `not_applicable`：**这压根不是一件要学校处置的事**（咨询/攻略/分享）。
+
+        原本只有三档，而三档全都预设了"存在一件待处置的事"——于是「图书馆对校外开放吗」这种
+        **提问**只能被塞进 ongoing（"未见校方结论"），看板上挂出「悬而未决」。那是句假话。
+        """
+
+        self.assertEqual(
+            set(VALID_LIFECYCLES), {"resolved", "ongoing", "escalating", "not_applicable"}
+        )
+
+    def test_not_applicable_does_not_compete_with_incidents(self) -> None:
+        """无诉求的内容不该抗衰减：它不急（≠ ongoing 的 ×2），但也不是"处置完了"的事。"""
+
+        self.assertEqual(lifecycle_weight("not_applicable"), 0.5)
+        self.assertLess(lifecycle_weight("not_applicable"), lifecycle_weight("ongoing"))
+        self.assertLess(lifecycle_weight("not_applicable"), 1.0)
 
     def test_unassessed_event_is_identity(self) -> None:
         """未研判（LLM 关掉/失败）= 1.0：排序逐位退化回改造前，这是降级保证的基石。"""
@@ -129,6 +158,20 @@ class LifecycleWeightTest(unittest.TestCase):
             priority_score("low", 1.0, "escalating"), priority_score("high", 1.0, "resolved")
         )
 
+    def test_no_state_lets_lifecycle_overturn_severity(self) -> None:
+        """把上一条推广到**全部四档**：整根轴的动态范围必须 < 严重性的 9×（low→high）。
+
+        这条不变量正是 `not_applicable` 的权重下界（>= 4/9）：一个被误判成「非事件」的**真事件**
+        绝不能因此掉到一个低风险事件之下。2 的幂里唯一同时满足「< 1（不急）」和「>= 4/9
+        （不许翻盘严重性）」的值就是 **0.5**。
+        """
+
+        for state in VALID_LIFECYCLES:
+            with self.subTest(state=state):
+                self.assertLess(
+                    priority_score("low", 1.0, "escalating"), priority_score("high", 1.0, state)
+                )
+
     def test_priority_multiplies_the_three_axes(self) -> None:
         self.assertAlmostEqual(
             priority_score("high", 0.125, "ongoing"),
@@ -162,6 +205,24 @@ class AssessorAppliedTest(unittest.TestCase):
         self.assertEqual(event.lifecycle, "ongoing")
         self.assertEqual(event.lifecycle_reason, "校方未给出调查结论，诉求仍未回应")
         self.assertEqual(event.extra["lifecycle_assessed_by"], "llm")
+
+    def test_not_applicable_is_a_legitimate_verdict(self) -> None:
+        """「这不是一件需要处置的事」是一个**合法的判断**，不是降级。"""
+
+        event = question_event()
+
+        assessed = assess_events_lifecycle(
+            [event],
+            lambda title, texts: verdict(
+                lifecycle="not_applicable", lifecycle_reason="咨询开放政策，无待处置诉求"
+            ),
+        )
+
+        self.assertEqual(assessed, 1)
+        self.assertEqual(event.lifecycle, "not_applicable")
+        self.assertEqual(event.lifecycle_reason, "咨询开放政策，无待处置诉求")
+        self.assertEqual(event.extra["lifecycle_assessed_by"], "llm")
+        self.assertEqual(lifecycle_weight(event.lifecycle), 0.5)
 
     def test_assessor_receives_title_and_member_texts(self) -> None:
         seen: list[tuple[str, list[str]]] = []
@@ -312,6 +373,22 @@ class SortingTest(unittest.TestCase):
 
         self.assertEqual(ordered[0].event_key, "sem:report")
 
+    def test_a_question_no_longer_rides_the_unresolved_boost(self) -> None:
+        """缺陷现场：同龄的「图书馆对外开放咨询」曾被判 ongoing（×2），冒充"悬而未决"。
+
+        判成 not_applicable 之后它拿到 ×0.5：一个咨询贴不再压过**同龄同险**的未研判事件，
+        更不该压过真事件。
+        """
+
+        asked, unassessed = question_event(), question_event()
+        asked.event_key, unassessed.event_key = "asked", "unassessed"
+        asked.lifecycle, asked.lifecycle_reason = "not_applicable", "咨询开放政策，无待处置诉求"
+
+        ordered = sort_events(self.annotate([asked, unassessed]))
+
+        self.assertEqual([event.event_key for event in ordered], ["unassessed", "asked"])
+        self.assertLess(asked.priority_score, unassessed.priority_score)
+
     def test_unassessed_events_sort_exactly_as_before(self) -> None:
         """全部未研判（LLM 关掉）：顺序与改造前逐位相同。"""
 
@@ -377,11 +454,24 @@ class PayloadTest(unittest.TestCase):
         self.assertEqual(lifecycle_from_payload('{"event_time":"2026-03-29T10:00:00"}'), ("", ""))
         self.assertEqual(lifecycle_from_payload("not json"), ("", ""))
 
+    def test_not_applicable_survives_the_round_trip(self) -> None:
+        event = question_event()
+        event.lifecycle, event.lifecycle_reason = "not_applicable", "咨询开放政策，无待处置诉求"
+
+        lifecycle, reason = lifecycle_from_payload(self.payload_of(event)["date_range_json"])
+
+        self.assertEqual(lifecycle, "not_applicable")
+        self.assertEqual(reason, "咨询开放政策，无待处置诉求")
+
     def test_invented_state_in_the_database_is_ignored(self) -> None:
-        """库里的脏值也不许变成一个因子：只认三个枚举值。"""
+        """库里的脏值也不许变成一个因子：只认枚举里的四个值。
+
+        脏值退回**未研判**（1.0），**不是** not_applicable —— 不知道是不是事件 ≠ 它不是事件。
+        """
 
         lifecycle, _reason = lifecycle_from_payload('{"lifecycle":"dormant","lifecycle_reason":"x"}')
         self.assertEqual(lifecycle, "")
+        self.assertEqual(lifecycle_weight(lifecycle), 1.0)
 
 
 ROWS = [
@@ -532,6 +622,26 @@ class DeploymentAssessorTest(unittest.TestCase):
         self.assertIn("<data>", prompt)  # 采集内容当数据、不当指令
         self.assertIn("中大杰青实名举报", prompt)
         self.assertIn("举报两个月了还没结论", prompt)
+
+    def test_prompt_routes_non_incidents_to_not_applicable_not_to_an_ongoing_fallback(self) -> None:
+        """缺陷的根：提示词里的兜底是「拿不准就 ongoing」，于是**提问贴**成了「悬而未决」。
+
+        新的兜底不许再系统性地抬高紧急度：
+        - 提示词必须给"没有待处置事项"的内容一个明确的归属（`not_applicable`，点名咨询/攻略/分享）；
+        - 「看不出结论时一律判 ongoing」这条无差别兜底必须消失（它正是把提问贴塞进 ongoing 的那条规则）；
+        - 「已处置完毕」（resolved）和「本来就不需要处置」（not_applicable）必须被讲成两件事。
+        """
+
+        payload = {"lifecycle": "not_applicable", "lifecycle_reason": "咨询开放政策，无待处置诉求"}
+        with mock.patch.object(event_lifecycle, "call_llm", return_value=self.reply(payload)) as call:
+            event_lifecycle.assess_event_lifecycle("中大图书馆对外开放咨询", ["图书馆对校外开放吗"])
+
+        prompt = "\n".join(message["content"] for message in call.call_args.args[0])
+        self.assertIn("not_applicable", prompt)
+        self.assertIn("咨询", prompt)
+        self.assertIn("分享", prompt)
+        self.assertIn("不需要处置", prompt)  # ≠ 已处置完毕
+        self.assertNotIn("看不出结论时，判 ongoing", prompt)  # 那条无差别兜底
 
     def test_llm_error_returns_none(self) -> None:
         with mock.patch.object(event_lifecycle, "call_llm", return_value=LlmCallResult(error="Timeout")):

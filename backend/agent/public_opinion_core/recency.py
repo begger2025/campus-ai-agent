@@ -96,9 +96,23 @@ UNKNOWN_SEVERITY_WEIGHT = 1.0
 # （它确实能翻转相邻档：一个持续发酵的 medium 可以压过一个已了结的 high——这是**要的**行为：
 #  火已经灭了、通报也发了，学校不需要再对它做动作；那个还在发酵的争议需要。）
 #
-# 未研判（"" / None / LLM 挂了 / 库里是脏值）-> 1.0：**恒等**。不知道结没结 ≠ 已经结了，
-# 不许凭空把一个事件打折沉底（同 recency_weight 对未知年龄、platform_weights 对未知平台的口径）。
-LIFECYCLE_WEIGHTS: dict[str, float] = {"escalating": 4.0, "ongoing": 2.0, "resolved": 0.5}
+# **not_applicable（非事件）为什么也是 0.5**：前三档都预设了"存在一件待处置的事"，可语料里
+# 大量内容压根不是事件——「图书馆对校外开放吗」是**提问**，不是诉求。把它塞进 ongoing 是撒谎
+# （看板会给它挂「悬而未决」），塞进 resolved 也是撒谎（「已处置完毕」≠「本来就不需要处置」）。
+# 权重的取值被两个约束夹死，答案唯一：
+#   1. < 1.0：它不急，不该抗衰减，更不该和真事件抢版面（原缺陷里它拿的是 ×2）；
+#   2. >= 4/9：**误判的代价必须有界**。not_applicable 最危险的错法是把一个**真事件**说成
+#      "这不是事件"——若因子低于 4/9，一个被误判的 high 就会掉到 low 的 escalating 之下，
+#      生命周期就成了推翻严重性的后门（正是上面刻意压住的那件事）。
+# 2 的幂里同时满足两条的只有 **0.5**。它和 resolved 同值不是巧合也不是懒：**对排序而言这两句话
+# 是同一句**（"学校没有待办动作，不必抗衰减"），区别在**理由**——而理由正是徽标和 reason 显示的
+# 东西。排序上不多说一个字，展示上不少说一句真话。
+LIFECYCLE_WEIGHTS: dict[str, float] = {
+    "escalating": 4.0,
+    "ongoing": 2.0,
+    "resolved": 0.5,
+    "not_applicable": 0.5,
+}
 UNKNOWN_LIFECYCLE_WEIGHT = 1.0
 VALID_LIFECYCLES = tuple(LIFECYCLE_WEIGHTS)
 
@@ -234,7 +248,7 @@ def severity_weight(risk_level: str) -> float:
 
 
 def lifecycle_weight(lifecycle: str | None) -> float:
-    """生命周期的排序权重（resolved/ongoing/escalating -> 0.5/2/4；未研判 -> 1.0）。
+    """生命周期的排序权重（escalating/ongoing/resolved/not_applicable -> 4/2/0.5/0.5；未研判 -> 1.0）。
 
     **只用于排序**：不改写 risk_*（严重性）、heat_*（流行度）、recency_weight（时效性）。
     模型自创的状态（"dormant"/"持续发酵"）落到 1.0 —— 编出来的状态不许变成一个因子。

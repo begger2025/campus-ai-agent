@@ -22,12 +22,18 @@
     priority = severity_weight(risk_level) × recency_weight × lifecycle_weight(lifecycle)
 
 因子（2 的幂，所以能用半衰期读）：escalating 4（≈ 年轻两个半衰期 = 42 天）、ongoing 2
-（≈ 年轻 21 天）、resolved 0.5（≈ 老了 21 天）、未研判 1.0（**恒等**）。
+（≈ 年轻 21 天）、resolved 0.5（≈ 老了 21 天）、not_applicable 0.5、未研判 1.0（**恒等**）。
 
-**三档，为什么是这三档**：`resolved` 是终态（学校无需再动作）；`ongoing` 是"没有结论"；
+**四档，为什么是这四档**：`resolved` 是终态（学校无需再动作）；`ongoing` 是"没有结论"；
 `escalating` 是"没有结论 + 还在扩大"——后两者都该抗衰减，但程度不同：一个还在涨的舆情比一个
-冷下来但没结论的事更急，把它们压成一档就等于承认"我们分不出急和不急"。四档以上（如
-`monitoring`）在这份语料上没有可靠的证据支撑，模型只会瞎猜。
+冷下来但没结论的事更急，把它们压成一档就等于承认"我们分不出急和不急"。
+
+`not_applicable`（非事件）是**实测逼出来的第四档**：前三档全都预设了"存在一件待处置的事"，
+可语料里「中大图书馆对外开放咨询」「中大参观开放询问」这类帖子是在**提问**，不是在提诉求——
+它们没有"待处置的事"，"结没结"这个问题对它们无意义。旧提示词的兜底（「拿不准就选 ongoing」）
+把它们全塞进了「悬而未决」，看板于是对着一个提问贴挂出「悬而未决」徽标：一句假话。改判
+`resolved` 同样是假话（「已处置完毕」≠「本来就不需要处置」）。所以它必须是一个**独立的状态**。
+（再多的档——如 `monitoring`——在这份语料上没有可靠证据支撑，模型只会瞎猜。）
 
 **模型会失败，失败不许拖垮流水线**：assessor 抛异常 / 返回 None / 编一个不在枚举里的状态
 （"dormant"）/ 给不出理由 —— 一律**逐事件**作废，该事件退回"未研判"（因子 1.0 = 改造前的
@@ -47,7 +53,7 @@ from .schemas import OpinionEvent, OpinionNote
 
 # (事件标题, 成员帖文本) -> 状态研判；由运行环境注入（见 backend/services/event_lifecycle.py），
 # 核心不认识 HTTP、模型名和 API key（同 RiskAssessor / Embedder / ClusterRefiner）。
-#   {"lifecycle": "resolved"|"ongoing"|"escalating", "lifecycle_reason": "一句人话"}
+#   {"lifecycle": "resolved"|"ongoing"|"escalating"|"not_applicable", "lifecycle_reason": "一句人话"}
 # 返回 None / 抛异常 = 本次研判不可用，调用方保留"未研判"（因子 1.0）。
 LifecycleAssessor = Callable[[str, list[str]], "Mapping[str, Any] | None"]
 
