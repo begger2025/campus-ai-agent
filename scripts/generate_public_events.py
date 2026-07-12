@@ -21,10 +21,17 @@ from backend.database import SessionLocal, init_db  # noqa: E402
 from backend.services.public_opinion_adapter import run_public_opinion_analysis  # noqa: E402
 
 
+# 0 = 不设上限，跑全部 processed_posts。
+# 以前默认 200：库里 297 条时，最旧的 97 条被 SQL 的 `ORDER BY id DESC LIMIT 200` 无声丢掉，
+# 生成出来的"全量事件"其实只看了最新的一段。默认跑全量，需要限流时再显式传 --limit
+# （届时会打印截断告警，说明丢了多少条）。
+DEFAULT_LIMIT = 0
+
+
 def generate_public_events(
     *,
     keyword: str = "",
-    limit: int = 200,
+    limit: int = DEFAULT_LIMIT,
     persist: bool = True,
     created_by: str = "smoke",
     allow_fallback: bool = True,
@@ -64,7 +71,12 @@ def generate_public_events(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate public_events from processed_posts")
     parser.add_argument("--keyword", default="")
-    parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        help="最多分析多少条 processed_posts；0（默认）= 全量。被截断时会打印告警并列出丢弃条数。",
+    )
     parser.add_argument("--created-by", default="smoke")
     parser.add_argument("--preview", action="store_true", help="Build payloads without database writes")
     parser.add_argument("--no-fallback", action="store_true", help="Do not retry without keyword")
@@ -77,10 +89,20 @@ def main() -> int:
         created_by=args.created_by,
         allow_fallback=not args.no_fallback,
     )
+    truncation = result.get("input_truncated")
+    if truncation:
+        print(
+            "[WARN] 输入被截断！匹配 "
+            f"{truncation['matched']} 条，仅分析 {truncation['analyzed']} 条，"
+            f"丢弃最旧 {truncation['dropped']} 条。本次不是全量分析（陈旧草稿也不会归档）。"
+        )
+
     print(
         "[OK] public opinion analysis "
         f"input_count={result.get('input_count')} "
         f"event_count={result.get('event_count')} "
+        f"min_cluster_size={result.get('min_cluster_size')} "
+        f"suppressed_clusters={result.get('suppressed_clusters')} "
         f"run_log_id={result.get('run_log_id')}"
     )
     warnings = result.get("warnings") or []

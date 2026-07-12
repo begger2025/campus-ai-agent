@@ -29,6 +29,10 @@ from .schemas import MemorySnapshot, OpinionEvent, OpinionNote
 DEFAULT_CLUSTER_THRESHOLD = 0.65
 DEFAULT_ALIGN_THRESHOLD = 0.75
 
+# 1 = 不压制（保持库的历史行为）。部署侧按"事件"的定义抬高（主项目 .env
+# EVENT_MIN_CLUSTER_SIZE=2）：一条帖子自己不构成"公共事件"，它只是一条帖子。
+DEFAULT_MIN_CLUSTER_SIZE = 1
+
 SEMANTIC_CATEGORY = "semantic"
 
 # 社交平台噪声：小红书话题标签、@提及、零宽/BOM 不可见字符。
@@ -49,6 +53,8 @@ class SemanticClusterResult:
     events: list[OpinionEvent] = field(default_factory=list)
     # event_key -> 簇中心向量；由调用方写入快照，供下一次运行对齐。
     centroids: dict[str, list[float]] = field(default_factory=dict)
+    # 因为成员数 < min_cluster_size 而没有产出事件的簇数（调用方用它报警）。
+    suppressed_clusters: int = 0
 
 
 def cluster_notes_semantic(
@@ -58,6 +64,7 @@ def cluster_notes_semantic(
     cluster_threshold: float = DEFAULT_CLUSTER_THRESHOLD,
     previous: MemorySnapshot | None = None,
     align_threshold: float = DEFAULT_ALIGN_THRESHOLD,
+    min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
 ) -> SemanticClusterResult:
     if len(notes) != len(vectors):
         raise ValueError(f"notes/vectors length mismatch: {len(notes)} != {len(vectors)}")
@@ -65,17 +72,26 @@ def cluster_notes_semantic(
         return SemanticClusterResult()
 
     clusters = _greedy_cluster(notes, vectors, cluster_threshold)
-    inherited = _align_with_previous(clusters, previous, align_threshold)
+    # 压制发生在"建事件"之前：不够大的簇不进对齐、不产出事件、也不留簇中心——
+    # 否则它会被写进快照，下一轮再被对齐成"老事件"复活。
+    minimum = max(int(min_cluster_size), 1)
+    kept = [cluster for cluster in clusters if len(cluster["notes"]) >= minimum]
+    suppressed = len(clusters) - len(kept)
+    inherited = _align_with_previous(kept, previous, align_threshold)
 
     events: list[OpinionEvent] = []
     centroids: dict[str, list[float]] = {}
-    for index, cluster in enumerate(clusters):
+    for index, cluster in enumerate(kept):
         group_notes = cluster["notes"]
         event_key, title = inherited.get(index) or _new_key_and_title(group_notes)
         events.append(build_event_from_group(event_key, title, SEMANTIC_CATEGORY, group_notes))
         centroids[event_key] = cluster["centroid"]
 
-    return SemanticClusterResult(events=sort_events(events), centroids=centroids)
+    return SemanticClusterResult(
+        events=sort_events(events),
+        centroids=centroids,
+        suppressed_clusters=suppressed,
+    )
 
 
 def assign_clusters(

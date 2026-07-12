@@ -171,13 +171,21 @@ def sort_events(events: list[OpinionEvent]) -> list[OpinionEvent]:
     )
 
 
-def cluster_notes(notes: list[OpinionNote]) -> list[OpinionEvent]:
+def cluster_notes(notes: list[OpinionNote], *, min_cluster_size: int = 1) -> list[OpinionEvent]:
+    """规则聚类；成员数 < min_cluster_size 的分组不产出事件。
+
+    规则路径同样会造出单帖事件（`keyword:xxx` 兜底桶里常常只有一条帖子），
+    压制口径必须和语义路径一致，否则退回规则聚类时单帖事件又冒出来。
+    """
+
     groups: dict[tuple[str, str], list[OpinionNote]] = defaultdict(list)
     for note in notes:
         groups[classify_event(note)].append(note)
 
+    minimum = max(int(min_cluster_size), 1)
     events = [
         build_event_from_group(category, title, category, group_notes)
         for (category, title), group_notes in groups.items()
+        if len(group_notes) >= minimum
     ]
     return sort_events(events)

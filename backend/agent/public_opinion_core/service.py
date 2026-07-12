@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from .adapter import processed_posts_to_notes
-from .clustering import cluster_notes
+from .clustering import classify_event, cluster_notes
 from .memory import annotate_events_with_memory, build_snapshot
 from .normalizer import analysis_text, clean_text, note_text
 from .schemas import AgentRunLogPayload, AnalyzeRequest, AnalyzeResult, MemorySnapshot, OpinionNote
@@ -40,6 +40,7 @@ class PublicOpinionAgentService:
         cluster_threshold: float | None = None,
         align_threshold: float | None = None,
         sentiment_classifier: SentimentClassifier | None = None,
+        min_cluster_size: int | None = None,
     ) -> AnalyzeResult:
         request = request or AnalyzeRequest()
         started_perf = time.perf_counter()
@@ -60,11 +61,15 @@ class PublicOpinionAgentService:
         elif matched_count == 0:
             warnings.append("no notes matched request filters")
 
+        # 单帖不成事件：min_cluster_size 以下的簇直接不产出事件（见 clustering/semantic_clustering）。
+        minimum = max(int(min_cluster_size), 1) if min_cluster_size is not None else 1
+
         events = []
         centroids: dict[str, list[float]] = {}
         clustering_mode = "rules"
         sentiment_mode = "rules"
         sentiment_overridden = 0
+        suppressed_clusters = 0
         if notes:
             notes = score_notes(notes)
             notes = analyze_notes_sentiment_and_risk(notes)
@@ -72,13 +77,30 @@ class PublicOpinionAgentService:
             if llm_sentiment is not None:
                 sentiment_mode, sentiment_overridden = "llm", llm_sentiment
             semantic = self._try_semantic_clustering(
-                notes, embedder, previous_snapshot, cluster_threshold, align_threshold, warnings
+                notes,
+                embedder,
+                previous_snapshot,
+                cluster_threshold,
+                align_threshold,
+                minimum,
+                warnings,
             )
             if semantic is not None:
-                events, centroids = semantic
+                events, centroids, suppressed_clusters = semantic
                 clustering_mode = "semantic"
             else:
-                events = cluster_notes(notes)
+                events = cluster_notes(notes, min_cluster_size=minimum)
+                suppressed_clusters = sum(
+                    1
+                    for _key, size in Counter(classify_event(note) for note in notes).items()
+                    if size < minimum
+                )
+        if suppressed_clusters:
+            suppressed_notes = len(notes) - sum(event.source_count for event in events)
+            warnings.append(
+                f"suppressed {suppressed_clusters} clusters ({suppressed_notes} notes) "
+                f"smaller than min_cluster_size={minimum}: they are not public events"
+            )
         events = annotate_events_with_memory(events, previous_snapshot)
 
         finished_at = _utc_now_text()
@@ -105,6 +127,8 @@ class PublicOpinionAgentService:
                 "clustering_mode": clustering_mode,
                 "sentiment_mode": sentiment_mode,
                 "sentiment_overridden": sentiment_overridden,
+                "min_cluster_size": minimum,
+                "suppressed_clusters": suppressed_clusters,
             },
         )
 
@@ -154,8 +178,9 @@ class PublicOpinionAgentService:
         previous_snapshot: MemorySnapshot | None,
         cluster_threshold: float | None,
         align_threshold: float | None,
+        min_cluster_size: int,
         warnings: list[str],
-    ) -> tuple[list, dict[str, list[float]]] | None:
+    ) -> tuple[list, dict[str, list[float]], int] | None:
         """Run semantic clustering if an embedder is supplied; None means fall back to rules."""
 
         if embedder is None:
@@ -164,7 +189,10 @@ class PublicOpinionAgentService:
             vectors = embedder([strip_social_noise(note_text(note)) for note in notes])
             if vectors is None or len(vectors) != len(notes):
                 raise ValueError("embedder returned wrong vector count")
-            kwargs: dict[str, Any] = {"previous": previous_snapshot}
+            kwargs: dict[str, Any] = {
+                "previous": previous_snapshot,
+                "min_cluster_size": min_cluster_size,
+            }
             if cluster_threshold is not None:
                 kwargs["cluster_threshold"] = cluster_threshold
             if align_threshold is not None:
@@ -173,7 +201,7 @@ class PublicOpinionAgentService:
         except Exception as exc:
             warnings.append(f"semantic clustering unavailable, fell back to rules: {type(exc).__name__}: {exc}")
             return None
-        return result.events, result.centroids
+        return result.events, result.centroids, result.suppressed_clusters
 
     def _filter_notes(self, notes: list[OpinionNote], request: AnalyzeRequest) -> list[OpinionNote]:
         keyword = clean_text(request.keyword)

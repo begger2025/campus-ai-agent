@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,10 +25,16 @@ from backend.database import DATA_DIR
 from backend.models import EventPostLink, ProcessedPost, PublicEvent
 from backend.services.comment_loader import fetch_top_comments
 from backend.services.embedding import get_embedder
-from backend.services.llm_config import EMBEDDING_ALIGN_THRESHOLD, EMBEDDING_CLUSTER_THRESHOLD
+from backend.services.llm_config import (
+    EMBEDDING_ALIGN_THRESHOLD,
+    EMBEDDING_CLUSTER_THRESHOLD,
+    EVENT_MIN_CLUSTER_SIZE,
+)
 from backend.services.log_service import write_event_review_log
 from backend.services.sentiment_llm import get_sentiment_classifier
 
+
+logger = logging.getLogger(__name__)
 
 REVIEW_LOCKED_STATUSES = {"published", "rejected", "archived"}
 
@@ -111,14 +118,13 @@ def processed_post_to_agent_row(post: ProcessedPost) -> dict[str, Any]:
     }
 
 
-def query_agent_rows(
+def _filtered_post_query(
     db: Session,
     *,
     keyword: str = "",
     platforms: list[str] | None = None,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    """Load processed_posts rows as dictionaries accepted by the Agent core."""
+):
+    """processed_posts 的过滤查询（不含排序/limit），供取数和计数共用。"""
 
     query = db.query(ProcessedPost)
     keyword = (keyword or "").strip()
@@ -137,8 +143,38 @@ def query_agent_rows(
     clean_platforms = [platform.strip() for platform in platforms or [] if platform.strip()]
     if clean_platforms:
         query = query.filter(ProcessedPost.platform.in_(clean_platforms))
+    return query
 
-    rows = query.order_by(ProcessedPost.id.desc()).limit(max(limit, 1)).all()
+
+def count_agent_rows(
+    db: Session,
+    *,
+    keyword: str = "",
+    platforms: list[str] | None = None,
+) -> int:
+    """本次过滤条件下**总共**有多少条 processed_posts（用来发现 limit 截断）。"""
+
+    return _filtered_post_query(db, keyword=keyword, platforms=platforms).count()
+
+
+def query_agent_rows(
+    db: Session,
+    *,
+    keyword: str = "",
+    platforms: list[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Load processed_posts rows as dictionaries accepted by the Agent core.
+
+    ``limit <= 0`` 表示不设上限（全量）。历史实现把 limit 钳到 ``max(limit, 1)``，
+    于是"全量"根本没法表达，而默认值又只取最新的一段——旧帖被无声丢掉。
+    """
+
+    query = _filtered_post_query(db, keyword=keyword, platforms=platforms)
+    query = query.order_by(ProcessedPost.id.desc())
+    if limit and limit > 0:
+        query = query.limit(limit)
+    rows = query.all()
     agent_rows = [processed_post_to_agent_row(row) for row in rows]
 
     # 附高赞评论摘录（评论区风向进情绪/风险分析与简报语料）；表缺失时为空。
@@ -375,10 +411,28 @@ def run_public_opinion_analysis(
 ) -> dict[str, Any]:
     """Run the public opinion Agent and optionally persist its payloads."""
 
+    matched_total = count_agent_rows(db, keyword=keyword, platforms=platforms)
     rows = query_agent_rows(db, keyword=keyword, platforms=platforms, limit=limit)
+
+    # 截断必须被数出来：limit 只取最新的一段，丢掉的是最旧的帖子。以前这里一声不吭，
+    # "全量分析"其实只看了一部分数据（297 条 / 默认 limit=200 → 97 条老帖静默消失）。
+    dropped = max(matched_total - len(rows), 0)
+    truncation: dict[str, int] | None = None
+    truncation_warnings: list[str] = []
+    if dropped > 0:
+        truncation = {"matched": matched_total, "analyzed": len(rows), "dropped": dropped}
+        truncation_warnings.append(
+            f"输入被 limit={limit} 截断：匹配 {matched_total} 条 processed_posts，"
+            f"仅分析最新 {len(rows)} 条，丢弃最旧 {dropped} 条。"
+            f"想跑全量请传 limit=0（脚本默认即全量）。"
+        )
+        logger.warning(truncation_warnings[-1])
+
     request = AnalyzeRequest(
         keyword=keyword or "",
-        limit=max(limit, 1),
+        # AnalyzeRequest.limit 会把 <1 钳成 1，这里 limit<=0（全量）时用实际取到的行数，
+        # 免得核心把 notes 截成 1 条。
+        limit=limit if limit and limit > 0 else max(len(rows), 1),
         platforms=platforms or [],
         start_time=start_time or "",
         end_time=end_time or "",
@@ -394,7 +448,10 @@ def run_public_opinion_analysis(
         # 阈值随数据分布标定：真实小红书帖带话题标签/表情，基线相似度偏高，见 .env。
         cluster_threshold=EMBEDDING_CLUSTER_THRESHOLD,
         align_threshold=EMBEDDING_ALIGN_THRESHOLD,
+        # 单帖不成事件（默认 2）：一条帖子自成一簇时不产出 public_event。
+        min_cluster_size=EVENT_MIN_CLUSTER_SIZE,
     )
+    result.warnings = truncation_warnings + list(result.warnings)
     if persist and result.snapshot is not None:
         memory_store.save(result.snapshot)
 
@@ -413,7 +470,7 @@ def run_public_opinion_analysis(
         replace_event_post_links(db, link_payloads, event_id_by_temp_id)
         write_back_note_analysis(db, result.notes)
         # 全量运行（无过滤且未被 limit 截断=看全了帖子）才有资格判定草稿失活
-        run_is_full = not (keyword or "").strip() and not (platforms or []) and len(rows) < max(limit, 1)
+        run_is_full = not (keyword or "").strip() and not (platforms or []) and dropped == 0
         if run_is_full:
             archive_stale_draft_events(db, {str(p.get("event_key") or "") for p in event_payloads})
         run_log = insert_agent_run_log(db, run_log_payload)
@@ -449,6 +506,11 @@ def run_public_opinion_analysis(
         "input_count": result.run_log.input_count,
         "event_count": len(result.events),
         "warnings": result.warnings,
+        # None = 本次看全了；否则 {matched, analyzed, dropped}，调用方必须把它显示出来。
+        "input_truncated": truncation,
+        # 被压制的单帖簇（min_cluster_size 以下），不是事件但也不是"丢了"。
+        "min_cluster_size": extra.get("min_cluster_size", 1),
+        "suppressed_clusters": extra.get("suppressed_clusters", 0),
         "events": events,
         # 前端图表数据（week3 可视化数据层：日趋势/词云/情绪/风险/平台分布/事件趋势）
         "visualization": result.visualization,
