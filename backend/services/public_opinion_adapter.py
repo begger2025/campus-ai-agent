@@ -25,11 +25,13 @@ from backend.database import DATA_DIR
 from backend.models import EventPostLink, ProcessedPost, PublicEvent
 from backend.services.comment_loader import fetch_top_comments
 from backend.services.embedding import get_embedder
+from backend.services.event_refiner import get_cluster_refiner
 from backend.services.llm_config import (
     EMBEDDING_ALIGN_THRESHOLD,
     EMBEDDING_CLUSTER_THRESHOLD,
     EMBEDDING_MERGE_THRESHOLD,
     EVENT_MIN_CLUSTER_SIZE,
+    EVENT_REFINE_MIN_SIZE,
 )
 from backend.services.log_service import write_event_review_log
 from backend.services.sentiment_llm import get_sentiment_classifier
@@ -395,6 +397,8 @@ def _merge_output_summary(raw_summary: Any, result: Any) -> str:
     summary["sentiment_mode"] = extra.get("sentiment_mode", "rules")
     summary["clustering_mode"] = extra.get("clustering_mode", "rules")
     summary["sentiment_overridden"] = extra.get("sentiment_overridden", 0)
+    # 本次有几个簇被 LLM 精修成功。0 且 clustering_mode=semantic ⇒ 精修降级了（warnings 里有原因）。
+    summary["refined_clusters"] = extra.get("refined_clusters", 0)
     return json.dumps(summary, ensure_ascii=False)
 
 
@@ -453,6 +457,11 @@ def run_public_opinion_analysis(
         align_threshold=EMBEDDING_ALIGN_THRESHOLD,
         # 单帖不成事件（默认 2）：一条帖子自成一簇时不产出 public_event。
         min_cluster_size=EVENT_MIN_CLUSTER_SIZE,
+        # LLM 精修：embedding 只知道"像不像"，不知道"是不是一件事"——它把 91 条帖子压成一个
+        # 桶并按词频命名成「饭堂相关讨论」（里面没有一条食堂帖），真实的「作息调整」争议被埋在里面。
+        # 未配 key / 关闭 / 调用失败时返回 None 或自动降级，事件照出，只是回到纯 embedding 结果。
+        cluster_refiner=get_cluster_refiner() if use_llm else None,
+        refine_min_size=EVENT_REFINE_MIN_SIZE,
     )
     result.warnings = truncation_warnings + list(result.warnings)
     if persist and result.snapshot is not None:
@@ -522,6 +531,8 @@ def run_public_opinion_analysis(
             "sentiment": extra.get("sentiment_mode", "rules"),
             "clustering": extra.get("clustering_mode", "rules"),
             "sentiment_overridden": extra.get("sentiment_overridden", 0),
+            # 被 LLM 拆分/改名的簇数；clustering=semantic 且它为 0 ⇒ 精修没上（见 warnings）。
+            "refined_clusters": extra.get("refined_clusters", 0),
         },
         "payload_counts": {
             "public_events": len(event_payloads),

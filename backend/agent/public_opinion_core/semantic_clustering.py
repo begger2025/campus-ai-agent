@@ -35,6 +35,7 @@ import math
 import re
 
 from .clustering import build_event_from_group, note_rank_key, sort_events
+from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner, refine_clusters
 from .schemas import MemorySnapshot, OpinionEvent, OpinionNote
 
 
@@ -80,6 +81,10 @@ class SemanticClusterResult:
     centroids: dict[str, list[float]] = field(default_factory=dict)
     # 因为成员数 < min_cluster_size 而没有产出事件的簇数（调用方用它报警）。
     suppressed_clusters: int = 0
+    # 被 LLM 成功精修（拆分/改名）的簇数；0 = 纯 embedding 结果。
+    refined_clusters: int = 0
+    # 精修过程中的降级记录（超时、幻觉编号、漏帖……），由调用方并进 warnings。
+    refine_warnings: list[str] = field(default_factory=list)
 
 
 def cluster_notes_semantic(
@@ -91,6 +96,8 @@ def cluster_notes_semantic(
     previous: MemorySnapshot | None = None,
     align_threshold: float = DEFAULT_ALIGN_THRESHOLD,
     min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
+    refiner: ClusterRefiner | None = None,
+    refine_min_size: int = DEFAULT_REFINE_MIN_SIZE,
 ) -> SemanticClusterResult:
     if len(notes) != len(vectors):
         raise ValueError(f"notes/vectors length mismatch: {len(notes)} != {len(vectors)}")
@@ -98,6 +105,20 @@ def cluster_notes_semantic(
         return SemanticClusterResult()
 
     clusters = _cluster(notes, vectors, cluster_threshold, merge_threshold)
+
+    # LLM 精修：embedding 只会看"像不像"，不会看"是不是一件事"。它把 91 条帖子压成一个簇
+    # 并按词频 top-1 命名成「饭堂相关讨论」（里面没有一条食堂帖）。精修在**压制之前**跑：
+    # 拆出来的子话题要和别的簇一样，接受 min_cluster_size 的检验（1 帖的话题不是公共事件）。
+    # refiner is None（未配 key / 关闭）时这一步是恒等变换，结果与纯 embedding 完全一致。
+    refine_warnings: list[str] = []
+    clusters, refined = refine_clusters(
+        clusters,
+        refiner,
+        make_cluster=_make_cluster,
+        min_size=refine_min_size,
+        warnings=refine_warnings,
+    )
+
     # 压制发生在"建事件"之前：不够大的簇不进对齐、不产出事件、也不留簇中心——
     # 否则它会被写进快照，下一轮再被对齐成"老事件"复活。
     minimum = max(int(min_cluster_size), 1)
@@ -111,16 +132,27 @@ def cluster_notes_semantic(
     for index, cluster in enumerate(kept):
         group_notes = cluster["notes"]
         event_key, title = inherited.get(index) or _new_key_and_title(group_notes)
+        # LLM 给的标题优先于词频标题、也优先于快照里继承来的旧标题：event_key 负责"还是同一件事"，
+        # 标题负责"这件事是什么"——而旧快照里存的正是本次要修掉的那批错标题。
+        title = cluster.get("llm_title") or title
         # 合并之后仍然重名的两个事件，对读列表的人来说和没修一样。
         title = _disambiguate_title(title, group_notes, used_titles)
         used_titles.add(title)
-        events.append(build_event_from_group(event_key, title, SEMANTIC_CATEGORY, group_notes))
+        event = build_event_from_group(event_key, title, SEMANTIC_CATEGORY, group_notes)
+        # 全量成员（representative_notes 只留 top 5）：消融实验和守恒检查要能看到每条帖子的去向。
+        event.extra["note_ids"] = [note.note_id for note in group_notes]
+        if cluster.get("llm_title"):
+            event.extra["refined_by"] = "llm"
+            event.extra["miscellaneous"] = bool(cluster.get("llm_miscellaneous"))
+        events.append(event)
         centroids[event_key] = cluster["centroid"]
 
     return SemanticClusterResult(
         events=sort_events(events),
         centroids=centroids,
         suppressed_clusters=suppressed,
+        refined_clusters=refined,
+        refine_warnings=refine_warnings,
     )
 
 
@@ -340,22 +372,27 @@ def _disambiguate_title(title: str, group_notes: list[OpinionNote], used: set[st
     if title not in used:
         return title
 
-    base = title[: -len(TITLE_SUFFIX)] if title.endswith(TITLE_SUFFIX) else title
+    # 词频标题带「相关讨论」的尾巴，消歧后保持原样；**LLM 精修出来的标题没有这条尾巴，
+    # 消歧时也绝不许粘上去**——「作息调整争议」被消歧成「作息调整争议·中山大学相关讨论」
+    # 的话，这一整个功能就白做了（那正是要消灭的套话标题）。
+    boilerplate = title.endswith(TITLE_SUFFIX)
+    base = title[: -len(TITLE_SUFFIX)] if boilerplate else title
+    suffix = TITLE_SUFFIX if boilerplate else ""
     for word in _ranked_keywords(group_notes):
         if word and word not in base:
-            candidate = f"{base}·{word}{TITLE_SUFFIX}"
+            candidate = f"{base}·{word}{suffix}"
             if candidate not in used:
                 return candidate
 
     top_note = max(group_notes, key=lambda note: (note_rank_key(note), note.note_id))
-    candidate = f"{_truncate(top_note.title)}{TITLE_SUFFIX}"
+    candidate = f"{_truncate(top_note.title)}{suffix}"
     if top_note.title and candidate not in used:
         return candidate
 
     ordinal = 2
-    while f"{base}（{ordinal}）{TITLE_SUFFIX}" in used:
+    while f"{base}（{ordinal}）{suffix}" in used:
         ordinal += 1
-    return f"{base}（{ordinal}）{TITLE_SUFFIX}"
+    return f"{base}（{ordinal}）{suffix}"
 
 
 def _truncate(base: str) -> str:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from backend.agent.public_opinion_core.llm_refine import DEFAULT_REFINE_MIN_SIZE
 from backend.agent.public_opinion_core.semantic_clustering import (
     DEFAULT_MERGE_THRESHOLD,
     MERGE_THRESHOLD_ENV,
@@ -77,3 +78,16 @@ EMBEDDING_MERGE_THRESHOLD = _read_float(MERGE_THRESHOLD_ENV, DEFAULT_MERGE_THRES
 # 成为一个 public_event 至少要有几条帖子。1 = 不压制（单帖也能成事件，旧行为）。
 # 默认 2：一条帖子不是"公共事件"，只是一条帖子——公共事件的最低含义是"不止一个人在说"。
 EVENT_MIN_CLUSTER_SIZE = max(_read_int("EVENT_MIN_CLUSTER_SIZE", 2), 1)
+
+# ---- 事件聚类的 LLM 精修（拆开 embedding 误合并的大桶 + 具体化标题）----
+# 单独的端点配置：精修要的是"读得懂中文校园语境"的强模型，和别处的用途未必同一个。
+# 缺省回落到 OPENAI_*（当前 .env 里两者相同）。
+EVENT_LLM_MODEL = os.getenv("EVENT_LLM_MODEL") or OPENAI_MODEL
+EVENT_LLM_BASE_URL = os.getenv("EVENT_LLM_BASE_URL") or OPENAI_BASE_URL
+EVENT_LLM_API_KEY = os.getenv("EVENT_LLM_API_KEY") or OPENAI_API_KEY
+
+# 关掉即回到纯 embedding 聚类（答辩现场断网/欠费时的开关；不关也会自动降级，见 llm_refine）。
+EVENT_REFINE_ENABLED = _read_bool("EVENT_REFINE_ENABLED", True)
+
+# 多大的簇才值得一次 LLM 调用。默认 8，理由（真实簇大小分布 + 拆分的算术下界）见 llm_refine.py。
+EVENT_REFINE_MIN_SIZE = max(_read_int("EVENT_REFINE_MIN_SIZE", DEFAULT_REFINE_MIN_SIZE), 2)

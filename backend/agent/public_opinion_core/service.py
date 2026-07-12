@@ -10,6 +10,7 @@ from typing import Any
 
 from .adapter import processed_posts_to_notes
 from .clustering import classify_event, cluster_notes
+from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner
 from .memory import annotate_events_with_memory, build_snapshot
 from .normalizer import analysis_text, clean_text, note_text
 from .schemas import AgentRunLogPayload, AnalyzeRequest, AnalyzeResult, MemorySnapshot, OpinionNote
@@ -24,6 +25,10 @@ Embedder = Callable[[list[str]], list[list[float]]]
 
 # (list[str]) -> list[str | None]，None 表示该条保留规则结果（如 app.services.sentiment_llm）。
 SentimentClassifier = Callable[[list[str]], list[str | None]]
+
+# ClusterRefiner：(一个簇的帖子文本) -> 话题列表，同样由运行环境注入
+# （如 app.services.event_refiner）。None = 跳过精修、保留 embedding 的簇。
+# 协议、验证口径和失败降级见 llm_refine.py。
 
 VALID_SENTIMENT_LABELS = {"positive", "negative", "neutral", "controversial"}
 
@@ -42,6 +47,8 @@ class PublicOpinionAgentService:
         align_threshold: float | None = None,
         sentiment_classifier: SentimentClassifier | None = None,
         min_cluster_size: int | None = None,
+        cluster_refiner: ClusterRefiner | None = None,
+        refine_min_size: int | None = None,
     ) -> AnalyzeResult:
         request = request or AnalyzeRequest()
         started_perf = time.perf_counter()
@@ -71,6 +78,7 @@ class PublicOpinionAgentService:
         sentiment_mode = "rules"
         sentiment_overridden = 0
         suppressed_clusters = 0
+        refined_clusters = 0
         if notes:
             notes = score_notes(notes)
             notes = analyze_notes_sentiment_and_risk(notes)
@@ -86,10 +94,14 @@ class PublicOpinionAgentService:
                 align_threshold,
                 minimum,
                 warnings,
+                cluster_refiner,
+                refine_min_size,
             )
             if semantic is not None:
-                events, centroids, suppressed_clusters = semantic
-                clustering_mode = "semantic"
+                events, centroids, suppressed_clusters, refined_clusters = semantic
+                # LLM 一个簇都没精修成（超时/幻觉/全部作废）时，产出的就是纯 embedding 结果，
+                # 模式如实记成 "semantic"——降级必须在日志里看得见，不能假装 AI 上过。
+                clustering_mode = "semantic+llm" if refined_clusters else "semantic"
             else:
                 events = cluster_notes(notes, min_cluster_size=minimum)
                 suppressed_clusters = sum(
@@ -131,6 +143,7 @@ class PublicOpinionAgentService:
                 "sentiment_overridden": sentiment_overridden,
                 "min_cluster_size": minimum,
                 "suppressed_clusters": suppressed_clusters,
+                "refined_clusters": refined_clusters,
             },
         )
 
@@ -183,7 +196,9 @@ class PublicOpinionAgentService:
         align_threshold: float | None,
         min_cluster_size: int,
         warnings: list[str],
-    ) -> tuple[list, dict[str, list[float]], int] | None:
+        cluster_refiner: ClusterRefiner | None = None,
+        refine_min_size: int | None = None,
+    ) -> tuple[list, dict[str, list[float]], int, int] | None:
         """Run semantic clustering if an embedder is supplied; None means fall back to rules."""
 
         if embedder is None:
@@ -195,6 +210,8 @@ class PublicOpinionAgentService:
             kwargs: dict[str, Any] = {
                 "previous": previous_snapshot,
                 "min_cluster_size": min_cluster_size,
+                # None = 不精修：LLM 未配置时这一层是恒等变换（同 embedder/sentiment 的注入口径）。
+                "refiner": cluster_refiner,
             }
             if cluster_threshold is not None:
                 kwargs["cluster_threshold"] = cluster_threshold
@@ -202,11 +219,15 @@ class PublicOpinionAgentService:
                 kwargs["merge_threshold"] = merge_threshold
             if align_threshold is not None:
                 kwargs["align_threshold"] = align_threshold
+            if refine_min_size is not None:
+                kwargs["refine_min_size"] = refine_min_size
             result = cluster_notes_semantic(notes, [list(vector) for vector in vectors], **kwargs)
         except Exception as exc:
             warnings.append(f"semantic clustering unavailable, fell back to rules: {type(exc).__name__}: {exc}")
             return None
-        return result.events, result.centroids, result.suppressed_clusters
+        # 精修的降级记录进 warnings（-> agent_run_logs）：LLM 挂了不影响事件产出，但必须留痕。
+        warnings.extend(result.refine_warnings)
+        return result.events, result.centroids, result.suppressed_clusters, result.refined_clusters
 
     def _filter_notes(self, notes: list[OpinionNote], request: AnalyzeRequest) -> list[OpinionNote]:
         keyword = clean_text(request.keyword)

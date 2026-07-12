@@ -64,6 +64,33 @@ _usage: dict[str, int] = dict(_EMPTY_USAGE)
 
 
 @dataclass(slots=True)
+class LlmEndpoint:
+    """一次调用打到哪个模型/端点。
+
+    默认就是全局 OPENAI_*；事件精修等场景可以单独指定（EVENT_LLM_*），但仍然走 call_llm，
+    于是重试、JSON 缓存、token/耗时计费一件都不用重写。model 进缓存键——换模型必须换 key，
+    否则同一批帖子会拿到另一个模型的旧答案。
+    """
+
+    model: str = ""
+    api_key: str = ""
+    base_url: str = ""
+
+    @classmethod
+    def resolve(
+        cls,
+        model: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> "LlmEndpoint":
+        return cls(
+            model=model or OPENAI_MODEL,
+            api_key=api_key or OPENAI_API_KEY,
+            base_url=base_url or OPENAI_BASE_URL,
+        )
+
+
+@dataclass(slots=True)
 class LlmCallResult:
     """Outcome of one logical LLM call (possibly multiple attempts)."""
 
@@ -148,13 +175,17 @@ def call_llm(
     temperature: float | None = None,
     cache: JsonLlmCache | None | object = _UNSET,
     max_retries: int | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> LlmCallResult:
     """One LLM call with cache lookup, retry with exponential backoff, and accounting."""
 
     if cache is _UNSET:
         cache = _default_cache()
     retries = LLM_MAX_RETRIES if max_retries is None else max_retries
-    key = build_cache_key(OPENAI_MODEL, messages, temperature)
+    endpoint = LlmEndpoint.resolve(model, api_key, base_url)
+    key = build_cache_key(endpoint.model, messages, temperature)
 
     _usage["calls"] += 1
     if cache is not None:
@@ -169,7 +200,7 @@ def call_llm(
     for attempt in range(retries + 1):
         attempts += 1
         try:
-            content, token_usage = _send_chat_completion(messages, temperature)
+            content, token_usage = _send_chat_completion(messages, temperature, endpoint)
         except Exception as exc:
             error = type(exc).__name__
             if error in NON_RETRYABLE_ERRORS or attempt == retries:
@@ -251,17 +282,19 @@ def generate_llm_report(
 def _send_chat_completion(
     messages: list[dict[str, Any]],
     temperature: float | None,
+    endpoint: LlmEndpoint | None = None,
 ) -> tuple[str | None, dict[str, int]]:
     """Perform the real API request. Kept tiny so tests can stub it out."""
 
     from openai import OpenAI
 
+    endpoint = endpoint or LlmEndpoint.resolve()
     client = OpenAI(
-        api_key=OPENAI_API_KEY,
-        base_url=OPENAI_BASE_URL,
+        api_key=endpoint.api_key,
+        base_url=endpoint.base_url,
         timeout=LLM_TIMEOUT_SECONDS,
     )
-    kwargs: dict[str, Any] = {"model": OPENAI_MODEL, "messages": messages}
+    kwargs: dict[str, Any] = {"model": endpoint.model, "messages": messages}
     if temperature is not None:
         kwargs["temperature"] = temperature
     response = client.chat.completions.create(**kwargs)
