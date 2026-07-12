@@ -35,6 +35,11 @@ def build_public_event_payloads(result: AnalyzeResult) -> list[dict[str, Any]]:
                     {
                         "first_seen_at": event.first_seen_at,
                         "last_seen_at": event.last_seen_at,
+                        # 事件的代表时间（成员帖发布时间的中位数）。**只落这个事实**：
+                        # age_days / recency_weight 是 now 的函数，冻进数据库第二天就是错的
+                        # ——它们由读侧（GET /api/events）用请求时刻现算，见 recency.py。
+                        # public_events 没有新增列：date_range_json 本来就装着时间信息。
+                        "event_time": event.event_time,
                     }
                 ),
                 "source_keywords_json": _json_dumps(event.source_keywords),

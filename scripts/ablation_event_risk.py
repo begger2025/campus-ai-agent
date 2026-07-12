@@ -143,6 +143,10 @@ def run_clustering(rows: list[dict]) -> AnalyzeResult:
         refine_min_size=EVENT_REFINE_MIN_SIZE,
         # 规则臂：风险不交给 LLM。
         risk_assessor=None,
+        # 时效性衰减**关掉**（半衰期 0 => 权重恒 1.0，sort_events 退化回"风险等级优先"）：
+        # 本实验的唯一变量是"风险由谁判"。开着的话名次会同时受事件年龄影响，既不再是单变量
+        # 实验，也会随"今天是几号"漂移。时效性有它自己的消融：scripts/ablation_event_recency.py。
+        recency_half_life_days=0.0,
     )
 
 
@@ -253,7 +257,11 @@ def render(
 
     add("## 事件风险并排")
     add("")
-    add("排名按 `sort_events`（风险等级优先，同风险按 ranking_score）。")
+    add(
+        "排名按 `sort_events`，本实验中**时效性衰减关闭**（half_life=0 => 权重恒 1.0），"
+        "于是它退化回「风险等级优先，同风险按 ranking_score」——单变量实验，只比风险。"
+        "时效性的消融见 `docs/event-recency-ablation.md`。"
+    )
     add("")
     add("| 规则排名 | 事件 | 帖数 | heat_score | 规则等级/分 | LLM 等级/分 | LLM 排名 | 变化 |")
     add("| ---: | --- | ---: | ---: | --- | --- | ---: | --- |")
@@ -313,6 +321,11 @@ def main() -> int:
     parser.add_argument("--no-llm", action="store_true", help="只跑规则臂（无网络时用）")
     parser.add_argument("--report", default=str(REPORT), help="报告写到哪里")
     args = parser.parse_args()
+
+    # Windows 控制台默认 GBK：报告里的 ✅ 会让 print 抛 UnicodeEncodeError，脚本以 exit 1 收场
+    # （报告文件本身已经写好了，是 UTF-8——但答辩现场看到的是一个红色的 traceback）。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     rows = load_rows()
     corpus = len(rows)

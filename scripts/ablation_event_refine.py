@@ -101,6 +101,10 @@ def run_arm(rows: list[dict], *, refiner) -> AnalyzeResult:
         min_cluster_size=EVENT_MIN_CLUSTER_SIZE,
         cluster_refiner=refiner,
         refine_min_size=EVENT_REFINE_MIN_SIZE,
+        # 时效性衰减**关掉**（半衰期 0 => 权重恒 1.0）：本实验的唯一变量是"有没有 LLM 精修"。
+        # 开着的话，事件顺序会同时受"今天是几号"影响（衰减是 now 的函数），这份报告就不再可复现，
+        # 也不再是单变量实验。时效性有它自己的消融：scripts/ablation_event_recency.py。
+        recency_half_life_days=0.0,
     )
 
 
@@ -419,6 +423,11 @@ def main() -> int:
     parser.add_argument("--no-llm", action="store_true", help="只跑 embedding 臂（无网络时用）")
     parser.add_argument("--report", default=str(REPORT), help="报告写到哪里")
     args = parser.parse_args()
+
+    # Windows 控制台默认 GBK：报告里的 ✅/↑ 会让 print 抛 UnicodeEncodeError，脚本以 exit 1 收场
+    # （报告文件本身已经写好了，是 UTF-8——但答辩现场看到的是一个红色的 traceback）。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     rows = load_rows()
     corpus = len(rows)

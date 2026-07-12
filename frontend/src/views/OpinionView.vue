@@ -38,6 +38,11 @@
                 <span :class="['risk-tag', `risk-tag--${event.risk_level}`]">{{ riskLabel(event.risk_level) }}</span>
                 <span :title="`精确值 ${event.heat_score}`">热度 {{ formatHeat(event.heat_score) }}</span>
                 <span>· {{ event.source_count }} 来源</span>
+                <!-- 年龄要看得见：列表已按时效性排序，但陈旧事件不能"默默"留在列表里冒充新闻。 -->
+                <span
+                  :class="['event-age', { 'event-age--stale': isStale(event.age_days) }]"
+                  :title="event.event_time ? `事件代表时间（成员帖发布时间中位数）：${formatEventTime(event.event_time)}` : '该事件没有可用的发布时间'"
+                >· {{ formatAge(event.age_days) }}</span>
               </div>
             </div>
           </div>
@@ -159,6 +164,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Pointer } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
+import { formatAge, formatEventTime, isStale } from '@/utils/age'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { sourceOptions } from '@/mock/events'
 import { fetchPublishedEvents } from '@/api/events'
@@ -387,6 +393,10 @@ function sentimentLabel(s) {
 .risk-tag--high { color: var(--color-danger-text); background: var(--color-danger-bg); border: 1px solid #f4c2c4; }
 .risk-tag--medium { color: var(--color-warning-text); background: var(--color-warning-bg); border: 1px solid #ecd9ae; }
 .risk-tag--low { color: var(--color-success-text); background: var(--color-success-bg); border: 1px solid #c8e5d0; }
+
+/* 事件年龄：陈旧的（>= 90 天）标黄，用户一眼看得出这不是今天的舆情 */
+.event-age { color: var(--color-text-muted); }
+.event-age--stale { color: var(--color-warning-text); font-weight: 600; }
 
 /* ——— 中栏：事件详情 ——— */
 .detail-header {

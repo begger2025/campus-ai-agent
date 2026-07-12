@@ -73,6 +73,16 @@ class OpinionEvent:
     risk_score: float = 0.0
     first_seen_at: str = ""
     last_seen_at: str = ""
+    # ---- 时效性（第三根轴，见 recency.py）----
+    # 事件的**代表时间**：成员帖发布时间的中位数（造事件时算好，是事实，落库）。
+    event_time: str = ""
+    # 相对于某个注入的 now 的年龄（天）。None = 没有任何可解析的时间戳（"不知道多老"，
+    # 不等于"很老"）。**不落库**：它是 now 的函数，冻进数据库第二天就是错的。
+    age_days: float | None = None
+    # 时效权重 0.5 ** (age_days / half_life)，钳在 [min_weight, 1.0]。默认 1.0 = 未标注/不打折。
+    recency_weight: float = 1.0
+    # 展示优先级 = severity_weight(risk_level) × recency_weight，事件排序的第一排序键。
+    priority_score: float = 0.0
     source_keywords: list[str] = field(default_factory=list)
     top_tags: list[dict[str, Any]] = field(default_factory=list)
     concerns: list[str] = field(default_factory=list)

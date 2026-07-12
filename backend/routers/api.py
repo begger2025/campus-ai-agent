@@ -1,15 +1,74 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
+from backend.agent.public_opinion_core.recency import (
+    age_in_days,
+    event_time_from_payload,
+    priority_score,
+    recency_weight,
+)
 from backend.database import DATABASE_URL, get_db
 from backend.models import EventPostLink, ProcessedPost, PublicEvent, RawPost
 from backend.schemas import PingData, PostItem, PostListData, ok
 
 router = APIRouter(tags=["api"])
+
+
+def _now() -> datetime:
+    """时效性排序的"现在"：**每次请求取一次**，往下传参。
+
+    绝不在纯函数里调 datetime.now()——`sort_event_rows` / `_recency_fields` 都收 now 参数，
+    所以它们可复现、可单测（见 backend/tests/test_events_api_recency.py）。
+    """
+
+    return datetime.now(UTC)
+
+
+def _recency_fields(row: PublicEvent, now: datetime) -> dict:
+    """一个已发布事件的时效性三件套（**读时现算**，不读数据库里的陈年快照）。
+
+    库里只存 `date_range_json.event_time`（成员帖发布时间的中位数，一个事实）。年龄和权重
+    是 `now` 的函数——冻进数据库第二天就是错的，所以每次请求按当前时刻重算。
+    没有 event_time 的老数据：age 未知（None），权重 1.0——"不知道多老" ≠ "很老"，不许凭空沉底。
+    """
+
+    event_time = event_time_from_payload(row.date_range_json)
+    age = age_in_days(event_time, now)
+    weight = recency_weight(age)
+    return {
+        "event_time": event_time,
+        "age_days": None if age is None else round(age, 1),
+        "recency_weight": round(weight, 6),
+        "priority_score": priority_score(_risk_level(row), weight),
+    }
+
+
+def sort_event_rows(rows: list[PublicEvent], now: datetime) -> list[PublicEvent]:
+    """前端看板的顺序：**展示优先级**（严重性 × 时效性）优先，同优先级按热度。
+
+    与核心 `clustering.sort_events` 同一口径（severity_weight × recency_weight），只是这里
+    的输入是数据库行。**必须在这里也排一遍**：核心的排序只决定写库顺序，写完就被
+    `ORDER BY created_at DESC` 冲掉了——前端 `fetchPublishedEvents()` 拿到的是这个查询的顺序，
+    所以"近期舆情优先"这件事只有在这里生效才算数。
+
+    严重性和热度**不被时间打折**（它们照原样返回给用户展示）；时间只影响顺序。
+    """
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            priority_score(_risk_level(row), recency_weight(age_in_days(
+                event_time_from_payload(row.date_range_json), now
+            ))),
+            float(row.heat_score or 0.0),
+            int(row.id or 0),
+        ),
+        reverse=True,
+    )
 
 
 def _database_name() -> str:
@@ -163,8 +222,12 @@ def _event_item(
     row: PublicEvent,
     links: list[EventPostLink],
     fallback_processed: ProcessedPost | None = None,
+    now: datetime | None = None,
 ) -> dict:
     risk_level = _risk_level(row)
+    # 年龄要**看得见**：不能只是把旧事件默默沉底，用户得能看到「5 年前」。
+    # now 由调用方注入（列表/详情各取一次请求时刻）；缺省时才自己取，方便老调用方。
+    recency = _recency_fields(row, now or _now())
     source_post_ids: list[int] = []
     source_platforms: list[str] = []
 
@@ -205,6 +268,13 @@ def _event_item(
         "risk_level": risk_level,
         "riskLabel": _risk_label(risk_level),
         "risk_score": row.risk_score,
+        # 时效性（第三根轴）：事件代表时间 + 年龄（天）+ 时效权重 + 展示优先级。
+        # heat_score / risk_score 就在上面几行——它们是**没有被时间打折**的原值：
+        # 火灾不会因为过了三个月变得不严重，热度是实测事实。时效性只影响顺序和"多旧"的展示。
+        "event_time": recency["event_time"],
+        "age_days": recency["age_days"],
+        "recency_weight": recency["recency_weight"],
+        "priority_score": recency["priority_score"],
         "confidence": row.confidence,
         "source_count": source_count,
         "sourcePlatforms": source_platforms,
@@ -232,8 +302,9 @@ def _event_detail_item(
     row: PublicEvent,
     links: list[EventPostLink],
     fallback_processed: ProcessedPost | None = None,
+    now: datetime | None = None,
 ) -> dict:
-    item = _event_item(row, links, fallback_processed)
+    item = _event_item(row, links, fallback_processed, now=now)
     item.update(
         {
             "date_range": _json_value(row.date_range_json, {}),
@@ -278,11 +349,20 @@ def list_events(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
+    now = _now()
     query = db.query(PublicEvent).filter(PublicEvent.status == "published")
-    query = query.order_by(PublicEvent.created_at.desc(), PublicEvent.id.desc())
 
-    total = query.count()
-    rows = query.offset((page - 1) * page_size).limit(page_size).all()
+    # 排序在 Python 里做，不在 SQL 里：优先级 = 严重性 × 时效权重，而时效权重是"现在"的函数
+    # （`0.5 ** (age/half_life)`），SQL 里既没有这个列也不该有——它一落库就会腐坏。
+    # 所以先把**全部**已发布事件取出来排好，再切页：只有排序覆盖全集，分页才是对的
+    # （用 SQL 的 OFFSET/LIMIT 再在页内排序，等于每页各排各的）。已发布事件是**几十条**的量级
+    # （线上 15 条），全量取出的代价可以忽略；status 上的索引照旧生效。
+    # 老口径 `ORDER BY created_at DESC` 排的是"这行是什么时候写进库的"，和"这件事什么时候发生的"
+    # 毫无关系——五年前的处分和昨天的火情在同一次分析里入库，created_at 完全相同。
+    rows = sort_event_rows(query.all(), now)
+    total = len(rows)
+    start = (page - 1) * page_size
+    rows = rows[start : start + page_size]
     event_ids = [row.id for row in rows]
 
     links_by_event: dict[int, list[EventPostLink]] = {event_id: [] for event_id in event_ids}
@@ -309,6 +389,7 @@ def list_events(
             row,
             links_by_event.get(row.id, []),
             fallback_processed.get(row.source_post_id) if row.source_post_id else None,
+            now=now,
         )
         for row in rows
     ]
@@ -334,4 +415,4 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
     fallback = None
     if event.source_post_id:
         fallback = db.query(ProcessedPost).filter(ProcessedPost.id == event.source_post_id).first()
-    return ok(_event_detail_item(event, links, fallback))
+    return ok(_event_detail_item(event, links, fallback, now=_now()))

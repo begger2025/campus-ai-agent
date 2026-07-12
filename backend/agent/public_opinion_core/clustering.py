@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 
 from .normalizer import note_text
 from .platform_weights import note_ranking_score
+from .recency import event_reference_time, priority_score, recency_config
 from .schemas import OpinionEvent, OpinionNote
 from .sentiment_risk import aggregate_risk_level, aggregate_sentiment
 
@@ -146,6 +147,11 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
         risk_score=risk_score,
         first_seen_at=first_seen,
         last_seen_at=last_seen,
+        # 事件的代表时间 = 成员帖发布时间的**中位数**（口径与取舍见 recency.event_reference_time）。
+        # 这里只算"这件事发生在什么时候"（一个事实，不依赖 now）；"它有多老"要等调用方注入 now
+        # 才算得出来（recency.annotate_events_with_recency）。规则路径和语义路径都从这里出事件，
+        # 所以两条路径的事件都自动带上时间。
+        event_time=event_reference_time(group_notes, strategy=recency_config()["strategy"]),
         source_keywords=_source_keywords(group_notes),
         top_tags=_top_tags(group_notes),
         concerns=concerns,
@@ -156,16 +162,29 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
 
 
 def sort_events(events: list[OpinionEvent]) -> list[OpinionEvent]:
-    """事件排序：风险优先，同风险按 ranking_score（平台权重 × 平台内百分位）。
+    """事件排序：**展示优先级**（严重性 × 时效性）优先，同优先级按 ranking_score。
 
-    兜底链和帖子一致：ranking_score -> heat_rank -> heat_score，老数据不会退化成随机顺序。
+        priority = severity_weight(risk_level) × recency_weight
+                 = {low: 1, medium: 3, high: 9} × 0.5 ** (age_days / half_life)
+
+    两条性质，缺一不可：
+
+    1. **未标注时效性的事件（recency_weight 默认 1.0）排序与改造前逐位相同**：severity_weight
+       在 low<medium<high 上单调，权重全为 1 时第一排序键等价于原来的 risk_rank(3/2/1)，
+       兜底链仍是 ranking_score -> heat_rank -> heat_score。老数据 / 关掉衰减 / 全无时间戳
+       都不会把既有顺序打乱成随机。
+    2. **足够旧的 high 会被今天的 low 压下去**：衰减的动态范围（1 -> 1e-6）远大于严重性的
+       （1 -> 9）。这不是副作用，这就是要修的缺陷——「中大学生诽谤被开除」（high/90，
+       1849 天前）不该作为"当前校园舆情"排在前三。
+
+    排序**不改写**任何字段：risk_level/risk_score（严重性不因时间打折）、heat_score（实测量）
+    原样保留，时效性只是新增的第三根轴（见 recency.py）。
     """
 
-    risk_rank = {"high": 3, "medium": 2, "low": 1}
     return sorted(
         events,
         key=lambda event: (
-            risk_rank.get(event.risk_level, 0),
+            priority_score(event.risk_level, event.recency_weight),
             event.ranking_score,
             event.heat_rank,
             event.heat_score,

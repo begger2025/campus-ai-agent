@@ -10,7 +10,16 @@
           </div>
           <div class="hero-meta">
             <span>事件 ID：{{ event.id }}</span>
-            <span>发布时间：{{ event.updatedAt || event.created_at }}</span>
+            <!-- 事件**发生**时间（成员帖发布时间的中位数），不是这行数据被分析写库的时间。
+                 原来这里显示的是 updated_at——于是 2021 年的处分事件也顶着一个"今天"的时间戳，
+                 用户被无声误导。分析时间挪到后面，并且明说它是分析时间。 -->
+            <span :class="{ 'meta-stale': isStale(event.age_days) }">
+              事件时间：{{ formatEventTime(event.event_time) || '未知' }}
+              <template v-if="event.age_days !== null && event.age_days !== undefined">
+                （{{ formatAge(event.age_days) }}）
+              </template>
+            </span>
+            <span>分析更新：{{ event.updatedAt || event.created_at }}</span>
             <span>状态：<span class="status-dot"></span>已发布</span>
           </div>
         </div>
@@ -177,6 +186,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Aim } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
+import { formatAge, formatEventTime, isStale } from '@/utils/age'
 import { LINK_EXPIRY_TIP, platformSearchUrl } from '@/utils/postLink'
 import { fetchEventDetail } from '@/api/events'
 
@@ -326,6 +336,12 @@ function postSearchUrl(post) {
   gap: 20px;
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+/* 陈旧事件（>= 90 天）：时间标黄，用户点进来第一眼就知道这不是今天的事 */
+.meta-stale {
+  color: var(--color-warning-text);
+  font-weight: 600;
 }
 
 .status-dot {

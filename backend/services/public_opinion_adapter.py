@@ -554,6 +554,12 @@ def run_public_opinion_analysis(
                 "heat_score": event.heat_score,
                 "source_count": event.source_count,
                 "status": status,
+                # 时效性（第三根轴）：代表时间 = 成员帖发布时间的中位数；年龄/权重是相对本次
+                # 运行的 now 算的。严重性与热度就在上面几行——它们**没有**被时间打折。
+                "event_time": event.event_time,
+                "age_days": event.age_days,
+                "recency_weight": event.recency_weight,
+                "priority_score": event.priority_score,
                 # 跨次运行记忆标注（week3 记忆模块）
                 "trend": event.trend,
                 "heat_delta": event.heat_delta,

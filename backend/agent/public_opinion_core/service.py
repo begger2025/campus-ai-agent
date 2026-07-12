@@ -14,6 +14,7 @@ from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner
 from .llm_risk import DEFAULT_MAX_TEXTS, RiskAssessor, assess_events_risk
 from .memory import annotate_events_with_memory, build_snapshot
 from .normalizer import analysis_text, clean_text, note_text
+from .recency import annotate_events_with_recency, recency_config
 from .schemas import AgentRunLogPayload, AnalyzeRequest, AnalyzeResult, MemorySnapshot, OpinionNote
 from .scoring import score_notes
 from .semantic_clustering import cluster_notes_semantic, strip_social_noise
@@ -55,10 +56,16 @@ class PublicOpinionAgentService:
         refine_min_size: int | None = None,
         risk_assessor: RiskAssessor | None = None,
         risk_max_texts: int | None = None,
+        now: datetime | None = None,
+        recency_half_life_days: float | None = None,
     ) -> AnalyzeResult:
         request = request or AnalyzeRequest()
         started_perf = time.perf_counter()
         started_at = _utc_now_text()
+        # 时效性的"现在"：**在流水线入口取一次**，往下一路传参。纯函数里绝不允许出现
+        # datetime.now()——否则同一批输入在不同时刻跑出不同事件顺序，单测不可重复、
+        # 消融不可复现。调用方（API / 脚本 / 消融）可以显式注入任意 now。
+        now = now or datetime.now(UTC)
 
         warnings: list[str] = []
         row_list = list(rows or [])
@@ -149,9 +156,19 @@ class PublicOpinionAgentService:
             if risk_assessed:
                 # 一个事件都没判成（全部超时/幻觉）时模式如实记成 rules：降级必须看得见。
                 risk_mode = "llm"
-                # 事件排序的第一排序键就是风险等级（sort_events）。风险被重判之后必须重排，
-                # 否则列表还是按旧风险排的——火灾判成 high 了却还躺在最底下。
-                events = sort_events(events)
+
+        # 事件时效性：给每个事件盖上 age_days / recency_weight / priority_score，然后**重排**。
+        # 必须排在风险研判**之后**：priority = severity_weight(risk_level) × recency_weight，
+        # 风险被 LLM 重判过，优先级得用新的严重性算。
+        # 只写这三个新字段：risk_*（严重性不因时间打折）和 heat_*（实测量）一个字节都不碰。
+        half_life = (
+            recency_config()["half_life_days"]
+            if recency_half_life_days is None
+            else float(recency_half_life_days)
+        )
+        if events:
+            events = annotate_events_with_recency(events, now=now, half_life_days=half_life)
+            events = sort_events(events)
         events = annotate_events_with_memory(events, previous_snapshot)
 
         finished_at = _utc_now_text()
@@ -181,6 +198,11 @@ class PublicOpinionAgentService:
                 # 风险来源：llm = 事件风险由大模型研判；rules = 关键词表 + 互动量加分（旧口径）。
                 "risk_mode": risk_mode,
                 "risk_assessed": risk_assessed,
+                # 时效性：本次排序用的半衰期与"现在"。0 = 关掉衰减（消融对照臂）。
+                # 记进 agent_run_logs 才能事后复现"这一版看板为什么是这个顺序"。
+                "recency_half_life_days": half_life,
+                "recency_now": now.isoformat(timespec="seconds"),
+                "recency_dated_events": sum(1 for event in events if event.event_time),
                 "min_cluster_size": minimum,
                 "suppressed_clusters": suppressed_clusters,
                 "refined_clusters": refined_clusters,

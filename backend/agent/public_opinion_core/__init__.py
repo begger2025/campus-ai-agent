@@ -15,6 +15,18 @@ from .platform_weights import (
     platform_weights,
     ranking_score,
 )
+from .recency import (
+    DEFAULT_HALF_LIFE_DAYS,
+    DEFAULT_MIN_WEIGHT,
+    age_in_days,
+    annotate_events_with_recency,
+    event_reference_time,
+    event_time_from_payload,
+    priority_score,
+    recency_config,
+    recency_weight,
+    severity_weight,
+)
 from .scoring import calculate_heat_score, score_note, score_notes
 from .service import PublicOpinionAgentService
 from .sentiment_risk import analyze_note_sentiment_and_risk, analyze_notes_sentiment_and_risk
@@ -40,6 +52,8 @@ from .schemas import (
 )
 
 __all__ = [
+    "DEFAULT_HALF_LIFE_DAYS",
+    "DEFAULT_MIN_WEIGHT",
     "DEFAULT_PLATFORM_WEIGHTS",
     "AgentRunLogPayload",
     "AnalyzeRequest",
@@ -52,9 +66,11 @@ __all__ = [
     "OpinionEvent",
     "OpinionNote",
     "PublicOpinionAgentService",
+    "age_in_days",
     "analyze_note_sentiment_and_risk",
     "analyze_notes_sentiment_and_risk",
     "annotate_events_with_memory",
+    "annotate_events_with_recency",
     "build_agent_run_log_payload",
     "build_daily_trend_series",
     "build_event_post_link_payloads",
@@ -69,12 +85,18 @@ __all__ = [
     "calculate_heat_score",
     "classify_event",
     "cluster_notes",
+    "event_reference_time",
+    "event_time_from_payload",
     "note_ranking_score",
     "platform_weight",
     "platform_weights",
+    "priority_score",
     "processed_post_to_note",
     "processed_posts_to_notes",
     "ranking_score",
+    "recency_config",
+    "recency_weight",
     "score_note",
     "score_notes",
+    "severity_weight",
 ]
