@@ -9,8 +9,9 @@ import time
 from typing import Any
 
 from .adapter import processed_posts_to_notes
-from .clustering import classify_event, cluster_notes
+from .clustering import classify_event, cluster_notes, sort_events
 from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner
+from .llm_risk import DEFAULT_MAX_TEXTS, RiskAssessor, assess_events_risk
 from .memory import annotate_events_with_memory, build_snapshot
 from .normalizer import analysis_text, clean_text, note_text
 from .schemas import AgentRunLogPayload, AnalyzeRequest, AnalyzeResult, MemorySnapshot, OpinionNote
@@ -29,6 +30,9 @@ SentimentClassifier = Callable[[list[str]], list[str | None]]
 # ClusterRefiner：(一个簇的帖子文本) -> 话题列表，同样由运行环境注入
 # （如 app.services.event_refiner）。None = 跳过精修、保留 embedding 的簇。
 # 协议、验证口径和失败降级见 llm_refine.py。
+
+# RiskAssessor：(事件标题, 成员帖文本) -> 风险研判，由运行环境注入（如 app.services.event_risk）。
+# None = 跳过研判、保留规则风险（六个电诈词 + 互动量加分）。见 llm_risk.py 的缺陷说明。
 
 VALID_SENTIMENT_LABELS = {"positive", "negative", "neutral", "controversial"}
 
@@ -49,6 +53,8 @@ class PublicOpinionAgentService:
         min_cluster_size: int | None = None,
         cluster_refiner: ClusterRefiner | None = None,
         refine_min_size: int | None = None,
+        risk_assessor: RiskAssessor | None = None,
+        risk_max_texts: int | None = None,
     ) -> AnalyzeResult:
         request = request or AnalyzeRequest()
         started_perf = time.perf_counter()
@@ -115,6 +121,27 @@ class PublicOpinionAgentService:
                 f"suppressed {suppressed_clusters} clusters ({suppressed_notes} notes) "
                 f"smaller than min_cluster_size={minimum}: they are not public events"
             )
+
+        # 事件级 LLM 风险研判：把"这件事有多严重"从六个电诈词 + 互动量加分里解放出来。
+        # 它**只**改写 risk_*（严重性），热度字段（heat_score/heat_rank/ranking_score）是算术，
+        # 不许 LLM 碰。assessor 为 None 或逐事件失败时，该事件保留 build_event_from_group
+        # 算好的规则风险——事件照出，只是风险回到旧口径（降级记进 warnings）。
+        risk_mode = "rules"
+        risk_assessed = 0
+        if events and risk_assessor is not None:
+            risk_assessed = assess_events_risk(
+                events,
+                risk_assessor,
+                notes_by_id={note.note_id: note for note in notes},
+                warnings=warnings,
+                max_texts=risk_max_texts if risk_max_texts is not None else DEFAULT_MAX_TEXTS,
+            )
+            if risk_assessed:
+                # 一个事件都没判成（全部超时/幻觉）时模式如实记成 rules：降级必须看得见。
+                risk_mode = "llm"
+                # 事件排序的第一排序键就是风险等级（sort_events）。风险被重判之后必须重排，
+                # 否则列表还是按旧风险排的——火灾判成 high 了却还躺在最底下。
+                events = sort_events(events)
         events = annotate_events_with_memory(events, previous_snapshot)
 
         finished_at = _utc_now_text()
@@ -141,6 +168,9 @@ class PublicOpinionAgentService:
                 "clustering_mode": clustering_mode,
                 "sentiment_mode": sentiment_mode,
                 "sentiment_overridden": sentiment_overridden,
+                # 风险来源：llm = 事件风险由大模型研判；rules = 关键词表 + 互动量加分（旧口径）。
+                "risk_mode": risk_mode,
+                "risk_assessed": risk_assessed,
                 "min_cluster_size": minimum,
                 "suppressed_clusters": suppressed_clusters,
                 "refined_clusters": refined_clusters,

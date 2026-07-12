@@ -99,7 +99,10 @@ def _summary(event_title: str, notes: list[OpinionNote]) -> str:
     return f"{event_title}共聚合 {len(notes)} 条内容，来源覆盖 {platform_text}，代表内容为“{top_note.title}”。"
 
 
-def _agent_summary(category: str, risk_level: str, concerns: list[str]) -> str:
+def build_agent_summary(category: str, risk_level: str, concerns: list[str]) -> str:
+    """事件的处置建议文案。**风险一变，它必须跟着重算**——摘要里明文写着"风险等级为 X"，
+    LLM 研判（llm_risk）改了 risk_level 却不重算这句话，事件就会自己和自己打架。"""
+
     concern_text = "、".join(concerns[:3]) if concerns else "校园公共反馈"
     action_map = {
         "campus_safety": "建议优先由保卫处或学院发布正式提醒，并持续跟踪处置反馈。",
@@ -148,7 +151,7 @@ def build_event_from_group(event_key: str, title: str, category: str, group_note
         concerns=concerns,
         risk_reasons=risk_reasons,
         representative_notes=sorted_notes[:5],
-        agent_summary=_agent_summary(category, risk_level, concerns),
+        agent_summary=build_agent_summary(category, risk_level, concerns),
     )
 
 

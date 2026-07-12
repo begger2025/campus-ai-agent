@@ -26,12 +26,14 @@ from backend.models import EventPostLink, ProcessedPost, PublicEvent
 from backend.services.comment_loader import fetch_top_comments
 from backend.services.embedding import get_embedder
 from backend.services.event_refiner import get_cluster_refiner
+from backend.services.event_risk import get_risk_assessor
 from backend.services.llm_config import (
     EMBEDDING_ALIGN_THRESHOLD,
     EMBEDDING_CLUSTER_THRESHOLD,
     EMBEDDING_MERGE_THRESHOLD,
     EVENT_MIN_CLUSTER_SIZE,
     EVENT_REFINE_MIN_SIZE,
+    EVENT_RISK_MAX_TEXTS,
 )
 from backend.services.log_service import write_event_review_log
 from backend.services.sentiment_llm import get_sentiment_classifier
@@ -437,6 +439,9 @@ def _merge_output_summary(raw_summary: Any, result: Any) -> str:
     summary["sentiment_overridden"] = extra.get("sentiment_overridden", 0)
     # 本次有几个簇被 LLM 精修成功。0 且 clustering_mode=semantic ⇒ 精修降级了（warnings 里有原因）。
     summary["refined_clusters"] = extra.get("refined_clusters", 0)
+    # 事件风险来自大模型研判还是关键词规则；risk_assessed = 成功研判的事件数。
+    summary["risk_mode"] = extra.get("risk_mode", "rules")
+    summary["risk_assessed"] = extra.get("risk_assessed", 0)
     return json.dumps(summary, ensure_ascii=False)
 
 
@@ -500,6 +505,12 @@ def run_public_opinion_analysis(
         # 未配 key / 关闭 / 调用失败时返回 None 或自动降级，事件照出，只是回到纯 embedding 结果。
         cluster_refiner=get_cluster_refiner() if use_llm else None,
         refine_min_size=EVENT_REFINE_MIN_SIZE,
+        # LLM 事件风险研判：规则风险只认识六个电诈词（诈骗/银行卡/验证码/陌生人/尾随/缴费链接），
+        # 认不出「宿舍火灾」；而评论/转发/热度还在给风险加分，于是它量的是流行度不是严重性
+        # （实测：宿舍火灾 low/4.0 全库最低，学生吐槽作业多 medium/64.0 全库最高）。
+        # 未配 key / 关闭 / 调用失败时逐事件自动降级回规则风险，事件照出（见 llm_risk.py）。
+        risk_assessor=get_risk_assessor() if use_llm else None,
+        risk_max_texts=EVENT_RISK_MAX_TEXTS,
     )
     result.warnings = truncation_warnings + list(result.warnings)
     if persist and result.snapshot is not None:
@@ -571,6 +582,9 @@ def run_public_opinion_analysis(
             "sentiment_overridden": extra.get("sentiment_overridden", 0),
             # 被 LLM 拆分/改名的簇数；clustering=semantic 且它为 0 ⇒ 精修没上（见 warnings）。
             "refined_clusters": extra.get("refined_clusters", 0),
+            # 事件风险：llm = 大模型研判严重性；rules = 关键词表 + 互动量加分（旧口径）。
+            "risk": extra.get("risk_mode", "rules"),
+            "risk_assessed": extra.get("risk_assessed", 0),
         },
         "payload_counts": {
             "public_events": len(event_payloads),

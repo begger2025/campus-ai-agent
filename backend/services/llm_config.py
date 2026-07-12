@@ -13,6 +13,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from backend.agent.public_opinion_core.llm_refine import DEFAULT_REFINE_MIN_SIZE
+from backend.agent.public_opinion_core.llm_risk import DEFAULT_MAX_TEXTS as DEFAULT_RISK_MAX_TEXTS
 from backend.agent.public_opinion_core.semantic_clustering import (
     DEFAULT_MERGE_THRESHOLD,
     MERGE_THRESHOLD_ENV,
@@ -98,3 +99,12 @@ EVENT_REFINE_ENABLED = _read_bool("EVENT_REFINE_ENABLED", True)
 
 # 多大的簇才值得一次 LLM 调用。默认 8，理由（真实簇大小分布 + 拆分的算术下界）见 llm_refine.py。
 EVENT_REFINE_MIN_SIZE = max(_read_int("EVENT_REFINE_MIN_SIZE", DEFAULT_REFINE_MIN_SIZE), 2)
+
+# ---- 事件级 LLM 风险研判（严重性与热度解耦）----
+# 复用同一组 EVENT_LLM_*（同一个"读得懂中文校园语境"的强模型）。
+# 关掉即回到规则风险（六个电诈词 + 互动量加分，见 llm_risk.py 的缺陷说明）；
+# 不关也会自动逐事件降级——LLM 挂了事件照出，只是风险退回规则值。
+EVENT_RISK_ENABLED = _read_bool("EVENT_RISK_ENABLED", True)
+
+# 一个事件最多送几条帖子给模型（严重性藏在少数几条帖子里，读完 91 条纯属烧钱）。
+EVENT_RISK_MAX_TEXTS = max(_read_int("EVENT_RISK_MAX_TEXTS", DEFAULT_RISK_MAX_TEXTS), 1)
