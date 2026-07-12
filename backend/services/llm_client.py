@@ -18,6 +18,7 @@ from backend.services.llm_config import (
     LLM_CACHE_ENABLED,
     LLM_CACHE_PATH,
     LLM_ENABLED,
+    LLM_HTTP_TRUST_ENV,
     LLM_MAX_RETRIES,
     LLM_RETRY_BASE_SECONDS,
     LLM_TIMEOUT_SECONDS,
@@ -286,18 +287,23 @@ def _send_chat_completion(
 ) -> tuple[str | None, dict[str, int]]:
     """Perform the real API request. Kept tiny so tests can stub it out."""
 
+    import httpx
     from openai import OpenAI
 
     endpoint = endpoint or LlmEndpoint.resolve()
-    client = OpenAI(
-        api_key=endpoint.api_key,
-        base_url=endpoint.base_url,
-        timeout=LLM_TIMEOUT_SECONDS,
-    )
-    kwargs: dict[str, Any] = {"model": endpoint.model, "messages": messages}
-    if temperature is not None:
-        kwargs["temperature"] = temperature
-    response = client.chat.completions.create(**kwargs)
+    # 显式注入 httpx 客户端：SDK 默认 trust_env=True，会静默继承 Windows 注册表里的
+    # 系统代理（Clash），实测拖慢 3 倍。见 llm_config.LLM_HTTP_TRUST_ENV。
+    with httpx.Client(trust_env=LLM_HTTP_TRUST_ENV, timeout=LLM_TIMEOUT_SECONDS) as http_client:
+        client = OpenAI(
+            api_key=endpoint.api_key,
+            base_url=endpoint.base_url,
+            timeout=LLM_TIMEOUT_SECONDS,
+            http_client=http_client,
+        )
+        kwargs: dict[str, Any] = {"model": endpoint.model, "messages": messages}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = client.chat.completions.create(**kwargs)
     content = response.choices[0].message.content
     usage = getattr(response, "usage", None)
     token_usage = {

@@ -62,6 +62,13 @@ LLM_MAX_RETRIES = _read_int("LLM_MAX_RETRIES", 2)
 LLM_RETRY_BASE_SECONDS = _read_float("LLM_RETRY_BASE_SECONDS", 0.5)
 LLM_CACHE_ENABLED = _read_bool("LLM_CACHE_ENABLED", True)
 LLM_CACHE_PATH = Path(os.getenv("LLM_CACHE_PATH") or (DATA_DIR / "llm_cache.json"))
+# openai SDK 底层是 httpx，而 httpx 默认 trust_env=True：在 Windows 上它不只读
+# HTTP_PROXY/HTTPS_PROXY，还会读**注册表里的系统代理**（Clash 一类工具会写这里），
+# 所以清空环境变量对它无效。实测同一次智谱调用：走系统代理 14.4s，直连 4.5s（慢 3 倍）。
+# 默认直连；确实需要走代理才能上网的人显式设 true。
+# 语义与 evidence/config.py::http_trust_env 保持一致（那边同一个坑曾把可达的
+# sysu.edu.cn 判成 ConnectTimeout，真证据被当成"编造的链接"）。
+LLM_HTTP_TRUST_ENV = _read_bool("LLM_HTTP_TRUST_ENV", False)
 
 REACT_MAX_STEPS = _read_int("REACT_MAX_STEPS", 5)
 
