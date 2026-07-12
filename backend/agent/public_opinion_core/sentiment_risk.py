@@ -211,7 +211,29 @@ def analyze_notes_sentiment_and_risk(notes: list[OpinionNote]) -> list[OpinionNo
     return [analyze_note_sentiment_and_risk(note) for note in notes]
 
 
+# 平票时的取值顺序（越靠前越优先）。事件情感是要落库、要在事件列表里展示的值，
+# 不能由 Counter.most_common 的插入顺序（= 帖子进簇的先后）决定：同一批帖子换个
+# 取数顺序就换一个标签，既不可复现也不可辩护。票数相同时取**更保守**的一侧——
+# 舆情平台把两半对半的事件说成"正面"，代价远大于说成"中性"。
+SENTIMENT_PRECEDENCE = ("negative", "controversial", "neutral", "positive")
+
+
 def aggregate_sentiment(notes: list[OpinionNote]) -> str:
+    """事件级情感 = 负面放大 + 真实多数派（不是"正面只要压过负面就算正面"）。
+
+    历史 bug：`if counts["positive"] > negative_total: return "positive"` 只把 positive
+    和 negative 比大小，**neutral 完全不参与**。于是「东校区宿舍火灾」（3 条中性事实
+    播报 + 1 条被误聚进来的正面帖）被标成 positive；极端情况 1 正 + 99 中 也是 positive。
+
+    现在的规则，从强到弱：
+
+    1. **负面放大**（保留，故意为之）：负面 + 争议达到 `max(2, len(notes)//3)` 就判 negative。
+       舆情场景里少数负面确实比多数中性更值得报出来，这条是设计不是 bug。
+    2. **争议放大**（保留）：≥2 条争议帖 ⇒ controversial。
+    3. 否则取**真实多数派**（四种标签一起数，neutral 不再被无视），平票按
+       `SENTIMENT_PRECEDENCE` 取更保守的一侧，结果与帖子顺序无关。
+    """
+
     if not notes:
         return "neutral"
 
@@ -219,11 +241,17 @@ def aggregate_sentiment(notes: list[OpinionNote]) -> str:
     negative_total = counts["negative"] + counts["controversial"]
     if negative_total >= max(2, len(notes) // 3):
         return "negative"
-    if counts["positive"] > negative_total:
-        return "positive"
     if counts["controversial"] >= 2:
         return "controversial"
-    return counts.most_common(1)[0][0]
+
+    # 未登记的标签（理论上 normalize 之后不会出现）也参与计数，但排在已知标签之后，
+    # 并按字母序固定位置——任何情况下都不允许出现"顺序敏感"的结果。
+    labels = list(SENTIMENT_PRECEDENCE) + sorted(set(counts) - set(SENTIMENT_PRECEDENCE))
+
+    def rank(label: str) -> tuple[int, int]:
+        return counts[label], -labels.index(label)
+
+    return max(labels, key=rank)
 
 
 def aggregate_risk_level(notes: list[OpinionNote]) -> tuple[str, float, list[str], list[str]]:

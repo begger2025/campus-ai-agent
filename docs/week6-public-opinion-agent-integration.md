@@ -159,6 +159,63 @@ min=2 干掉全部 15 个单帖事件、保留 7 个事件；min=3 只多干掉 
 看上去 0.70~0.75 才是当前数据量下的合理区间。这只需要改 `.env`（不改代码、不改库），
 但会换掉事件身份（`sem:*` key 变化 → 新一批草稿），**留给负责人决定**，本次未改。
 
+## 4.7 事件列表上的两个可见缺陷：情感取多数 + 系统自动归档不再永久锁死（2026-07-12）
+
+两个缺陷都直接出现在**已发布的事件列表**里，答辩时点一下就能看见。
+
+### 缺陷①：宿舍火灾被标成 `positive`（`sentiment_risk.aggregate_sentiment`）
+
+原实现：
+
+```python
+if negative_total >= max(2, len(notes) // 3):
+    return "negative"
+if counts["positive"] > negative_total:   # ← bug：positive 只和 negative 比
+    return "positive"
+```
+
+`positive` 只跟 `negative` 比大小，**neutral 完全不参与**。线上事件「东校区宿舍火灾」有 4 条帖子：
+3 条中性事实播报（「消防及时到场处置，无人员伤亡」）+ 1 条被误聚进来的无关正面帖（「#中大宿舍实拍」）。
+`negative_total = 0` ⇒ 第一条分支不触发；`counts["positive"] (1) > 0` ⇒ **返回 `positive`**。
+极端情况 `1 正 + 99 中` 同样是 `positive`——一条正面帖能压过任意多条中性帖。
+
+现在的规则，从强到弱：
+
+1. **负面放大**（保留，故意为之）：负面 + 争议 ≥ `max(2, len(notes)//3)` ⇒ `negative`。
+   舆情场景里少数负面确实比多数中性更值得报出来，这条是设计不是 bug，本次**没有削弱**。
+2. **争议放大**（保留）：≥ 2 条争议帖 ⇒ `controversial`。
+3. 否则取**真实多数派**：四种标签一起数（neutral 不再被无视）。
+4. **平票确定性**：`SENTIMENT_PRECEDENCE = (negative, controversial, neutral, positive)`，
+   票数相同时取更靠前（更保守）的一侧。原来兜底用 `Counter.most_common(1)`，平票由**插入顺序**
+   （帖子进簇的先后）决定——一个要落库、要展示的值不能这样取。2 中 + 2 正 现在稳定判 `neutral`。
+
+火灾事件因此判 `neutral`（3 neutral > 1 positive）。
+
+### 缺陷②：机器自己归档的事件永远回不来（`public_opinion_adapter`）
+
+`REVIEW_LOCKED_STATUSES = {"published", "rejected", "archived"}`，upsert 时只要旧状态在这个集合里
+就把状态回滚成旧值。但 `archive_stale_draft_events()` 自动归档失活草稿时写的也是 `archived`——
+**机器自己的决定，从此享受了"人的决定"的保护**。下一轮分析即使把它重新检出（内容更好、标题更好），
+状态也永远停在 `archived`。「中大校区与宿舍环境」（7 帖）和「中大开学省凳走红」（3 帖）今天就是这样
+被卡住，只能手工救回。
+
+锁的本意是**机器不能覆盖人的决定**，所以按 **actor** 区分，而不是按状态：
+
+- 自动归档统一写 `reviewed_by = SYSTEM_REVIEWER`（`"system"`），事件行的 `reviewed_by` 与审核日志的
+  `reviewer_id` **同一个值**（原来只有日志写了 `admin_user_id="system"`，事件行的 actor 是顺手写的
+  裸字符串，没有作为判据用起来）。
+- upsert 时 `_is_system_auto_archived(event)`（`status == "archived" and reviewed_by == "system"`）
+  为真 ⇒ 该事件**没有失活**，机器收回自己的归档决定：状态回 `draft`，清掉系统留下的
+  `reviewed_by/reviewed_at/review_comment`（否则草稿上挂着一条"已自动归档"的评语），并写一条
+  `archived -> draft` 的审核日志留痕。
+- 其余锁定状态（人工 `archived` / `published` / `rejected`）**行为完全不变**，机器绝不覆盖。
+
+人工审核（`PATCH /admin/events/{id}`）写的 actor 是管理员用户名，不会是 `"system"`，两者不会混淆。
+
+回归测试：`backend/tests/test_event_sentiment_and_review_lock.py`（11 例，含火灾事件复现、
+`1 正 + 99 中`、负面/争议放大保留、平票与顺序无关、系统归档→重新检出→回 draft 的端到端往返、
+人工归档/发布/驳回永不被复活）。
+
 ## 5. 真实数据验证记录（2026-06-13，共享 MySQL，182 条小红书数据）
 
 - 预览运行（persist=false，limit=30）：6 个事件，`sentiment_mode=llm`（30/30 条 LLM 覆盖，2 次批量调用，22 秒），可视化 6 组数据齐全

@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 REVIEW_LOCKED_STATUSES = {"published", "rejected", "archived"}
 
+# 自动归档/自动复活时写在 public_events.reviewed_by 和审核日志 reviewer_id 上的 actor。
+# 「这条状态是谁定的」全靠它区分：人的决定锁死，机器自己的决定可以由机器收回。
+SYSTEM_REVIEWER = "system"
+
 # 跨次运行事件记忆（趋势标注、语义簇中心对齐）；preview 运行不更新。
 MEMORY_SNAPSHOT_PATH = DATA_DIR / "public_opinion_memory.json"
 
@@ -213,6 +217,18 @@ def load_opinion_notes_from_db(
     return processed_posts_to_notes(rows)
 
 
+def _is_system_auto_archived(event: PublicEvent) -> bool:
+    """这条 archived 是**机器自己**（陈旧草稿自动归档）定的，而不是人定的？
+
+    锁的本意是"机器不能覆盖人的决定"。`archive_stale_draft_events` 也写 archived，
+    但它写的 actor 是 `SYSTEM_REVIEWER`——机器自己的决定不该享受同样的保护，
+    否则被自动归档的事件在后续分析里重新检出也永远出不来（「中大校区与宿舍环境」
+    「中大开学省凳走红」就是这样卡住、只能手工救回的）。
+    """
+
+    return event.status == "archived" and (event.reviewed_by or "") == SYSTEM_REVIEWER
+
+
 def upsert_public_events(
     db: Session,
     event_payloads: list[dict[str, Any]],
@@ -235,12 +251,30 @@ def upsert_public_events(
             old_reviewed_by = event.reviewed_by
             old_reviewed_at = event.reviewed_at
             old_review_comment = event.review_comment
+            # 系统自动归档的事件又被本次分析检出 ⇒ 它没失活，机器收回自己的归档决定，
+            # 退回 draft 交人工复核（人工 archived/published/rejected 依旧永久锁定）。
+            revived_by_system = _is_system_auto_archived(event)
             for key, value in payload.items():
                 if key in review_fields:
                     continue
                 if hasattr(event, key):
                     setattr(event, key, value)
-            if old_status in REVIEW_LOCKED_STATUSES:
+            if revived_by_system:
+                event.status = "draft"
+                # 系统留下的归档批注要清掉，否则草稿上挂着一条"已自动归档"的评语。
+                event.reviewed_by = ""
+                event.reviewed_at = None
+                event.review_comment = ""
+                db.flush()
+                write_event_review_log(
+                    db,
+                    event_id=event.id,
+                    admin_user_id=SYSTEM_REVIEWER,
+                    from_status=old_status,
+                    to_status="draft",
+                    review_comment="自动恢复：本次分析重新检出，撤销系统自动归档，退回草稿待人工复核",
+                )
+            elif old_status in REVIEW_LOCKED_STATUSES:
                 event.status = old_status
                 event.reviewed_by = old_reviewed_by
                 event.reviewed_at = old_reviewed_at
@@ -308,6 +342,10 @@ def archive_stale_draft_events(db: Session, active_event_keys: set[str]) -> int:
     只碰 draft：published/rejected 是管理员决定，archived 已经出局。
     调用方负责确认本次运行"看全了"（无关键词/平台过滤、未被 limit 截断），
     否则子集运行会把无关草稿误判为失活。归档动作写审核日志留痕。
+
+    actor 一律写 `SYSTEM_REVIEWER`（事件行的 `reviewed_by` 和审核日志的 `reviewer_id`
+    必须一致）：`upsert_public_events` 靠它把"机器归档"和"人工归档"区分开——机器归档
+    的事件被重新检出时会退回 draft，人工归档的永远锁定。
     """
 
     query = db.query(PublicEvent).filter(PublicEvent.status == "draft")
@@ -318,13 +356,13 @@ def archive_stale_draft_events(db: Session, active_event_keys: set[str]) -> int:
     for event in stale_events:
         old_status = event.status
         event.status = "archived"
-        event.reviewed_by = "system"
+        event.reviewed_by = SYSTEM_REVIEWER
         event.reviewed_at = datetime.utcnow()
         event.review_comment = "自动归档：本次全量分析未再出现（陈旧草稿）"
         write_event_review_log(
             db,
             event_id=event.id,
-            admin_user_id="system",
+            admin_user_id=SYSTEM_REVIEWER,
             from_status=old_status,
             to_status="archived",
             review_comment=event.review_comment,
