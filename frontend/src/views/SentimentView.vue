@@ -2,7 +2,7 @@
   <div class="sentiment-page">
     <!-- 统计摘要 -->
     <div class="stat-row">
-      <StatCard title="帖子总数" :value="total" :icon="ChatLineSquare" color="primary" desc="已加载数据" />
+      <StatCard title="帖子总数" :value="libraryTotal" :icon="ChatLineSquare" color="primary" desc="已分析帖子" />
       <StatCard title="高风险事件" :value="highRiskCount" :icon="Warning" color="danger" desc="需优先处理" />
       <StatCard title="中风险事件" :value="midRiskCount" :icon="Bell" color="warning" desc="持续跟踪" />
       <StatCard title="低风险事件" :value="lowRiskCount" :icon="CircleCheck" color="success" desc="态势平稳" />
@@ -17,9 +17,16 @@
         clearable
         prefix-icon="Search"
         style="width: 280px"
-        @input="handleSearch"
+        @keyup.enter="handleSearch"
+        @clear="handleSearch"
       />
-      <el-select v-model="riskFilter" placeholder="全部风险" clearable style="width: 140px">
+      <el-select
+        v-model="riskFilter"
+        placeholder="全部风险"
+        clearable
+        style="width: 140px"
+        @change="handleSearch"
+      >
         <el-option label="高风险" value="high" />
         <el-option label="中风险" value="medium" />
         <el-option label="低风险" value="low" />
@@ -33,7 +40,7 @@
       <div class="section-card posts-panel">
         <div class="section-header">
           <span class="section-title">校园帖子列表</span>
-          <span class="section-count">共 {{ filteredPosts.length }} 条</span>
+          <span class="section-count">共 {{ postsTotal }} 条</span>
         </div>
         <div class="section-body">
           <div v-if="loading" class="loading-state">
@@ -41,39 +48,61 @@
           </div>
           <template v-else>
             <div
-              v-for="post in pagedPosts"
+              v-for="post in posts"
               :key="post.id"
               class="post-card"
-              :class="{ 'post-card--active': selectedPost?.id === post.id }"
-              @click="selectPost(post)"
+              :class="{ 'post-card--active': expandedPostId === post.id }"
+              @click="togglePost(post)"
             >
               <div class="post-top">
                 <el-tag size="small" :type="platformTagType(post.platform)">
                   {{ post.platform }}
                 </el-tag>
-                <span :class="['badge', riskBadgeClass(post.riskLevel)]">
-                  {{ riskLabel(post.riskLevel) }}
+                <span :class="['badge', riskBadgeClass(post.risk_level)]">
+                  {{ riskLabel(post.risk_level) }}
+                </span>
+                <span :class="['badge', sentimentBadgeClass(post.sentiment)]">
+                  {{ sentimentLabel(post.sentiment) }}
                 </span>
               </div>
               <div class="post-title">{{ post.title }}</div>
               <div class="post-meta">
                 {{ post.author || '匿名' }} ·
-                {{ formatTime(post.publish_time) }}
+                {{ formatTime(post.publish_time) }} ·
+                热度 {{ Math.round(post.heat_score || 0) }}
               </div>
+
+              <!-- 展开：正文摘要 + 跳原帖。原本点击只是换个边框颜色，什么都不会发生 -->
+              <transition name="expand">
+                <div v-if="expandedPostId === post.id" class="post-detail">
+                  <div v-if="post.content" class="detail-text">{{ post.content }}</div>
+                  <a
+                    v-if="isSafeUrl(post.url)"
+                    class="post-link"
+                    :href="post.url"
+                    target="_blank"
+                    rel="noopener"
+                    @click.stop
+                  >
+                    查看原帖 →
+                  </a>
+                </div>
+              </transition>
             </div>
 
-            <div v-if="filteredPosts.length === 0" class="empty-state">
+            <div v-if="posts.length === 0" class="empty-state">
               没有匹配的帖子
             </div>
 
-            <!-- 分页 -->
+            <!-- 服务端分页：翻页去服务器拿下一页，不是在已加载的 100 条里翻 -->
             <el-pagination
-              v-if="filteredPosts.length > pageSize"
+              v-if="postsTotal > pageSize"
               v-model:current-page="currentPage"
               :page-size="pageSize"
-              :total="filteredPosts.length"
+              :total="postsTotal"
               layout="prev, pager, next"
               class="pagination"
+              @current-change="loadPosts"
             />
           </template>
         </div>
@@ -93,7 +122,7 @@
             <template v-else>
               <div
                 v-for="event in filteredEvents"
-                :key="event.raw_id ?? event.id"
+                :key="eventId(event)"
                 class="event-row"
                 :class="{ 'event-row--high': eventRisk(event) === 'high' }"
                 @click="toggleEvent(event)"
@@ -111,7 +140,7 @@
 
                 <!-- 展开详情（全部真实字段） -->
                 <transition name="expand">
-                  <div v-if="expandedEventId === (event.raw_id ?? event.id)" class="event-detail">
+                  <div v-if="expandedEventId === eventId(event)" class="event-detail">
                     <div v-if="event.summary" class="detail-block">
                       <div class="detail-label">事件摘要</div>
                       <div class="detail-text">{{ event.summary }}</div>
@@ -128,7 +157,7 @@
                       type="primary"
                       size="small"
                       style="margin-top: 8px"
-                      @click.stop="$router.push(`/events/${event.raw_id ?? event.id}`)"
+                      @click.stop="$router.push(`/events/${eventId(event)}`)"
                     >
                       查看完整详情 →
                     </el-button>
@@ -150,9 +179,8 @@ import { ref, computed } from 'vue'
 import { Bell, ChatLineSquare, CircleCheck, Loading, Warning } from '@element-plus/icons-vue'
 import StatCard from '@/components/StatCard.vue'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
-import { fetchPosts } from '@/api/posts'
+import { fetchSentimentPosts } from '@/api/posts'
 import { fetchPublishedEvents } from '@/api/events'
-import { mockPosts } from '@/mock/data'
 
 // ——— 状态 ———
 const keyword = ref('')
@@ -160,22 +188,51 @@ const riskFilter = ref('')
 const currentPage = ref(1)
 const pageSize = 8
 const loading = ref(true)
-const selectedPost = ref(null)
+const expandedPostId = ref(null)
 const expandedEventId = ref(null)
 
-// ——— 帖子数据 ———
+// ——— 帖子数据（processed_posts：已清洗、已打分） ———
+//
+// 三个数字必须分清楚，混了就会撒谎：
+//   posts        当前这一页的帖子（8 条）
+//   postsTotal   **筛选后**的全库条数（面板头「共 N 条」）
+//   libraryTotal 全库已分析帖子数（统计卡「帖子总数」）
+//
+// 原实现只有一个 `posts`，然后拿 `posts.length` 当「帖子总数」——而它一次只请求
+// 100 条（page_size 的上限），于是这张卡片永远显示 100，库里有 403 条还是 4000 条
+// 都一样。检索也只在这 100 条里做，第 101 条之后的帖子搜索永远找不到。
 const posts = ref([])
+const postsTotal = ref(0)
+const libraryTotal = ref(0)
 
-;(async () => {
+async function loadPosts() {
+  loading.value = true
+  expandedPostId.value = null
   try {
-    const data = await fetchPosts(1, 100)
+    const data = await fetchSentimentPosts({
+      page: currentPage.value,
+      pageSize,
+      keyword: keyword.value.trim(),
+      risk: riskFilter.value,
+    })
     posts.value = data.items
-  } catch {
-    posts.value = mockPosts
+    postsTotal.value = data.total
+    // 没有任何筛选时的 total 就是全库量——记下来给统计卡用
+    if (!keyword.value.trim() && !riskFilter.value) {
+      libraryTotal.value = data.total
+    }
+  } catch (error) {
+    // 不用 mock 兜底：页面上挂着「真实接口」徽章，塞假数据就是在骗人。
+    // 数据库不可用时的正规降级路径是 demo 模式（本地 SQLite 快照），不是前端造数。
+    console.warn('[sentiment] 帖子加载失败', error)
+    posts.value = []
+    postsTotal.value = 0
   } finally {
     loading.value = false
   }
-})()
+}
+
+loadPosts()
 
 // ——— 事件数据（真实已发布事件） ———
 const events = ref([])
@@ -188,6 +245,13 @@ const eventsLoading = ref(true)
     eventsLoading.value = false
   }
 })()
+
+// 一个事件有两个身份标识：id 是展示用的 "EVT-49"（字符串），raw_id 是主键 49（整数）。
+// 原实现展开判断用 raw_id、点击时却存 id —— `"EVT-49" === 49` 永远为 false，
+// **详情面板永远展不开**。统一从这里取，谁也别再混。
+function eventId(event) {
+  return event.raw_id ?? event.id
+}
 
 function eventRisk(event) {
   return event.riskLevel ?? event.risk_level ?? 'low'
@@ -213,19 +277,11 @@ function eventKeywords(event) {
 }
 
 // ——— 过滤 ———
-const filteredPosts = computed(() => {
-  const kw = keyword.value.trim().toLowerCase()
-  return posts.value.filter(p => {
-    const text = [p.title, p.platform, p.author].join(' ').toLowerCase()
-    return (!kw || text.includes(kw))
-  })
-})
-
-const pagedPosts = computed(() => {
-  const start = (currentPage.value - 1) * pageSize
-  return filteredPosts.value.slice(start, start + pageSize)
-})
-
+// 帖子的检索/筛选/分页**全在服务端**（见 loadPosts）：前端过滤只能覆盖"已经加载进来的
+// 那一页"，而库里有 397 条已分析帖——用户搜「食堂」，第 101 条之后的食堂帖一条都搜不到，
+// 页面却看起来像搜了全库。那是一个静默的错误答案。
+//
+// 事件不同：已发布事件只有十几个，一次全取回来，客户端过滤没有任何谎言风险。
 const filteredEvents = computed(() => {
   return events.value.filter(e => {
     if (riskFilter.value && eventRisk(e) !== riskFilter.value) return false
@@ -239,7 +295,8 @@ const filteredEvents = computed(() => {
 })
 
 // ——— 统计（全部真实数据） ———
-const total = computed(() => posts.value.length)
+// 「帖子总数」= 全库已分析帖子数（libraryTotal，来自服务端）；
+// 三张风险卡统计的是**已发布事件**（十几个），与库里的 published 分布一致。
 const highRiskCount = computed(() => events.value.filter(e => eventRisk(e) === 'high').length)
 const midRiskCount = computed(() => events.value.filter(e => eventRisk(e) === 'medium').length)
 const lowRiskCount = computed(() => events.value.filter(e => eventRisk(e) === 'low').length)
@@ -247,20 +304,28 @@ const lowRiskCount = computed(() => events.value.filter(e => eventRisk(e) === 'l
 // ——— 操作 ———
 function handleSearch() {
   currentPage.value = 1
+  loadPosts()
 }
 
 function resetFilter() {
   keyword.value = ''
   riskFilter.value = ''
   currentPage.value = 1
+  loadPosts()
 }
 
-function selectPost(post) {
-  selectedPost.value = selectedPost.value?.id === post.id ? null : post
+function togglePost(post) {
+  expandedPostId.value = expandedPostId.value === post.id ? null : post.id
 }
 
 function toggleEvent(event) {
-  expandedEventId.value = expandedEventId.value === event.id ? null : event.id
+  const id = eventId(event)
+  expandedEventId.value = expandedEventId.value === id ? null : id
+}
+
+// 帖子链接来自爬取数据，只放行 http(s)，防 javascript: 一类伪协议
+function isSafeUrl(url) {
+  return typeof url === 'string' && /^https?:\/\//.test(url)
 }
 
 // ——— 样式辅助 ———
@@ -274,6 +339,18 @@ function riskLabel(risk) {
   if (risk === 'high') return '高风险'
   if (risk === 'medium') return '中风险'
   return risk === 'low' ? '低风险' : '—'
+}
+
+function sentimentBadgeClass(sentiment) {
+  if (sentiment === 'negative') return 'badge-high'
+  if (sentiment === 'positive') return 'badge-low'
+  return 'badge-neutral'
+}
+
+function sentimentLabel(sentiment) {
+  if (sentiment === 'negative') return '负面'
+  if (sentiment === 'positive') return '正面'
+  return sentiment === 'neutral' ? '中性' : '—'
 }
 
 function platformTagType(platform) {
@@ -381,6 +458,25 @@ function formatTime(ts) {
 .post-meta {
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+/* 帖子展开：正文摘要 + 原帖链接 */
+.post-detail {
+  margin-top: 10px;
+  border-top: 1px dashed var(--color-border-light);
+  padding-top: 10px;
+}
+
+.post-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--brand-600);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.post-link:hover {
+  text-decoration: underline;
 }
 
 /* 事件行 */

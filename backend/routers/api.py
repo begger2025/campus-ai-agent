@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -299,6 +300,77 @@ def list_posts(
     rows = query.offset((page - 1) * page_size).limit(page_size).all()
     items = [PostItem.model_validate(row).model_dump() for row in rows]
     return ok(PostListData(items=items, total=total, page=page, page_size=page_size).model_dump())
+
+
+@router.get("/sentiment/posts")
+def list_sentiment_posts(
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: str = Query("", max_length=100),
+    risk: str = Query("", max_length=16),
+):
+    """舆情分析页的帖子：查 **processed_posts**（已清洗、已打分的帖子）。
+
+    为什么不复用 `/posts`：那个接口查的是 `raw_posts`——爬虫抓回来的原始帖，
+    **没有 sentiment、没有 risk_level**。一个叫「舆情分析」的页面读它，结果就是
+    每条帖子的风险徽章永远显示「—」、风险筛选器对帖子完全失效。
+    `/posts`（首页的"最新动态"）继续读 raw_posts，语义不变。
+
+    检索和筛选**必须在服务端做**：原实现把前 100 条捞到浏览器里做前端过滤，
+    于是"搜索"只覆盖那 100 条——库里第 101 条之后的帖子永远搜不到，而页面看起来
+    像是搜了全库。这是一个**静默**的错误答案，正是本项目最忌讳的那种 bug。
+    """
+
+    query = db.query(ProcessedPost)
+
+    keyword = (keyword or "").strip()
+    if keyword:
+        like = f"%{keyword}%"
+        # 匹配范围和搜索框的 placeholder 一字不差：标题、平台、作者。
+        # 刻意**不**匹配 source_keyword（那是"爬虫搜索时用的词"，不是"帖子在讲什么"——
+        # 拿它做匹配会把一堆凑数的泛化帖子捞进来，见 public_opinion_adapter 的注释）。
+        query = query.filter(
+            or_(
+                ProcessedPost.title.like(like),
+                ProcessedPost.platform.like(like),
+                ProcessedPost.author_name.like(like),
+                ProcessedPost.author.like(like),
+            )
+        )
+
+    risk = (risk or "").strip()
+    if risk in {"high", "medium", "low"}:
+        query = query.filter(ProcessedPost.risk_level == risk)
+
+    # total 是**筛选后的全库条数**，不是这一页装了多少条——前端那张「帖子总数」卡片
+    # 曾经拿 items.length 当总数，而 page_size 上限恰好是 100，于是它永远显示 100。
+    total = query.count()
+    rows = (
+        query.order_by(ProcessedPost.publish_time.desc(), ProcessedPost.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    items = [
+        {
+            "id": row.id,
+            "platform": row.platform,
+            "title": row.title,
+            # 摘要供列表展开用；全文没必要进列表接口（详情要看原帖）。
+            "content": (row.content or "")[:300],
+            "author": row.author_name or row.author or "",
+            "publish_time": row.publish_time.isoformat() if row.publish_time else "",
+            "url": row.note_url or "",
+            # 这三样正是 raw_posts 给不了的——风险徽章、情绪、热度都靠它们。
+            "sentiment": row.sentiment or "neutral",
+            "risk_level": row.risk_level or "low",
+            "heat_score": float(row.heat_score or 0.0),
+        }
+        for row in rows
+    ]
+    return ok({"items": items, "total": total, "page": page, "page_size": page_size})
 
 
 @router.get("/events")

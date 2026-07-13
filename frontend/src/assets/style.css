@@ -259,6 +259,13 @@ a {
   border: 1px solid #c8e5d0;
 }
 
+/* 中性：情绪徽章的第三档（负面用 badge-high、正面用 badge-low） */
+.badge-neutral {
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
 .tag {
   padding: 3px 10px;
   border-radius: var(--radius-sm);
