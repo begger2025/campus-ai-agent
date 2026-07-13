@@ -37,7 +37,9 @@ const routes = [
         path: '',
         name: 'Home',
         component: HomeView,
-        meta: { title: '首页', subtitle: '校园舆情仪表盘', public: true },
+        // 首页展示采集帖子数与最新帖子列表（原始数据）——那需要登录（见后端 /api/posts）。
+        // 真正对游客公开的是**事件**：它们是人工审核发布过的对外结论。
+        meta: { title: '首页', subtitle: '校园舆情仪表盘' },
       },
       {
         path: 'sentiment',
@@ -142,7 +144,8 @@ router.beforeEach((to, from, next) => {
   // 登录页始终可访问
   if (to.meta.guest) return next()
 
-  // 公开页面（首页/事件列表/详情）游客可浏览，与登录页宣传一致
+  // 公开页面（事件列表/事件详情）游客可浏览：已发布事件是**人工审核过的对外结论**。
+  // 原始帖子不在此列——它是平台的内部数据，后端也加了登录门（见 routers/api.py）。
   if (to.meta.public) return next()
 
   // 未登录 → 跳转登录页

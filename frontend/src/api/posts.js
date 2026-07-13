@@ -47,6 +47,20 @@ export async function fetchSentimentPosts({
   throw new Error('Invalid sentiment posts API response')
 }
 
+/**
+ * 舆情分析页的帖子层统计：GET /api/sentiment/stats
+ *
+ * 返回 { total, sentiment{4档}, platforms[], daily_trend[], top_posts[], trend_days }。
+ * 聚合在服务端做——前端只看得见"已经加载进来的那一页"（8 条），算不出全库 395 条的分布。
+ */
+export async function fetchSentimentStats() {
+  const data = await http.get('/sentiment/stats')
+  if (data && typeof data.total === 'number') {
+    return data
+  }
+  throw new Error('Invalid sentiment stats API response')
+}
+
 export async function checkHealth() {
   return http.get('/ping')
 }

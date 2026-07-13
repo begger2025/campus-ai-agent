@@ -29,9 +29,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from backend.admin_models import User
 from backend.database import Base, get_db
 from backend.main import app
 from backend.models import ProcessedPost
+from backend.services.auth_service import get_current_user
 
 
 NOW = datetime(2026, 7, 14, 12, 0, 0)
@@ -53,6 +55,8 @@ class SentimentPostsApiTest(unittest.TestCase):
                 db.close()
 
         app.dependency_overrides[get_db] = override_get_db
+        # 帖子接口要登录（原始数据不给未登录的人裸奔，见 test_public_api_auth）
+        app.dependency_overrides[get_current_user] = lambda: User(id=1, username="u", role="user")
         self.addCleanup(app.dependency_overrides.clear)
         self.client = TestClient(app)
 

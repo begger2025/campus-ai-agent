@@ -1,14 +1,16 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
+from backend.admin_models import User
 from backend.database import DATABASE_URL, get_db
 from backend.models import EventPostLink, ProcessedPost, PublicEvent, RawPost
 from backend.schemas import PingData, PostItem, PostListData, ok
+from backend.services.auth_service import get_current_user
 
 # 「一行 public_events 此刻是什么状态」的唯一口径——事件看板和舆情助手共用。
 # 各写一份必然漂移成两个世界，而那正是这次改造要消灭的东西：改造前事件页展示
@@ -292,9 +294,21 @@ def ping():
 @router.get("/posts")
 def list_posts(
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
+    """原始采集帖（raw_posts）。**要登录。**
+
+    帖子和事件需要的不是同一种门：
+      - 事件是 **AI 的结论**（LLM 研判的风险/生命周期）—— AI 会错，所以必须人工审核；
+        审过之后它就是对外公开的舆情结论，任何人可以看（`/events` 无需登录）。
+      - 帖子是 **公开网络内容的搬运** —— 不需要"审核才能公开"，但它是平台的内部原始
+        数据，不该让未登录的人随手 curl 走全库。
+
+    改造前这个接口完全没有认证依赖：前端 router 里标的 roles 只是前端的门，后端不设防。
+    """
+
     query = db.query(RawPost).order_by(RawPost.publish_time.desc(), RawPost.id.desc())
     total = query.count()
     rows = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -305,6 +319,7 @@ def list_posts(
 @router.get("/sentiment/posts")
 def list_sentiment_posts(
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str = Query("", max_length=100),
@@ -383,6 +398,107 @@ def list_sentiment_posts(
         for row in rows
     ]
     return ok({"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+# 情绪的四个档位。**四个，不是三个**：`controversial`（争议——正负声音都不少）是核心
+# 情绪聚合的第四种取值。少一个档，图上就缺一块，而那一块有 30 条帖子。
+SENTIMENT_BUCKETS = ("negative", "controversial", "neutral", "positive")
+
+# 发帖趋势的窗口（天）。末端锚在**库里最新的数据日**而不是 datetime.now()——
+# 语料的最近数据日可能是几天前，锚在今天会画出一条尾巴全是 0 的假趋势线。
+# （首页的趋势图早就这么做了，图上明写着"截至 X · 最近数据日"。）
+STATS_TREND_DAYS = 30
+
+# 热度榜取几条。
+STATS_TOP_POSTS = 5
+
+
+@router.get("/sentiment/stats")
+def sentiment_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """舆情分析页的**帖子层统计**：情绪分布 / 平台分布 / 发帖趋势 / 热度榜。
+
+    这个接口是页面重新分工的产物。改造前舆情分析页有一半版面是**事件列表**——而事件
+    列表在「事件列表」「舆情工作台」「舆情关注」里各有一份，全站出现了 4 次。
+    重新划分后每页 = 唯一的（数据层 × 动词）：
+
+        首页       概览层 × 看
+        舆情分析   **帖子层 × 统计**   ← 就是这里
+        事件列表   事件层 × 检索
+        舆情工作台 单事件 × 研判
+        舆情关注   中高风险 × 处置
+
+    聚合必须在服务端做：前端只看得见"已经加载进来的那一页"（8 条），算不出全库 395 条
+    的分布。
+    """
+
+    rows = db.query(
+        ProcessedPost.sentiment,
+        ProcessedPost.platform,
+        ProcessedPost.publish_time,
+    ).all()
+    total = len(rows)
+
+    # —— 情绪分布：四个档位一个都不能少，没有的补 0（否则图上缺一块） ——
+    sentiment_counts = {bucket: 0 for bucket in SENTIMENT_BUCKETS}
+    platform_counts: dict[str, int] = {}
+    for sentiment, platform, _publish_time in rows:
+        key = sentiment if sentiment in sentiment_counts else "neutral"
+        sentiment_counts[key] += 1
+        if platform:
+            platform_counts[platform] = platform_counts.get(platform, 0) + 1
+
+    platforms = [
+        {"platform": name, "count": count}
+        for name, count in sorted(platform_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+
+    # —— 发帖趋势：按天聚合，空白天补 0 ——
+    # 在 Python 里做而不是 SQL GROUP BY DATE()：SQLite 返回字符串、MySQL 返回 date 对象，
+    # 方言差异要额外归一化；而数据量是几百行，代价可以忽略。
+    times = [t for _s, _p, t in rows if t is not None]
+    daily_trend: list[dict] = []
+    if times:
+        last_day = max(times).date()
+        counts_by_day: dict[str, int] = {}
+        for moment in times:
+            counts_by_day[moment.date().isoformat()] = (
+                counts_by_day.get(moment.date().isoformat(), 0) + 1
+            )
+        for offset in range(STATS_TREND_DAYS - 1, -1, -1):
+            day = (last_day - timedelta(days=offset)).isoformat()
+            daily_trend.append({"date": day, "count": counts_by_day.get(day, 0)})
+
+    top_rows = (
+        db.query(ProcessedPost)
+        .order_by(ProcessedPost.heat_score.desc(), ProcessedPost.id.desc())
+        .limit(STATS_TOP_POSTS)
+        .all()
+    )
+    top_posts = [
+        {
+            "id": row.id,
+            "title": row.title,
+            "platform": row.platform,
+            "sentiment": row.sentiment or "neutral",
+            "heat_score": float(row.heat_score or 0.0),
+            "url": row.note_url or "",
+        }
+        for row in top_rows
+    ]
+
+    return ok(
+        {
+            "total": total,
+            "sentiment": sentiment_counts,
+            "platforms": platforms,
+            "daily_trend": daily_trend,
+            "top_posts": top_posts,
+            "trend_days": STATS_TREND_DAYS,
+        }
+    )
 
 
 @router.get("/events")
