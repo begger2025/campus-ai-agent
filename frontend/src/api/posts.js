@@ -23,10 +23,21 @@ export async function fetchPosts(page = 1, pageSize = 20) {
  * ——用户搜「食堂」，第 101 条之后的食堂帖一条都搜不到，页面却看起来像搜了全库。
  *
  * 返回 { items, total, page, page_size }，total 是**筛选后的全库条数**。
+ *
+ * 筛选轴是**情绪**而不是风险：帖子级 risk_level 的真实分布是 low 385 / medium 12 /
+ * high 0（帖子级风险是规则算的，LLM 研判在事件级），筛了等于没筛；而情绪的分布是
+ * positive 155 / neutral 128 / negative 84 / controversial 30——那才是有信息量的轴。
+ * 接口仍支持 risk 参数（帖子级风险模型改进后立刻可用），当前 UI 不传。
  */
-export async function fetchSentimentPosts({ page = 1, pageSize = 8, keyword = '', risk = '' } = {}) {
+export async function fetchSentimentPosts({
+  page = 1,
+  pageSize = 8,
+  keyword = '',
+  sentiment = '',
+  risk = '',
+} = {}) {
   const data = await http.get('/sentiment/posts', {
-    params: { page, page_size: pageSize, keyword, risk },
+    params: { page, page_size: pageSize, keyword, sentiment, risk },
   })
 
   if (Array.isArray(data?.items)) {

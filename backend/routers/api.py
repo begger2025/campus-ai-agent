@@ -308,6 +308,7 @@ def list_sentiment_posts(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str = Query("", max_length=100),
+    sentiment: str = Query("", max_length=16),
     risk: str = Query("", max_length=16),
 ):
     """舆情分析页的帖子：查 **processed_posts**（已清洗、已打分的帖子）。
@@ -339,6 +340,17 @@ def list_sentiment_posts(
             )
         )
 
+    # 情绪是帖子身上**有信息量**的那根轴：真实分布 positive 155 / neutral 128 /
+    # negative 84 / controversial 30。`controversial`（争议：正负声音都不少）是核心
+    # 情绪聚合的第四种取值，不是拼写错误——漏掉它，那 30 条帖子的徽章就会变成「—」。
+    sentiment = (sentiment or "").strip()
+    if sentiment in {"positive", "neutral", "negative", "controversial"}:
+        query = query.filter(ProcessedPost.sentiment == sentiment)
+
+    # 风险这根轴在帖子级上几乎是常量：low 385 / medium 12 / **high 0**。
+    # 帖子级风险是规则算的（词表 + 热度阈值），真正的风险研判在**事件级**、由 LLM 做——
+    # 所以页面上帖子不再显示风险徽章，只有事件显示。**当前 UI 不传这个参数**；
+    # 接口能力保留：帖子级风险模型若改进（例如接 LLM 分类），这个筛选立刻可用。
     risk = (risk or "").strip()
     if risk in {"high", "medium", "low"}:
         query = query.filter(ProcessedPost.risk_level == risk)

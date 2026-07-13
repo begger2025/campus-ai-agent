@@ -106,7 +106,13 @@ class SentimentPostsApiTest(unittest.TestCase):
         self.assertEqual(item["heat_score"], 888.0)
 
     def test_the_risk_filter_narrows_the_result_and_the_total(self):
-        """筛选在服务端做：命中的条目和总数都要跟着变（前端筛选器原本对帖子完全无效）。"""
+        """筛选在服务端做：命中的条目和总数都要跟着变（前端筛选器原本对帖子完全无效）。
+
+        注：**当前 UI 不用这个参数**——帖子级 risk_level 的真实分布是
+        low 385 / medium 12 / high 0（帖子级风险是规则算的，LLM 研判在事件级），
+        这个徽章几乎不携带信息，已从页面移除。接口能力保留：帖子级风险模型
+        若将来改进（例如接 LLM 分类），这个筛选立刻可用。
+        """
 
         self._add(raw_post_id=1, risk_level="high", title="高风险帖")
         self._add(raw_post_id=2, risk_level="low", title="低风险帖")
@@ -116,6 +122,34 @@ class SentimentPostsApiTest(unittest.TestCase):
 
         self.assertEqual([item["title"] for item in data["items"]], ["高风险帖"])
         self.assertEqual(data["total"], 1, "筛选后的 total 必须是筛选后的条数")
+
+    def test_the_sentiment_filter_narrows_the_result_and_the_total(self):
+        """情绪才是帖子身上有信息量的那根轴——真实分布
+        positive 155 / neutral 128 / negative 84 / controversial 30。
+        """
+
+        self._add(raw_post_id=1, sentiment="negative", title="负面帖")
+        self._add(raw_post_id=2, sentiment="positive", title="正面帖")
+        self._add(raw_post_id=3, sentiment="neutral", title="中性帖")
+
+        data = self._get(sentiment="negative")
+
+        self.assertEqual([item["title"] for item in data["items"]], ["负面帖"])
+        self.assertEqual(data["total"], 1)
+
+    def test_controversial_is_a_first_class_sentiment(self):
+        """`controversial`（争议）是核心的第四种情绪，不是拼写错误——库里有 30 条。
+
+        标签函数漏掉它，这 30 条帖子的情绪徽章就会显示成「—」。
+        """
+
+        self._add(raw_post_id=1, sentiment="controversial", title="争议帖")
+        self._add(raw_post_id=2, sentiment="neutral", title="中性帖")
+
+        data = self._get(sentiment="controversial")
+
+        self.assertEqual([item["title"] for item in data["items"]], ["争议帖"])
+        self.assertEqual(data["items"][0]["sentiment"], "controversial")
 
     def test_the_keyword_searches_the_whole_table_not_just_the_loaded_page(self):
         """**这是最要命的一条**：搜索必须覆盖全库，而不是"已经加载进浏览器的那 100 条"。

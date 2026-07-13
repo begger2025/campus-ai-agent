@@ -20,12 +20,25 @@
         @keyup.enter="handleSearch"
         @clear="handleSearch"
       />
+      <!-- 两根轴各管一边：帖子看**情绪**（分布健康），事件看**风险**（LLM 研判）。
+           帖子级风险几乎是常量（low 385 / medium 12 / high 0），筛了也没意义。 -->
+      <el-select
+        v-model="sentimentFilter"
+        placeholder="帖子情绪"
+        clearable
+        style="width: 130px"
+        @change="handleSearch"
+      >
+        <el-option label="负面" value="negative" />
+        <el-option label="争议" value="controversial" />
+        <el-option label="中性" value="neutral" />
+        <el-option label="正面" value="positive" />
+      </el-select>
       <el-select
         v-model="riskFilter"
-        placeholder="全部风险"
+        placeholder="事件风险"
         clearable
-        style="width: 140px"
-        @change="handleSearch"
+        style="width: 130px"
       >
         <el-option label="高风险" value="high" />
         <el-option label="中风险" value="medium" />
@@ -58,9 +71,10 @@
                 <el-tag size="small" :type="platformTagType(post.platform)">
                   {{ post.platform }}
                 </el-tag>
-                <span :class="['badge', riskBadgeClass(post.risk_level)]">
-                  {{ riskLabel(post.risk_level) }}
-                </span>
+                <!-- 帖子只显示**情绪**，不显示风险：帖子级风险是规则算的，
+                     真实分布 low 385 / medium 12 / high 0——一个几乎恒为「低风险」的
+                     徽章不携带任何信息，还会让人误以为"校园很安全"。
+                     真正的风险研判在事件级、由 LLM 做（右侧面板）。 -->
                 <span :class="['badge', sentimentBadgeClass(post.sentiment)]">
                   {{ sentimentLabel(post.sentiment) }}
                 </span>
@@ -183,7 +197,11 @@ import { fetchSentimentPosts } from '@/api/posts'
 import { fetchPublishedEvents } from '@/api/events'
 
 // ——— 状态 ———
+// 两个筛选器各管一边：sentimentFilter 筛帖子（服务端），riskFilter 筛事件（客户端，
+// 已发布事件只有十几个）。它们**不是**同一根轴——帖子级风险几乎恒为 low，
+// 而事件级风险是 LLM 研判的，才有 high/medium/low 的真实分布。
 const keyword = ref('')
+const sentimentFilter = ref('')
 const riskFilter = ref('')
 const currentPage = ref(1)
 const pageSize = 8
@@ -213,12 +231,12 @@ async function loadPosts() {
       page: currentPage.value,
       pageSize,
       keyword: keyword.value.trim(),
-      risk: riskFilter.value,
+      sentiment: sentimentFilter.value,
     })
     posts.value = data.items
     postsTotal.value = data.total
     // 没有任何筛选时的 total 就是全库量——记下来给统计卡用
-    if (!keyword.value.trim() && !riskFilter.value) {
+    if (!keyword.value.trim() && !sentimentFilter.value) {
       libraryTotal.value = data.total
     }
   } catch (error) {
@@ -309,6 +327,7 @@ function handleSearch() {
 
 function resetFilter() {
   keyword.value = ''
+  sentimentFilter.value = ''
   riskFilter.value = ''
   currentPage.value = 1
   loadPosts()
@@ -341,16 +360,23 @@ function riskLabel(risk) {
   return risk === 'low' ? '低风险' : '—'
 }
 
+// 四种情绪，不是三种：`controversial`（争议——正负声音都不少）是核心情绪聚合的
+// 第四种取值，库里有 30 条。漏掉它，这 30 条帖子的徽章会显示成「—」。
 function sentimentBadgeClass(sentiment) {
   if (sentiment === 'negative') return 'badge-high'
+  if (sentiment === 'controversial') return 'badge-mid'
   if (sentiment === 'positive') return 'badge-low'
   return 'badge-neutral'
 }
 
 function sentimentLabel(sentiment) {
-  if (sentiment === 'negative') return '负面'
-  if (sentiment === 'positive') return '正面'
-  return sentiment === 'neutral' ? '中性' : '—'
+  const labels = {
+    negative: '负面',
+    controversial: '争议',
+    neutral: '中性',
+    positive: '正面',
+  }
+  return labels[sentiment] || '—'
 }
 
 function platformTagType(platform) {
