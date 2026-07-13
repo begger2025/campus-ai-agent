@@ -70,6 +70,18 @@ REPORT_INSTRUCTION = (
 
 _RISK_RANK = {"high": 3, "medium": 2, "low": 1}
 
+# 审校意见追加进正文时最多带几条。审校是提示，不是第二份报告：实测一份简报被报
+# 8 条 issue，全量 join 会在正文尾部糊一面近千字的警告墙，比简报本身还长。
+# 完整清单仍随响应的 review 字段返回（前端/日志可见），正文只留前几条 + 总数。
+REVIEW_NOTICE_MAX_ISSUES = 3
+
+
+def _review_notice(issues: list[str]) -> str:
+    shown = "；".join(issues[:REVIEW_NOTICE_MAX_ISSUES])
+    if len(issues) > REVIEW_NOTICE_MAX_ISSUES:
+        return f"\n\n> ⚠️ 审校提示（共 {len(issues)} 条，仅展示前 {REVIEW_NOTICE_MAX_ISSUES} 条）：{shown}"
+    return f"\n\n> ⚠️ 审校提示：{shown}"
+
 # 进程内会话记忆：user_id -> 上一轮话题关键词 / 最近对话历史。单进程限制：
 # 多 worker 部署或重启后丢失，丢失的后果只是追问需要重新带上话题词，可接受。
 _last_keyword_by_user: dict[str, str] = {}
@@ -427,7 +439,7 @@ class OpinionChatService:
         if not report_text.startswith(fallback):
             verdict = review_report(report_text, payload, citations=cite_map or None)
         if verdict.verdict == "warn" and verdict.issues:
-            notice = "\n\n> ⚠️ 审校提示：" + "；".join(verdict.issues)
+            notice = _review_notice(verdict.issues)
             report_text += notice
             yield ("delta", {"text": notice})
 
@@ -495,7 +507,7 @@ class OpinionChatService:
         if not report_text.startswith(fallback):
             verdict = review_report(report_text, payload, citations=cite_map or None)
         if verdict.verdict == "warn" and verdict.issues:
-            report_text += "\n\n> ⚠️ 审校提示：" + "；".join(verdict.issues)
+            report_text += _review_notice(verdict.issues)
         response = self._response("report", keyword, report_text, routed, events[:8])
         response["review"] = {"verdict": verdict.verdict, "issues": verdict.issues}
         response["citations"] = cite_map

@@ -1,8 +1,17 @@
 """Citation ids for auditable LLM reports (grounded generation).
 
-给压缩后的事件 payload 里每条代表帖编号（p1, p2, …），简报中的论断必须
-以 [来源:pN] 标注出处；validate_citations 做零成本的确定性校验（引用了
-不存在的编号 = 幻觉引用）。引用映射随响应返回，前端可渲染成跳原帖的角标。
+给压缩后的事件 payload 编号：每条代表帖 p1, p2, …；**每个事件 e1, e2, …**。
+简报中的论断必须以 [来源:pN] / [来源:eN] 标注出处；validate_citations 做零成本的
+确定性校验（引用了不存在的编号 = 幻觉引用）。引用映射随响应返回，前端可渲染成
+跳原帖的角标。
+
+## 为什么事件也要编号（两级引用）
+
+只给帖子编号时，简报里最重要的一批论断——风险等级、热度、条数、时间范围、
+事件状态——是**事件级字段**，没有任何合法的引用方式。模型被夹在中间：不标，
+确定性校验报「零引用」；硬标 pN，critic 逐条核对帖子内容又报「来源不符」。
+实测一份简报被报 8 条 issue，全是这个形状——不是模型错了，是我们没给它出口。
+事件级结论标 eN，帖子内容标 pN，生成/校验/审校三方口径才对得上。
 """
 
 from __future__ import annotations
@@ -11,24 +20,28 @@ import re
 from typing import Any
 
 
-# 宽松匹配中文 LLM 常见格式漂移：全角冒号/括号、冒号后空格、大写 P、
+# 宽松匹配中文 LLM 常见格式漂移：全角冒号/括号、冒号后空格、大写 P/E、
 # 全角数字、逗号/顿号分隔的合并写法 [来源:p1,p2]。提取后统一归一化。
 CITATION_PATTERN = re.compile(
     r"[\[【［]\s*来源\s*[:：]\s*"
-    r"([pPｐＰ][0-9０-９]+(?:\s*[,，、]\s*[pPｐＰ][0-9０-９]+)*)"
+    r"([pPeEｐＰｅＥ][0-9０-９]+(?:\s*[,，、]\s*[pPeEｐＰｅＥ][0-9０-９]+)*)"
     r"\s*[\]】］]"
 )
 _ID_SEPARATOR = re.compile(r"\s*[,，、]\s*")
-_FULLWIDTH_TRANS = str.maketrans("０１２３４５６７８９ｐＰ", "0123456789pP")
+_FULLWIDTH_TRANS = str.maketrans("０１２３４５６７８９ｐＰｅＥ", "0123456789pPeE")
 # 只有 http(s) 链接才随 cite_map 返回给前端（防 javascript: 之类的伪协议）。
 _SAFE_URL_PREFIXES = ("http://", "https://")
 # 爬取文本里可能混入伪造引用标记（污染 LLM 输出、骗过校验），编号前剥离这些字段。
 _NOTE_TEXT_FIELDS = ("title", "content", "desc")
+# 事件标题/摘要虽是 LLM 精修产物，但精修的原料同样是爬取文本——一并剥离。
+_EVENT_TEXT_FIELDS = ("title", "summary")
 
 CITATION_INSTRUCTION = (
-    "\n引用要求：每个事实性论断的句末必须标注来源，格式为 [来源:pN]，"
-    "其中 pN 是数据中代表内容的 cite_id 编号。"
-    "只能引用数据围栏内真实存在的编号；无法溯源到具体帖子的内容不要写进报告。"
+    "\n引用要求：每个事实性论断的句末必须标注来源。"
+    "转述某条帖子的内容时，标注该帖的 cite_id（格式 [来源:pN]）；"
+    "引用事件级的聚合结论（风险等级、热度、内容条数、时间范围、事件状态等字段）时，"
+    "标注该事件的 cite_id（格式 [来源:eN]）。"
+    "只能引用数据围栏内真实存在的编号；无法溯源到具体帖子或事件字段的内容不要写进报告。"
 )
 
 
@@ -50,8 +63,16 @@ def attach_citation_ids(
     cite_map: dict[str, dict[str, str]] = {}
     tagged: list[dict[str, Any]] = []
     counter = 0
-    for event in events_payload:
+    for event_index, event in enumerate(events_payload, start=1):
         event_copy = dict(event)
+        for field in _EVENT_TEXT_FIELDS:
+            if event_copy.get(field):
+                event_copy[field] = CITATION_PATTERN.sub("", str(event_copy[field])).strip()
+        # 事件自己的编号：事件级论断（风险等级/热度/条数/时间范围）标 [来源:eN]
+        event_cite = f"e{event_index}"
+        event_copy["cite_id"] = event_cite
+        event_title = str(event_copy.get("event_title") or event_copy.get("title") or "")
+        cite_map[event_cite] = {"title": event_title, "url": "", "event_title": event_title}
         notes = []
         for note in event.get("representative_notes", []):
             counter += 1

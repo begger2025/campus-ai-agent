@@ -20,8 +20,11 @@ from backend.services.prompt_guard import guard_payload, sanitize_text
 VALID_VERDICTS = {"pass", "warn"}
 
 CITATION_REVIEW_RULE = (
-    "\n- 数据中每条代表内容带 cite_id 编号；请逐条核对报告中 [来源:pN] 标注的论断"
-    "与对应帖子内容是否相符，不符算问题。"
+    "\n- 引用分两级：数据中每个事件带 cite_id 编号（e1…），每条代表内容带 cite_id 编号（p1…）。"
+    "请逐条核对：[来源:pN] 标注的论断应与对应帖子的内容相符；[来源:eN] 标注的论断应与"
+    "该事件的聚合字段（风险等级、热度、条数、时间范围、状态等）相符。"
+    "事件级结论（如风险等级、总条数）标注到事件编号 eN 是正确做法，不算问题；"
+    "与对应数据不符的才算问题。"
 )
 
 CRITIC_SYSTEM_PROMPT = """你是舆情报告的事实核查员。
@@ -92,7 +95,7 @@ def _check_citations(report_text: str, citations: dict[str, Any] | None) -> list
     check = validate_citations(report_text or "", citations)
     issues = [f"引用了数据中不存在的来源 {cite_id}（疑似幻觉引用）" for cite_id in check["unknown"]]
     if check["count"] == 0:
-        issues.append("报告未包含任何 [来源:pN] 引用，论断无法溯源")
+        issues.append("报告未包含任何 [来源:pN]/[来源:eN] 引用，论断无法溯源")
     return issues
 
 

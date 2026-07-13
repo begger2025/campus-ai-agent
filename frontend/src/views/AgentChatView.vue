@@ -50,7 +50,7 @@
               type="warning"
               :closable="false"
               show-icon
-              :title="`审校提示：${msg.meta.review.issues.join('；')}`"
+              :title="reviewSummary(msg.meta.review)"
             />
 
             <!-- search 兜底找到的帖子清单：后端一直带回，之前从未渲染——用户只看到
@@ -183,6 +183,17 @@ function intentLabel(intent) {
 // 帖子链接来自爬取数据，只放行 http(s)，防 javascript: 一类伪协议（与 citations 同口径）
 function isSafeUrl(url) {
   return typeof url === 'string' && /^https?:\/\//.test(url)
+}
+
+// 审校提示封顶展示（与后端追加进正文的口径一致）：审校是提示，不是第二份报告。
+const REVIEW_ALERT_MAX_ISSUES = 3
+
+function reviewSummary(review) {
+  const issues = review?.issues || []
+  const shown = issues.slice(0, REVIEW_ALERT_MAX_ISSUES).join('；')
+  return issues.length > REVIEW_ALERT_MAX_ISSUES
+    ? `审校提示（共 ${issues.length} 条，仅展示前 ${REVIEW_ALERT_MAX_ISSUES} 条）：${shown}`
+    : `审校提示：${shown}`
 }
 
 // ——— 等待期的进度显示 ———
