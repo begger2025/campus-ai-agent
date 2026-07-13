@@ -32,6 +32,8 @@ from backend.services.llm_config import (
     EMBEDDING_ALIGN_THRESHOLD,
     EMBEDDING_CLUSTER_THRESHOLD,
     EMBEDDING_MERGE_THRESHOLD,
+    EVENT_LLM_CONCURRENCY,
+    EVENT_MAX_SPAN_DAYS,
     EVENT_MIN_CLUSTER_SIZE,
     EVENT_REFINE_MIN_SIZE,
     EVENT_RISK_MAX_TEXTS,
@@ -140,12 +142,26 @@ def _filtered_post_query(
     keyword = (keyword or "").strip()
     if keyword:
         like = f"%{keyword}%"
+        # 只匹配**帖子在讲什么**：标题、正文、用户打的话题标签。
+        #
+        # 曾经这里还 OR 上了 source_keyword 和 author_name，那是个严重的检索污染源：
+        # source_keyword 记录的是"爬虫搜索时用的词"，不是"帖子在讲的词"。而平台的搜索
+        # 是模糊的——爬虫拿「中山大学 东校宿舍搬迁」去小红书搜，小红书找不到精确匹配，
+        # 就返回一堆泛泛的中大帖子（97岁生日快乐 / 灵异事件 / 摆摊一条街）来凑数，这些
+        # 帖子随后被盖上 source_keyword="中山大学 东校宿舍搬迁"。
+        #
+        # 于是检索「宿舍搬迁」捞回 34 条，其中正文真的提到搬迁的**只有 1 条**（97% 噪声），
+        # 而噪声的热度高达 16 万、真帖只有 588——送进 prompt 的代表帖全是噪声，模型只能
+        # 如实回答"未检索到宿舍搬迁的代表性内容"。线上真实事故。
+        #
+        # 污染率随关键词的具体程度上升（宿舍搬迁 97% / 食堂 54% / 学术不端 0%），
+        # 而越具体的话题恰恰是舆情越该关心的。
+        #
+        # source_keyword 仍然照常入库，它有溯源价值——只是不能拿来做**内容**检索。
         query = query.filter(
             or_(
                 ProcessedPost.title.like(like),
                 ProcessedPost.content.like(like),
-                ProcessedPost.source_keyword.like(like),
-                ProcessedPost.author_name.like(like),
                 ProcessedPost.tags_json.like(like),
             )
         )
@@ -503,6 +519,10 @@ def run_public_opinion_analysis(
         # 贪心之后再把质心足够像的簇合并：没有这一步，同一个话题会裂成多个同名事件。
         merge_threshold=EMBEDDING_MERGE_THRESHOLD,
         align_threshold=EMBEDDING_ALIGN_THRESHOLD,
+        # 时间约束（算术，不是 AI）：一个事件是**某个时候发生的一件事**。embedding 只问
+        # "像不像"，于是把一条 2021 年的疫情封校帖聚进了 2026 年的宿舍搬迁事件（跨度 1782 天），
+        # 而它一条就贡献了该事件 90% 的热度。见 semantic_clustering.DEFAULT_MAX_SPAN_DAYS。
+        max_span_days=EVENT_MAX_SPAN_DAYS,
         # 单帖不成事件（默认 2）：一条帖子自成一簇时不产出 public_event。
         min_cluster_size=EVENT_MIN_CLUSTER_SIZE,
         # LLM 精修：embedding 只知道"像不像"，不知道"是不是一件事"——它把 91 条帖子压成一个
@@ -521,6 +541,12 @@ def run_public_opinion_analysis(
         # 实名举报」（口子还开着）。「已了结 vs 悬而未决」是对内容的判断，时间戳和词表都答不了。
         # 未配 key / 关闭 / 调用失败时逐事件保持"未研判"（因子 1.0 = 排序退化回改造前）。
         lifecycle_assessor=get_lifecycle_assessor() if use_llm else None,
+        # 上面三处（精修 / 风险 / 状态）都是 per-event、per-cluster 的独立 LLM 调用：37 个事件
+        # × 2 + N 个簇 ≈ 90+ 次 × 4~7s ≈ 7~8 分钟，而它们**互不依赖**，几乎全是在等网络。
+        # 并发跑（默认 8 路，.env EVENT_LLM_CONCURRENCY 可调，1 = 退回串行）。
+        # **只改跑得多快，不改跑出什么**：结果按输入顺序回填，与串行版逐位一致——消融实验
+        # （scripts/ablation_event_*.py）重跑必须得到同一份结果，这是硬约束（见 concurrency.py）。
+        llm_concurrency=EVENT_LLM_CONCURRENCY,
     )
     result.warnings = truncation_warnings + list(result.warnings)
     if persist and result.snapshot is not None:

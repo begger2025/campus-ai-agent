@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from backend.database import SessionLocal, init_db, uses_mysql  # noqa: E402
 from backend.logging_setup import setup_logging  # noqa: E402
+from backend.services.embedding import warm_up as warm_up_embedding  # noqa: E402
 from backend.routers.admin import router as admin_router  # noqa: E402
 from backend.routers.admin_events import router as admin_events_router  # noqa: E402
 from backend.routers.admin_evidence import router as admin_evidence_router  # noqa: E402
@@ -55,6 +56,10 @@ async def lifespan(app: FastAPI):
             seed_if_empty(db)
         finally:
             db.close()
+    # 后台预热 embedding 模型：舆情助手的语义检索在请求路径上用它，冷启动实测 26.3 秒
+    # （之后每次 0.015 秒）。不预热的话，重启后第一个提问的用户要替所有人付这 26 秒。
+    # 在后台线程里跑，不拖慢启动（见 embedding.warm_up）。
+    warm_up_embedding()
     yield
 
 

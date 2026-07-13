@@ -39,6 +39,9 @@
 （"dormant"）/ 给不出理由 —— 一律**逐事件**作废，该事件退回"未研判"（因子 1.0 = 改造前的
 行为，而**不是**当成 resolved 沉底），记一条 warning 进 agent_run_logs。一个事件判砸不影响
 别的事件；一个都没判成时，服务层如实把 `lifecycle_mode` 记成 `none`（不许假装 AI 上过）。
+
+**并发地判**（同 llm_risk，见 concurrency.py）：事件之间互不依赖。并发**只发生在调用模型
+那一步**，校验/改写/记 warning 全部回到主线程按**输入顺序**做——结果与串行版逐位一致。
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .concurrency import DEFAULT_LLM_CONCURRENCY, map_calls
 from .llm_risk import DEFAULT_MAX_TEXTS, event_input_texts
 from .recency import VALID_LIFECYCLES
 from .schemas import OpinionEvent, OpinionNote
@@ -85,6 +89,7 @@ def assess_events_lifecycle(
     notes_by_id: Mapping[str, OpinionNote] | None = None,
     warnings: list[str] | None = None,
     max_texts: int = DEFAULT_MAX_TEXTS,
+    concurrency: int | None = DEFAULT_LLM_CONCURRENCY,
 ) -> int:
     """逐事件研判状态；返回成功研判的事件数（0 = 全部退回"未研判"）。
 
@@ -94,27 +99,42 @@ def assess_events_lifecycle(
     就地只写 `lifecycle` / `lifecycle_reason`（+ `extra["lifecycle_assessed_by"]`）。
     risk_*（严重性是事实）、heat_*（实测量）、event_time / recency_weight（时效算术）
     一个字节都不碰。调用方负责在此之后重排（priority 的第三个因子变了）。
+
+    并发口径与 `assess_events_risk` 完全一致：取证（串行）→ 研判（并发）→ 落笔（串行、
+    按输入顺序）。`concurrency=1` 时不开线程池，逐位等价于改造前的 for 循环。
     """
 
     warnings = warnings if warnings is not None else []
     if assessor is None or not events:
         return 0
 
-    assessed = 0
+    pending: list[tuple[OpinionEvent, list[str]]] = []
     for event in events:
         texts = event_input_texts(event, notes_by_id, max_texts=max_texts)
         if not texts:  # 无正文可读：没有输入就没有判断（不许模型凭标题硬猜"结没结"）
             continue
-        try:
-            raw = assessor(event.title, texts)
-        except Exception as exc:  # 超时、网络、SDK 里任何东西
+        pending.append((event, texts))
+    if not pending:
+        return 0
+
+    outcomes = map_calls(
+        lambda item: assessor(item[0].title, item[1]),
+        pending,
+        concurrency=concurrency,
+        thread_name_prefix="llm-lifecycle",
+    )
+
+    assessed = 0
+    for (event, _texts), outcome in zip(pending, outcomes):
+        if outcome.error is not None:  # 超时、网络、SDK 里任何东西
+            exc = outcome.error
             warnings.append(
                 f"llm lifecycle unavailable for event 「{event.title}」, "
                 f"left unassessed (factor 1.0): {type(exc).__name__}: {exc}"
             )
             continue
 
-        verdict = _validate(raw)
+        verdict = _validate(outcome.value)
         if verdict is None:
             warnings.append(
                 f"llm lifecycle returned unusable output for event 「{event.title}」, "

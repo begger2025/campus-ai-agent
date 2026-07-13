@@ -12,6 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from backend.agent.public_opinion_core.concurrency import DEFAULT_LLM_CONCURRENCY
 from backend.agent.public_opinion_core.llm_keywords import (
     DEFAULT_MAX_KEYWORDS_PER_EVENT,
     DEFAULT_TOP_EVENTS,
@@ -19,7 +20,9 @@ from backend.agent.public_opinion_core.llm_keywords import (
 from backend.agent.public_opinion_core.llm_refine import DEFAULT_REFINE_MIN_SIZE
 from backend.agent.public_opinion_core.llm_risk import DEFAULT_MAX_TEXTS as DEFAULT_RISK_MAX_TEXTS
 from backend.agent.public_opinion_core.semantic_clustering import (
+    DEFAULT_MAX_SPAN_DAYS,
     DEFAULT_MERGE_THRESHOLD,
+    MAX_SPAN_DAYS_ENV,
     MERGE_THRESHOLD_ENV,
 )
 
@@ -87,6 +90,84 @@ EMBEDDING_ALIGN_THRESHOLD = _read_float("EMBEDDING_ALIGN_THRESHOLD", 0.75)
 # 「宿舍相关讨论」并列）。合并 pass 负责把它们缝回去；1.0 = 关闭合并。
 EMBEDDING_MERGE_THRESHOLD = _read_float(MERGE_THRESHOLD_ENV, DEFAULT_MERGE_THRESHOLD)
 
+# 一个事件的成员帖时间跨度上限（天）。0 = 关闭（消融基线 / 答辩现场开关）。
+#
+# embedding 只问"像不像"，不问"是不是同一时候发生的"。真实事故：一条 **2021 年**的
+# 「东校区封闭管理」（疫情封校，热度 9839）被聚进 2026 年的「东校区宿舍搬迁」，
+# 跨度 1782 天——而它一条就贡献了该事件 **90% 的热度**，那个热度数字是假的。
+# 「作息调整争议」同病，跨度 1666 天。全库 23% 的帖子是 2024 年以前的，这不是孤例。
+#
+# 详见 semantic_clustering.DEFAULT_MAX_SPAN_DAYS 的论证（为什么是 90 天、为什么用算术）。
+EVENT_MAX_SPAN_DAYS = _read_float(MAX_SPAN_DAYS_ENV, DEFAULT_MAX_SPAN_DAYS)
+
+# ---- 舆情助手的语义检索（字面检索的天花板补丁）----
+#
+# 用户问「东校宿舍搬迁」，库里的事件叫「东校**区**宿舍搬迁」——差一个字，
+# `LIKE '%东校宿舍搬迁%'` 就整个匹配不上（标题/摘要/5 条代表帖没有一个含这个连续子串），
+# 用户拿到"未检索到相关事件数据"。中文的同一件事有无数种说法，LIKE 只认连续子串。
+#
+# 只在**字面颗粒无收**时补位（见 event_read_model.query_published_events 的论证：
+# 实测「学术不端」的语义最高分是错的事件，而字面能正确命中——语义是"认得出改写"，
+# 不是"比字面更准"）。关掉即回到纯字面检索。
+EVENT_SEMANTIC_MATCH_ENABLED = _read_bool("EVENT_SEMANTIC_MATCH_ENABLED", True)
+
+# 余弦阈值 0.65，在**当前 10 个已发布事件**的真实标题上标定（BAAI/bge-small-zh）。
+#
+# 该命中的（改写）                      该拒绝的（库里没有对应事件）
+#   东校宿舍搬迁 → 东校区宿舍搬迁  0.98     宿舍热水 → 宿舍火情通报  0.56  ← 拒绝里最高
+#   东校区换宿舍 → 东校区宿舍搬迁  0.88     宿舍热水之外全 ≤ 0.45
+#   举报副院长   → 耿同学举报副院长 0.84     考研    → 康某论文调查  0.45
+#   搬宿舍      → 东校区宿舍搬迁  0.81     食堂    → 东校区宿舍搬迁 0.43
+#   课间时间缩短 → 中大课间缩短争议 0.76     图书馆   → 东校区宿舍搬迁 0.39
+#   宿舍火灾    → 中大宿舍火情通报  0.70     天气    → 宿舍火情通报  0.32
+#   宿舍着火/起火 → 中大宿舍火情通报 0.67
+#   论文造假    → 中大康某论文调查  0.54  ← **漏网**
+#
+# **诚实的结论：没有一个干净的阈值。** 该命中的最低分（论文造假 0.54）比该拒绝的最高分
+# （宿舍热水 0.56）还低——单靠阈值分不开这两个。0.65 是权衡出来的最优点：
+#     命中 8/9，正确拒绝 5/5。唯一漏的是「论文造假」。
+# 失败方向选对了：**宁可返回空、让它回落帖子层，也不要把「宿舍热水」的提问答成一份火情简报。**
+#
+# （原来定 0.70 会漏掉 4/9——「宿舍着火」「宿舍起火」都被挡在门外，而库里明明有火情事件。）
+EVENT_SEMANTIC_MATCH_THRESHOLD = _read_float("EVENT_SEMANTIC_MATCH_THRESHOLD", 0.65)
+
+# ---- LLM 裁决：只判算术拿不准的那条模糊带 ----
+#
+# 上面那句"没有干净的阈值"不是缺陷描述，是一个**信号**：这件事不是"可测量"的。
+# 余弦回答「有多像」（标量），而用户真正问的是「**是不是**这件事」（判断）。
+# 「宿舍热水」和「宿舍火情」很像但不是一回事；「论文造假」和「康某论文调查」
+# 一点不像却就是一回事——余弦分不开，因为它没有"是不是"的概念。
+#
+#     余弦 ≥ 0.65   -> 直接采纳   （标定集里 8/8 全对，不花钱）
+#     余弦 <  0.45  -> 直接拒绝   （标定集里 3/3 全对：天气 0.32 / 图书馆 0.39 / 食堂 0.43）
+#     0.45 ~ 0.65   -> **LLM 裁决**（3/14 落这儿：考研 0.45、论文造假 0.54、宿舍热水 0.56）
+#
+# 这就是「可测量的用算术，需要判断的用 AI」的递归应用——AI 只被叫来判算术束手无策的那三个。
+EVENT_SEMANTIC_LOW_THRESHOLD = _read_float("EVENT_SEMANTIC_LOW_THRESHOLD", 0.45)
+
+# 关掉即回到纯余弦（消融基线：13/14 -> 开启后 14/14）。
+EVENT_JUDGE_ENABLED = _read_bool("EVENT_JUDGE_ENABLED", True)
+
+# 裁决模型。14 条评测集实测（10 个真实事件标题）：
+#     glm-4-plus    14/14   0.8s   ← 默认
+#     glm-4-air     14/14   1.1s
+#     glm-4-flashx  13/14   0.6s   ← 便宜的 flash 在「论文造假」上和余弦犯同一个错
+#     glm-4-flash   13/14   1.3s   ← 同上
+#     gpt-5.4       14/14   3.6s   （事件研判用的那个，杀鸡用牛刀）
+#     gpt-4o-mini   不可用（InternalServerError）
+# **省钱省不出判断力**：flash 系列快且便宜，但在唯一需要判断的那个 case 上，
+# 它们和余弦一起翻了车。裁决层的全部价值就在那个 case 上，所以不能省这一档。
+#
+# 缺省复用证据采集那套智谱配置（.env 里已有 EVIDENCE_GLM_API_KEY / EVIDENCE_GLM_MODEL）。
+# 注意 base_url：证据采集用的是 /web_search 独立端点，对话要用 OpenAI 兼容的 /v4。
+EVENT_JUDGE_MODEL = os.getenv("EVENT_JUDGE_MODEL") or os.getenv("EVIDENCE_GLM_MODEL") or "glm-4-plus"
+EVENT_JUDGE_BASE_URL = (
+    os.getenv("EVENT_JUDGE_BASE_URL") or "https://open.bigmodel.cn/api/paas/v4"
+)
+EVENT_JUDGE_API_KEY = (
+    os.getenv("EVENT_JUDGE_API_KEY") or os.getenv("EVIDENCE_GLM_API_KEY") or OPENAI_API_KEY
+)
+
 # 成为一个 public_event 至少要有几条帖子。1 = 不压制（单帖也能成事件，旧行为）。
 # 默认 2：一条帖子不是"公共事件"，只是一条帖子——公共事件的最低含义是"不止一个人在说"。
 EVENT_MIN_CLUSTER_SIZE = max(_read_int("EVENT_MIN_CLUSTER_SIZE", 2), 1)
@@ -97,6 +178,17 @@ EVENT_MIN_CLUSTER_SIZE = max(_read_int("EVENT_MIN_CLUSTER_SIZE", 2), 1)
 EVENT_LLM_MODEL = os.getenv("EVENT_LLM_MODEL") or OPENAI_MODEL
 EVENT_LLM_BASE_URL = os.getenv("EVENT_LLM_BASE_URL") or OPENAI_BASE_URL
 EVENT_LLM_API_KEY = os.getenv("EVENT_LLM_API_KEY") or OPENAI_API_KEY
+
+# 事件流水线里 per-event / per-cluster 的 LLM 调用（聚类精修 / 风险研判 / 状态研判）的并发度。
+#
+# **被修的缺陷**：这三处以前是串行的 for 循环——37 个事件 × 2 + N 个簇 ≈ 90+ 次调用，
+# 单次实测 4~7 秒，`scripts/generate_public_events.py` 于是要跑 7~8 分钟。而这些调用**互不
+# 依赖**（判「宿舍火灾有多严重」不需要先知道「食堂涨价」判成了什么），几乎全是在等网络。
+#
+# 8 = 默认（见 core/concurrency.py 的取值论证）：37 ÷ 8 ≈ 5 轮 ≈ 25 秒。
+# 端点限流严（429）就调小；**1 = 退回串行**，且逐位等价于改造前的行为（消融的对照臂）。
+# 并发只改「跑得多快」，不改「跑出什么」：结果按输入顺序回填，与串行版逐位一致。
+EVENT_LLM_CONCURRENCY = max(_read_int("EVENT_LLM_CONCURRENCY", DEFAULT_LLM_CONCURRENCY), 1)
 
 # 关掉即回到纯 embedding 聚类（答辩现场断网/欠费时的开关；不关也会自动降级，见 llm_refine）。
 EVENT_REFINE_ENABLED = _read_bool("EVENT_REFINE_ENABLED", True)

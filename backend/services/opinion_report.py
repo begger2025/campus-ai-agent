@@ -10,6 +10,20 @@ from __future__ import annotations
 from typing import Any
 
 from backend.agent.public_opinion_core import OpinionEvent
+from backend.services.event_read_model import MAX_REPRESENTATIVE_NOTES
+
+
+# prompt 里每个事件带几条代表帖。**必须和存储上限对齐**：
+#   event_post_links       每个事件存 5 条（role='representative'）
+#   event_read_model       取回 5 条（MAX_REPRESENTATIVE_NOTES）
+#   这里                   曾经写死 3 条  ← 静默丢掉 2 条
+#
+# 被丢掉的往往正是最切题的那条。EVT-49「东校区宿舍搬迁」的 5 条代表帖按热度排序，
+# 第 4 条是知乎的「如何看待中山大学强制东校区万逾名学生在同校区内互相搬迁宿舍？」——
+# 11 天前发的、讲的正是事件本身，但它 0 赞 0 评论、热度为 0，排在最后被砍掉；
+# 而占着第 1 个坑的是一条 **2021 年**的「东校区封闭管理」（热度 9839）。
+# 结果模型读到的是 5 年前的封闭管理，读不到 11 天前的强制搬迁。
+PROMPT_MAX_REPRESENTATIVE_NOTES = MAX_REPRESENTATIVE_NOTES
 
 
 def build_event_digest(events: list[OpinionEvent], *, title: str = "校园公共舆情简报") -> str:
@@ -58,7 +72,7 @@ def compact_events_for_llm(events: list[OpinionEvent]) -> list[dict[str, Any]]:
                         **({"top_comments": [c[:100] for c in note.top_comments[:2]]}
                            if getattr(note, "top_comments", None) else {}),
                     }
-                    for note in event.representative_notes[:3]
+                    for note in event.representative_notes[:PROMPT_MAX_REPRESENTATIVE_NOTES]
                 ],
             }
         )

@@ -5,20 +5,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from backend.agent.public_opinion_core.recency import (
-    age_in_days,
-    effective_lifecycle,
-    event_time_from_payload,
-    growth_signal,
-    lifecycle_from_payload,
-    lifecycle_judgement_from_payload,
-    member_times_from_payload,
-    priority_score,
-    recency_weight,
-)
 from backend.database import DATABASE_URL, get_db
 from backend.models import EventPostLink, ProcessedPost, PublicEvent, RawPost
 from backend.schemas import PingData, PostItem, PostListData, ok
+
+# 「一行 public_events 此刻是什么状态」的唯一口径——事件看板和舆情助手共用。
+# 各写一份必然漂移成两个世界，而那正是这次改造要消灭的东西：改造前事件页展示
+# 「东校区宿舍搬迁 medium 风险」，用户在聊天里问同一件事却被告知"未检索到"。
+from backend.services.event_read_model import (
+    recency_fields as _recency_fields,
+    risk_level_of as _risk_level,
+    sort_event_rows,
+)
 
 router = APIRouter(tags=["api"])
 
@@ -33,102 +31,11 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _lifecycle_now(row: PublicEvent, now: datetime) -> tuple[str, str, dict]:
-    """一行的**当下**状态 = LLM 的判断 + 此刻的增长测量，现场合成。
-
-        escalating = ongoing（判断：这件事悬而未决）∧ growing（测量：新帖还在来）
-
-    **为什么在读侧合成、而不是读一个落库的 escalating**：「还在不在长」是 `now` 的函数
-    （和 age_days / recency_weight 一模一样）。把它冻进数据库，一个上周还在发酵的事件就会
-    **永远**挂着「持续发酵」的徽标，哪怕早就没人再发帖了。现算 ⇒ 看板自我纠正。
-
-    库里存的两样东西都不是 now 的函数，所以都是安全的：
-      - `lifecycle_judgement`（模型读帖子判出的"有没有待办动作"）——**判断**；
-      - `member_times`（成员帖的发布时间）——**事实**。
-    老数据（没有这两个键）：judgement 退回读 `lifecycle`（并把老版本落库的 `escalating`
-    降回 `ongoing`，见 effective_lifecycle），member_times 为空 -> growing=False ->
-    不会有任何东西被凭空提升。
-    """
-
-    judgement, reason = lifecycle_judgement_from_payload(row.date_range_json)
-    growth = growth_signal(member_times_from_payload(row.date_range_json), now)
-    return effective_lifecycle(judgement, growth["growing"]), reason, growth
-
-
-def _recency_fields(row: PublicEvent, now: datetime) -> dict:
-    """一个已发布事件的时效性 + 生命周期字段（**读时现算**，不读数据库里的陈年快照）。
-
-    库里只存**事实**和**判断**：`date_range_json.event_time`（成员帖发布时间的中位数）、
-    `member_times`（成员帖的发布时间）、`lifecycle_judgement`（+ 理由；LLM 读帖子判出的
-    "这件事还悬着吗"）。年龄、时效权重、**是否仍在增长**、最终状态和优先级都是 `now` 的
-    函数——冻进数据库第二天就是错的，所以每次请求按当前时刻重算。
-    没有 event_time 的老数据：age 未知（None），权重 1.0——"不知道多老" ≠ "很老"，不许凭空沉底。
-    没有 lifecycle 的老数据：因子 1.0——"不知道结没结" ≠ "已经结了"，同样不许凭空打折。
-    """
-
-    event_time = event_time_from_payload(row.date_range_json)
-    age = age_in_days(event_time, now)
-    weight = recency_weight(age)
-    lifecycle, lifecycle_reason, growth = _lifecycle_now(row, now)
-    return {
-        "event_time": event_time,
-        "age_days": None if age is None else round(age, 1),
-        "recency_weight": round(weight, 6),
-        "lifecycle": lifecycle,
-        "lifecycle_reason": lifecycle_reason,
-        # 「持续发酵」的**证据**：近 21 天几条 / 一共几条 / 速率。徽标背后必须有"凭什么"——
-        # 一个说不出依据的徽标只是一句主张。管理员点开就能看到"近 21 天 3/4 帖"。
-        "growth": growth,
-        "priority_score": priority_score(_risk_level(row), weight, lifecycle),
-    }
-
-
-def sort_event_rows(rows: list[PublicEvent], now: datetime) -> list[PublicEvent]:
-    """前端看板的顺序：**展示优先级**（严重性 × 时效性 × 生命周期）优先，同优先级按热度。
-
-    与核心 `clustering.sort_events` 同一口径
-    （severity_weight × recency_weight × lifecycle_weight），只是这里的输入是数据库行。
-    **必须在这里也排一遍**：核心的排序只决定写库顺序，写完就被 `ORDER BY created_at DESC`
-    冲掉了——前端 `fetchPublishedEvents()` 拿到的是这个查询的顺序，所以"近期舆情优先"和
-    "悬而未决的事不沉底"这两件事，只有在这里生效才算数。
-
-    生命周期这个因子在这里是**现场合成**的（`_lifecycle_now`）：escalating = 判断 ∧ 测量。
-    严重性和热度**不被时间或状态打折**（它们照原样返回给用户展示）；时效性和生命周期只影响顺序。
-    """
-
-    return sorted(
-        rows,
-        key=lambda row: (
-            priority_score(
-                _risk_level(row),
-                recency_weight(
-                    age_in_days(event_time_from_payload(row.date_range_json), now)
-                ),
-                _lifecycle_now(row, now)[0],
-            ),
-            float(row.heat_score or 0.0),
-            int(row.id or 0),
-        ),
-        reverse=True,
-    )
-
-
 def _database_name() -> str:
     try:
         return make_url(DATABASE_URL).database or ""
     except Exception:
         return ""
-
-
-def _risk_level(row: PublicEvent) -> str:
-    if row.risk_level:
-        return row.risk_level
-    score = row.heat_score or 0
-    if score >= 80:
-        return "high"
-    if score >= 50:
-        return "medium"
-    return "low"
 
 
 def _risk_label(level: str) -> str:

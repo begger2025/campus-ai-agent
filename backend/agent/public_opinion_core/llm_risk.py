@@ -33,6 +33,12 @@ UI 上展示、管理员要处置的那个东西。返回的字段就是 `aggreg
 风险等级 / 给一个 0-100 之外的分数 / 给不出任何依据 —— 一律**逐事件**作废，退回该事件的
 规则结果（它已经在 build_event_from_group 里算好了），并记一条 warning 进 agent_run_logs。
 一个事件判砸不影响别的事件（见 `assess_events_risk` 的 try 边界）。
+
+**事件之间互不依赖，所以并发地判**（见 concurrency.py）：判「宿舍火灾有多严重」不需要先
+知道「食堂涨价」判成了什么。37 个事件串行 × 5s ≈ 3 分钟，8 路并发 ≈ 25 秒。但并发**只发生
+在调用模型这一步**——校验、改写事件、记 warning 全部回到主线程、按**输入顺序**做，所以
+结果（含 warnings 的顺序）与串行版逐位一致。这一条是硬约束：这些研判要喂消融实验，
+"任何人重跑都得到同一份结果"是答辩的前提。
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from .clustering import build_agent_summary
+from .concurrency import DEFAULT_LLM_CONCURRENCY, map_calls
 from .schemas import OpinionEvent, OpinionNote
 
 
@@ -109,33 +116,61 @@ def assess_events_risk(
     notes_by_id: Mapping[str, OpinionNote] | None = None,
     warnings: list[str] | None = None,
     max_texts: int = DEFAULT_MAX_TEXTS,
+    concurrency: int | None = DEFAULT_LLM_CONCURRENCY,
 ) -> int:
     """逐事件用 LLM 重判风险；返回成功研判的事件数（0 = 全部退回规则结果）。
 
     就地改写 events 的 risk_level / risk_score / risk_reasons / concerns（以及跟着风险
     走的 agent_summary）。**不动任何热度字段**，也不动 event_key / 成员 / 标题。
     调用方负责在此之后按新风险重排事件（sort_events 的第一排序键就是风险）。
+
+    **三段式，界限是刻意划的**（这是"并发之后结果不变"的全部机制）：
+
+      1. 取证（串行、纯函数）：每个事件读哪几条帖子；没有正文的事件**根本不发调用**
+         （没有输入就没有判断——不许模型凭标题硬编）；
+      2. 研判（**并发**）：唯一慢的一步，也是唯一没有副作用的一步。异常在这里就地收进
+         `Outcome.error`，绝不允许一个事件的超时中断整轮取结果；
+      3. 落笔（串行、按**输入顺序**）：校验、改写事件、记 warning。
+
+    并发只发生在第 2 步，所以事件的顺序、每个事件拿到的研判、warnings 的条数与顺序
+    都和串行版一模一样。`concurrency=1` 时连线程池都不开（逐位等价于改造前的 for 循环）。
     """
 
     warnings = warnings if warnings is not None else []
     if assessor is None or not events:
         return 0
 
-    assessed = 0
+    # 1. 取证：只有读得到正文的事件才值得一次调用。
+    pending: list[tuple[OpinionEvent, list[str]]] = []
     for event in events:
         texts = event_input_texts(event, notes_by_id, max_texts=max_texts)
         if not texts:  # 无正文可读：没有输入就没有判断（不许模型凭标题硬编）
             continue
-        try:
-            raw = assessor(event.title, texts)
-        except Exception as exc:  # 超时、网络、SDK 里任何东西
+        pending.append((event, texts))
+    if not pending:
+        return 0
+
+    # 2. 研判：并发跑，但结果**按输入顺序**回来（见 concurrency.map_calls）。
+    outcomes = map_calls(
+        lambda item: assessor(item[0].title, item[1]),
+        pending,
+        concurrency=concurrency,
+        thread_name_prefix="llm-risk",
+    )
+
+    # 3. 落笔：回到单线程，按事件顺序改写与留痕——warnings 的顺序因此是"事件顺序"，
+    #    而不是"谁先失败"。
+    assessed = 0
+    for (event, _texts), outcome in zip(pending, outcomes):
+        if outcome.error is not None:  # 超时、网络、SDK 里任何东西
+            exc = outcome.error
             warnings.append(
                 f"llm risk unavailable for event 「{event.title}」, "
                 f"kept rule risk: {type(exc).__name__}: {exc}"
             )
             continue
 
-        judgement = _validate(raw)
+        judgement = _validate(outcome.value)
         if judgement is None:
             warnings.append(
                 f"llm risk returned unusable output for event 「{event.title}」, kept rule risk"

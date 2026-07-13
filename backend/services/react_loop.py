@@ -12,6 +12,7 @@ and prompt-injection fencing of every tool observation.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 import json
 from typing import Any, Callable
@@ -23,6 +24,14 @@ from backend.services.prompt_guard import guard_payload
 
 # 工具观察结果超过这个长度就截断，防止一次检索把上下文撑爆。
 OBSERVATION_MAX_CHARS = 4000
+
+# 模型吐出无法解析的内容时，最多花几次真实调用去纠正它。
+#
+# 这个上限不是"洁癖"，是省钱省时间：纠正重试和正常步骤一样，每次都是一次真实的 LLM
+# 往返（实测 6.7 秒）。原实现只挡"**连续**两次坏 JSON"，而任何一次好 JSON 都会把计数
+# 清零，坏 JSON 那条分支又 `continue` 掉、不消耗步数预算——于是"坏-好-坏-好"这个模式
+# 既触发不了熔断、也推不动预算。实测该封顶 6 次调用的场景真的打了 11 次。
+MAX_BAD_JSON_RETRIES = 2
 
 REACT_SYSTEM_PROMPT_TEMPLATE = """你是校园舆情分析 Agent，通过多步调用工具回答复杂问题（如对比多个话题、综合多类信息）。
 
@@ -81,8 +90,43 @@ def run_react(
     *,
     tools: dict[str, ReactTool],
     max_steps: int | None = None,
+    on_step: Callable[[ReactStep], None] | None = None,
 ) -> ReactResult:
+    """多步工具循环（阻塞版）。跑完返回最终结果。
+
+    ``on_step`` 在**每一步工具执行完的当下**被调用一次。
+    需要边跑边把步骤推给前端的场景请直接用 ``iter_react``——它是生成器，
+    不需要回调，也就不需要为了"能 yield"而把工具执行挪到另一个线程
+    （那会把 SQLAlchemy 的 Session 跨线程传，而 Session 不是线程安全的）。
+    """
+
+    result = ReactResult(answer="", steps=[], stop_reason="llm_error")
+    for item in iter_react(message, tools=tools, max_steps=max_steps):
+        if isinstance(item, ReactStep):
+            if on_step is not None:
+                on_step(item)
+        else:
+            result = item
+    return result
+
+
+def iter_react(
+    message: str,
+    *,
+    tools: dict[str, ReactTool],
+    max_steps: int | None = None,
+) -> Iterator["ReactStep | ReactResult"]:
+    """多步工具循环（流式版）。
+
+    每走完一步工具就 ``yield`` 一个 ReactStep，最后 ``yield`` 一个 ReactResult。
+    流式聊天靠它把「正在检索宿舍…」「正在对比食堂…」实时推给前端：一次复杂分析要
+    40 秒左右，用户不该盯着一个假进度条干等——他该看见 Agent 到底在干什么。
+    """
+
     budget = REACT_MAX_STEPS if max_steps is None else max_steps
+    # 真正花钱花时间的是 **LLM 调用次数**，不是"成功的工具动作数"。纠正坏 JSON 同样要打
+    # 一次真实调用，所以它必须也算进总账——否则预算形同虚设（见 MAX_BAD_JSON_RETRIES）。
+    call_budget = budget + MAX_BAD_JSON_RETRIES
     messages = [
         {"role": "system", "content": _build_system_prompt(tools)},
         {"role": "user", "content": f"<user_message>{message}</user_message>"},
@@ -90,17 +134,24 @@ def run_react(
     steps: list[ReactStep] = []
     consecutive_bad = 0
     actions_used = 0
+    llm_calls = 0
 
-    while actions_used < budget:
+    while actions_used < budget and llm_calls < call_budget:
+        llm_calls += 1
         result = call_llm(messages, temperature=0)
         if not (result.content or "").strip():
-            return ReactResult(answer="", steps=steps, stop_reason="llm_error")
+            yield ReactResult(answer="", steps=steps, stop_reason="llm_error")
+            return
 
         data = extract_json_object(result.content)
         if not isinstance(data, dict):
+            # 连续两次说明模型卡死了，直接熔断（这一条是原有语义，保留）。
+            # 但**总账**由上面的 call_budget 兜底：坏 JSON 交替出现时，它同样会耗尽
+            # 调用预算并转入收尾，不会像原来那样无限绕过。
             consecutive_bad += 1
-            if consecutive_bad >= 2:
-                return ReactResult(answer="", steps=steps, stop_reason="llm_error")
+            if consecutive_bad >= MAX_BAD_JSON_RETRIES:
+                yield ReactResult(answer="", steps=steps, stop_reason="llm_error")
+                return
             messages.append({"role": "assistant", "content": result.content})
             messages.append({"role": "user", "content": _CORRECTION_PROMPT})
             continue
@@ -110,7 +161,8 @@ def run_react(
         if "final_answer" in data:
             steps.append(ReactStep(thought=thought))
             answer = str(data.get("final_answer") or "").strip()
-            return ReactResult(answer=answer, steps=steps, stop_reason="answered")
+            yield ReactResult(answer=answer, steps=steps, stop_reason="answered")
+            return
 
         action = str(data.get("action") or "")
         action_input = data.get("action_input")
@@ -118,10 +170,13 @@ def run_react(
 
         if steps and action and steps[-1].action == action and steps[-1].action_input == action_input:
             messages.append({"role": "assistant", "content": result.content})
-            return _force_finalize(messages, steps, "repeated_action")
+            yield _force_finalize(messages, steps, "repeated_action")
+            return
 
         observation = _execute_tool(tools, action, action_input)
-        steps.append(ReactStep(thought=thought, action=action, action_input=action_input, observation=observation))
+        step = ReactStep(thought=thought, action=action, action_input=action_input, observation=observation)
+        steps.append(step)
+        yield step  # 实时推给前端，别攒到最后
         actions_used += 1
         messages.append({"role": "assistant", "content": result.content})
         messages.append(
@@ -135,7 +190,7 @@ def run_react(
             }
         )
 
-    return _force_finalize(messages, steps, "max_steps")
+    yield _force_finalize(messages, steps, "max_steps")
 
 
 def _build_system_prompt(tools: dict[str, ReactTool]) -> str:

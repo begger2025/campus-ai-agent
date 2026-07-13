@@ -10,6 +10,7 @@ from typing import Any
 
 from .adapter import processed_posts_to_notes
 from .clustering import classify_event, cluster_notes, sort_events
+from .concurrency import DEFAULT_LLM_CONCURRENCY
 from .llm_lifecycle import LifecycleAssessor, assess_events_lifecycle
 from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner
 from .llm_risk import DEFAULT_MAX_TEXTS, RiskAssessor, assess_events_risk
@@ -51,6 +52,10 @@ class PublicOpinionAgentService:
         cluster_threshold: float | None = None,
         merge_threshold: float | None = None,
         align_threshold: float | None = None,
+        # 一个事件的成员时间跨度上限（天）。embedding 只问"像不像"，不问"是不是同一时候
+        # 发生的"——一条 2021 年的疫情封校帖曾被聚进 2026 年的宿舍搬迁事件（跨度 1782 天），
+        # 一条就贡献了该事件 90% 的热度。None = 用核心默认值。
+        max_span_days: float | None = None,
         sentiment_classifier: SentimentClassifier | None = None,
         min_cluster_size: int | None = None,
         cluster_refiner: ClusterRefiner | None = None,
@@ -58,6 +63,10 @@ class PublicOpinionAgentService:
         risk_assessor: RiskAssessor | None = None,
         risk_max_texts: int | None = None,
         lifecycle_assessor: LifecycleAssessor | None = None,
+        # 事件级 LLM 调用（精修 / 风险 / 状态）的并发度。这三处都是 per-event / per-cluster
+        # 的独立调用，串行跑就是 90+ 次 × 5s ≈ 7~8 分钟。并发只改**跑得多快**，不改**跑出什么**
+        # （结果按输入顺序回填，逐位一致 —— 见 concurrency.py）。None = 默认 8，1 = 退回串行。
+        llm_concurrency: int | None = None,
         now: datetime | None = None,
         recency_half_life_days: float | None = None,
         growth_window_days: float | None = None,
@@ -109,10 +118,12 @@ class PublicOpinionAgentService:
                 cluster_threshold,
                 merge_threshold,
                 align_threshold,
+                max_span_days,
                 minimum,
                 warnings,
                 cluster_refiner,
                 refine_min_size,
+                llm_concurrency,
             )
             if semantic is not None:
                 events, centroids, suppressed_clusters, refined_clusters, ejected_notes = semantic
@@ -155,6 +166,7 @@ class PublicOpinionAgentService:
                 notes_by_id={note.note_id: note for note in notes},
                 warnings=warnings,
                 max_texts=risk_max_texts if risk_max_texts is not None else DEFAULT_MAX_TEXTS,
+                concurrency=llm_concurrency,
             )
             if risk_assessed:
                 # 一个事件都没判成（全部超时/幻觉）时模式如实记成 rules：降级必须看得见。
@@ -174,6 +186,7 @@ class PublicOpinionAgentService:
                 notes_by_id={note.note_id: note for note in notes},
                 warnings=warnings,
                 max_texts=risk_max_texts if risk_max_texts is not None else DEFAULT_MAX_TEXTS,
+                concurrency=llm_concurrency,
             )
             if lifecycle_assessed:
                 # 一个都没判成（全部超时/幻觉）时如实记成 none：降级必须看得见，不许假装 AI 上过。
@@ -309,10 +322,12 @@ class PublicOpinionAgentService:
         cluster_threshold: float | None,
         merge_threshold: float | None,
         align_threshold: float | None,
+        max_span_days: float | None,
         min_cluster_size: int,
         warnings: list[str],
         cluster_refiner: ClusterRefiner | None = None,
         refine_min_size: int | None = None,
+        llm_concurrency: int | None = None,
     ) -> tuple[list, dict[str, list[float]], int, int, int] | None:
         """Run semantic clustering if an embedder is supplied; None means fall back to rules."""
 
@@ -327,6 +342,10 @@ class PublicOpinionAgentService:
                 "min_cluster_size": min_cluster_size,
                 # None = 不精修：LLM 未配置时这一层是恒等变换（同 embedder/sentiment 的注入口径）。
                 "refiner": cluster_refiner,
+                # 每个够大的簇一次 LLM 调用，簇之间互不依赖 -> 并发跑（结果按簇序回填）。
+                "refine_concurrency": (
+                    DEFAULT_LLM_CONCURRENCY if llm_concurrency is None else llm_concurrency
+                ),
             }
             if cluster_threshold is not None:
                 kwargs["cluster_threshold"] = cluster_threshold
@@ -334,6 +353,8 @@ class PublicOpinionAgentService:
                 kwargs["merge_threshold"] = merge_threshold
             if align_threshold is not None:
                 kwargs["align_threshold"] = align_threshold
+            if max_span_days is not None:
+                kwargs["max_span_days"] = max_span_days
             if refine_min_size is not None:
                 kwargs["refine_min_size"] = refine_min_size
             result = cluster_notes_semantic(notes, [list(vector) for vector in vectors], **kwargs)

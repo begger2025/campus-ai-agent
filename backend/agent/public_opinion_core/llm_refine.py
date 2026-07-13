@@ -37,6 +37,11 @@
   - 漏掉了几条帖子 → **不作废**，漏掉的原样留在一个残余簇里（一条帖子都不许在精修中消失）。
 
 每一种失败都记一条 warning（进 agent_run_logs），退回的是"能用的旧结果"而不是空结果。
+
+**簇之间互不依赖，所以并发地精修**（见 concurrency.py）：模型是一簇一簇看的，判「这 91 条
+帖子里其实是几件事」不需要先知道另一个簇被拆成了什么。并发**只发生在调用模型那一步**——
+选簇、校验编号、拆分/合并/剔除、记 warning 全部回到主线程、按**簇的顺序**做，所以簇的划分、
+输出顺序、质心、warnings 的顺序都与串行版逐位一致。
 """
 
 from __future__ import annotations
@@ -44,6 +49,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from .concurrency import DEFAULT_LLM_CONCURRENCY, Outcome, map_calls
+from .recency import note_time
 from .schemas import OpinionNote
 
 
@@ -106,24 +113,52 @@ def refine_clusters(
     min_size: int = DEFAULT_REFINE_MIN_SIZE,
     max_members: int = DEFAULT_REFINE_MAX_MEMBERS,
     warnings: list[str] | None = None,
+    concurrency: int | None = DEFAULT_LLM_CONCURRENCY,
+    max_span_days: float = 0.0,
 ) -> tuple[list[dict], int, int]:
     """把够大的簇交给 LLM 重新分组；返回（新的簇列表, 被成功精修的簇数, 被剔除的帖子数）。
 
     ``make_cluster`` 由 semantic_clustering 注入（本模块不 import 它，避免循环依赖）：
     拆出来的子簇必须**重算质心**——质心要写进记忆快照供下一次运行对齐，拿父簇的质心
     冒充子簇的，下一轮就会把三个话题又对齐回同一个老事件上。
+
+    **三段式**（同 llm_risk / llm_lifecycle）：选簇（串行）→ 精修（**并发**）→ 组装（串行，
+    按簇的顺序）。并发只发生在调用模型那一步，所以 warnings 的顺序、被剔除的帖子、
+    最终的簇划分与串行版逐位一致。`concurrency=1` 时不开线程池。
     """
 
     warnings = warnings if warnings is not None else []
     if refiner is None or not clusters:
         return clusters, 0, 0
 
+    minimum = max(int(min_size), 2)
+
+    # 1. 选簇：够大（拆得出两个事件）且不过大（编号越多模型越容易数错）的才值得一次调用。
+    #    这里只做判断、不记 warning——留痕要按簇的顺序发生，那是第 3 步的事。
+    pending: list[tuple[int, list[str]]] = []
+    for index, cluster in enumerate(clusters):
+        size = len(cluster["notes"])
+        if minimum <= size <= max_members:
+            pending.append((index, refiner_input_texts(cluster["notes"])))
+
+    # 2. 精修：并发跑，结果按输入顺序回来（见 concurrency.map_calls）。
+    outcomes = map_calls(
+        lambda item: refiner(item[1]),
+        pending,
+        concurrency=concurrency,
+        thread_name_prefix="llm-refine",
+    )
+    outcome_by_index: dict[int, Outcome] = {
+        index: outcome for (index, _texts), outcome in zip(pending, outcomes)
+    }
+
+    # 3. 组装：回到单线程，按**簇的顺序**校验、拆分、剔除、留痕。
     refined_count = 0
     ejected_count = 0
     result: list[dict] = []
-    for cluster in clusters:
+    for index, cluster in enumerate(clusters):
         notes = cluster["notes"]
-        if len(notes) < max(int(min_size), 2):
+        if len(notes) < minimum:
             result.append(cluster)
             continue
         if len(notes) > max_members:
@@ -133,16 +168,16 @@ def refine_clusters(
             result.append(cluster)
             continue
 
-        outcome = _refine_one(cluster, refiner, warnings, make_cluster)
-        if outcome is None:
+        refined = _refine_one(cluster, outcome_by_index[index], warnings, make_cluster)
+        if refined is None:
             result.append(cluster)
             continue
-        groups, ejected = outcome
+        groups, ejected = refined
         result.extend(groups)
         refined_count += 1
         ejected_count += ejected
 
-    result = _merge_same_topic(result, make_cluster)
+    result = _merge_same_topic(result, make_cluster, max_span_days)
     # 输出顺序必须唯一（和 _merge_clusters 出口一致）：按（成员数降序, 签名）排。
     result.sort(key=lambda item: (-len(item["notes"]), _signature(item)))
     return result, refined_count, ejected_count
@@ -151,12 +186,24 @@ def refine_clusters(
 def _merge_same_topic(
     clusters: list[dict],
     make_cluster: Callable[[list[tuple[OpinionNote, int, list[float]]]], dict],
+    max_span_days: float = 0.0,
 ) -> list[dict]:
     """标题相同的话题合成一个事件（模型是一簇一簇看的，看不见别的簇）。
 
     真实数据上：两个 embedding 簇各自被认出「中大作息调整争议」——同一件校园争议本来就
     被切在两个簇里。不合的话事件列表里并排站着两个同名事件，和这次要修的缺陷（4 个
     「宿舍相关讨论」）是同一个毛病，只是换了个来源。质心按合并后的成员重算。
+
+    **但合并必须守时间窗。** 这是整条流水线上时间约束的最后一个洞：贪心和质心合并都在
+    父簇层面守住了窗，而这里是**跨父簇**把子簇拼起来的——子簇是父簇的子集、跨度只会缩小，
+    所以能跨年的只可能是从这条路漏出去的。真实干跑里它漏了两个：
+
+        2024 年的簇 → LLM 起子话题「中大招生宣传」
+        2025 年的簇 → LLM 又起子话题「中大招生宣传」
+        合并 → 跨度 384 天
+
+    模型看不见日期（送进去的只有标题），它没法不这么干。用一行减法拦住即可。
+    分组内按时间贪心装箱：同期的照常合并，隔了太久的各自成事件。
     """
 
     by_title: dict[str, list[dict]] = {}
@@ -172,20 +219,68 @@ def _merge_same_topic(
         if len(group) == 1:
             merged.append(group[0])
             continue
-        combined = make_cluster([member for cluster in group for member in cluster["members"]])
-        combined["llm_title"] = title
-        combined["llm_miscellaneous"] = any(cluster.get("llm_miscellaneous") for cluster in group)
-        merged.append(combined)
+
+        # 按时间窗把同名的子簇分箱：能装进同一个箱子的才合并。
+        # 按最早成员时间排序后顺序装箱——同期的自然落进同一箱，隔了几年的各成一箱。
+        bins: list[list[dict]] = []
+        for cluster in sorted(group, key=_earliest_time_key):
+            for bucket in bins:
+                members = [m for c in bucket for m in c["members"]] + cluster["members"]
+                if _within_span(members, max_span_days):
+                    bucket.append(cluster)
+                    break
+            else:
+                bins.append([cluster])
+
+        for bucket in bins:
+            if len(bucket) == 1:
+                merged.append(bucket[0])
+                continue
+            combined = make_cluster([m for cluster in bucket for m in cluster["members"]])
+            combined["llm_title"] = title
+            combined["llm_miscellaneous"] = any(c.get("llm_miscellaneous") for c in bucket)
+            merged.append(combined)
     return merged
+
+
+def _earliest_time_key(cluster: dict) -> tuple[int, str]:
+    """簇里最早的成员时间；没有时间戳的排最后（不参与时间分箱的先后）。"""
+
+    times = [t for t in (note_time(note) for note, _i, _v in cluster["members"]) if t is not None]
+    if not times:
+        return (1, "")
+    return (0, min(times).isoformat())
+
+
+def _span_days(members: list[tuple[OpinionNote, int, list[float]]]) -> float | None:
+    times = [t for t in (note_time(note) for note, _i, _v in members) if t is not None]
+    if len(times) < 2:
+        return None
+    return (max(times) - min(times)).total_seconds() / 86400.0
+
+
+def _within_span(
+    members: list[tuple[OpinionNote, int, list[float]]], max_span_days: float
+) -> bool:
+    """这组成员放在一个事件里，时间上说得通吗？（语义同 semantic_clustering._within_span）"""
+
+    if max_span_days <= 0:
+        return True
+    span = _span_days(members)
+    return span is None or span <= max_span_days
 
 
 def _refine_one(
     cluster: dict,
-    refiner: ClusterRefiner,
+    outcome: Outcome,
     warnings: list[str],
     make_cluster: Callable[[list[tuple[OpinionNote, int, list[float]]]], dict],
 ) -> tuple[list[dict], int] | None:
-    """精修一个簇；None = 这次不可信，调用方保留原簇。
+    """用一个簇**已经拿回来的**模型输出去改写它；None = 这次不可信，调用方保留原簇。
+
+    ``outcome`` 是 `refine_clusters` 并发跑完的结果（值或异常）——本函数**不再自己发调用**：
+    模型调用是唯一慢的一步，它归线程池；而这里做的是校验和改写真实数据，必须在单线程里、
+    按簇的顺序发生（warnings 的顺序、剔除的记账都依赖它）。
 
     返回（子簇列表, 被剔除的帖子数）。**离群剔除**：模型判为"哪个话题都不属于"的帖子
     不进任何话题，各自单独成簇——一条无关的帖子不是"公共事件"，它随即被既有的
@@ -195,16 +290,15 @@ def _refine_one(
 
     members = cluster["members"]
     notes = cluster["notes"]
-    try:
-        raw = refiner(refiner_input_texts(notes))
-    except Exception as exc:  # 超时、网络、SDK 里任何东西
+    if outcome.error is not None:  # 超时、网络、SDK 里任何东西
+        exc = outcome.error
         warnings.append(
             f"llm refine unavailable for a {len(notes)}-note cluster, "
             f"kept embedding clusters: {type(exc).__name__}: {exc}"
         )
         return None
 
-    validated = _validate_topics(raw, len(notes))
+    validated = _validate_topics(outcome.value, len(notes))
     if validated is None:
         warnings.append(
             f"llm refine returned unusable output for a {len(notes)}-note cluster, "

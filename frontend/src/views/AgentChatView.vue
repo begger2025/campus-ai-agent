@@ -80,7 +80,7 @@
             <span class="loading-stage">{{ loadingStage }}</span>
           </div>
           <div class="loading-sub">
-            已用时 {{ elapsedLabel }} · 复杂问题可能需要 1~3 分钟，请勿刷新页面
+            已用时 {{ elapsedLabel }} · 正文一开始生成就会实时显示
           </div>
           <div class="loading-track">
             <span class="loading-glow"></span>
@@ -114,7 +114,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -125,7 +125,7 @@ import {
   TrendCharts,
   Warning,
 } from '@element-plus/icons-vue'
-import { postAgentChat } from '@/api/agentChat'
+import { streamAgentChat } from '@/api/agentChat'
 import { renderMarkdown } from '@/utils/markdown'
 import BrandLogo from '@/components/BrandLogo.vue'
 
@@ -138,6 +138,8 @@ const loading = ref(false)
 const listEl = ref(null)
 // 点过"新对话"后，下一条消息带 reset 让后端清空会话记忆
 const pendingReset = ref(false)
+// 当前进行中的流；离开页面时 abort，别让请求悬着
+let streamHandle = null
 
 function startNewConversation() {
   messages.value = []
@@ -164,9 +166,12 @@ function intentLabel(intent) {
   return INTENT_LABELS[intent] || intent
 }
 
-// ——— 长等待体验：计时 + 阶段文案（仅 UI 状态，不影响请求） ———
+// ——— 等待期的进度显示 ———
+// 改流式之前，这里是按 elapsed 秒数**猜**阶段文案的（"8 秒了，那大概在检索吧"）——
+// 一个会说谎的进度条。现在后端会实时告诉我们它到底在干什么，直接说真话。
 const elapsed = ref(0)
 let elapsedTimer = null
+const liveStage = ref('')
 
 watch(loading, (active) => {
   if (active) {
@@ -182,14 +187,17 @@ watch(loading, (active) => {
 
 onBeforeUnmount(() => {
   if (elapsedTimer) clearInterval(elapsedTimer)
+  streamHandle?.abort()
 })
 
-const loadingStage = computed(() => {
-  if (elapsed.value < 8) return '正在理解你的问题'
-  if (elapsed.value < 30) return '正在检索相关帖子与事件'
-  if (elapsed.value < 90) return '正在进行多步推理分析'
-  return '复杂分析仍在继续，就快好了'
-})
+const TOOL_LABELS = {
+  search_notes: '检索原始帖子',
+  hotspots: '聚合热点事件',
+  risks: '排查风险事件',
+  overview: '统计全局概览',
+}
+
+const loadingStage = computed(() => liveStage.value || '正在理解你的问题')
 
 const elapsedLabel = computed(() => {
   const m = Math.floor(elapsed.value / 60)
@@ -210,27 +218,74 @@ async function send(preset) {
   draft.value = ''
   messages.value.push({ role: 'user', text })
   loading.value = true
+  liveStage.value = '正在理解你的问题'
   await scrollToBottom()
+
+  // 占位气泡：正文一到就往里追加，用户看着它一个字一个字长出来。
+  const bubble = reactive({
+    role: 'agent',
+    text: '',
+    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null },
+  })
+  let bubbleShown = false
+  let streamError = null
+
+  const showBubble = () => {
+    if (!bubbleShown) {
+      messages.value.push(bubble)
+      bubbleShown = true
+      loading.value = false // 正文开始流了，收起等待动画
+    }
+  }
+
+  streamHandle = streamAgentChat(text, {
+    reset: pendingReset.value,
+    onEvent: (event, data) => {
+      if (event === 'meta') {
+        bubble.meta.intent = data.intent
+        bubble.meta.keyword = data.keyword
+        bubble.meta.route_source = data.route_source
+        liveStage.value =
+          data.intent === 'complex_analysis'
+            ? '正在规划多步推理'
+            : `正在生成${INTENT_LABELS[data.intent] || '回答'}`
+      } else if (event === 'step') {
+        // ReAct 每走完一步就到——这是真实进度，不是猜的
+        bubble.meta.steps.push(data)
+        const tool = TOOL_LABELS[data.action] || data.action
+        const kw = data.action_input?.keyword
+        liveStage.value = kw ? `正在${tool}：「${kw}」` : `正在${tool}`
+      } else if (event === 'delta') {
+        showBubble()
+        bubble.text += data.text
+        scrollToBottom()
+      } else if (event === 'done') {
+        showBubble()
+        bubble.meta.steps = data.steps || bubble.meta.steps
+        bubble.meta.degraded = data.degraded || false
+        bubble.meta.review = data.review || null
+      } else if (event === 'error') {
+        streamError = new Error(data.message || '对话失败')
+      }
+    },
+  })
+
   try {
-    const data = await postAgentChat(text, { reset: pendingReset.value })
+    await streamHandle.promise
     pendingReset.value = false
-    messages.value.push({
-      role: 'agent',
-      text: data.answer,
-      meta: {
-        intent: data.intent,
-        keyword: data.keyword,
-        route_source: data.route_source,
-        steps: data.steps || [],
-        degraded: data.degraded || false,
-        review: data.review || null,
-      },
-    })
+    if (streamError) throw streamError
   } catch (error) {
+    if (error?.name === 'AbortError') return // 用户离开页面，不是错误
     ElMessage.error(error?.message || '对话失败，请稍后重试')
-    messages.value.push({ role: 'agent', text: '抱歉，本次分析失败了，请稍后重试。', meta: null })
+    if (!bubbleShown) {
+      messages.value.push({ role: 'agent', text: '抱歉，本次分析失败了，请稍后重试。', meta: null })
+    } else if (!bubble.text) {
+      bubble.text = '抱歉，本次分析失败了，请稍后重试。'
+    }
   } finally {
+    streamHandle = null
     loading.value = false
+    liveStage.value = ''
     await scrollToBottom()
   }
 }

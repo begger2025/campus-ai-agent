@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -67,38 +68,47 @@ class PublicChatRequest(BaseModel):
     reset: bool = False
 
 
+def _log_chat_query(db: Session, user_id: str, message: str, data: dict) -> None:
+    """智能选题信号：成功路径落一条提问日志；写失败绝不影响对话主流程。"""
+
+    try:
+        if data.get("intent") == "search":
+            hit_count = len(data.get("notes") or [])
+        else:
+            hit_count = len(data.get("events") or [])
+        keyword = str(data.get("keyword") or "")
+        # search 兜底会把整句回显为 keyword；整句不是话题词，置空让 planner 忽略（防污染需求信号）。
+        if keyword == message:
+            keyword = ""
+        record_chat_query(
+            db,
+            user_id=user_id,
+            message=message,
+            intent=str(data.get("intent") or ""),
+            keyword=keyword,
+            hit_count=hit_count,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 @router.post("/agent/public/chat")
 def chat_public_opinion(
     payload: PublicChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """对话式舆情助手：意图路由 + ReAct 多步工具循环，只读不写库。"""
+    """对话式舆情助手：意图路由 + ReAct 多步工具循环，只读不写库。
+
+    非流式版：整篇生成完才返回。前端默认走 /agent/public/chat/stream（流式），
+    这条保留给不支持流式的调用方，也是流式失败时的回退路径。
+    """
 
     try:
         service = OpinionChatService(db)
         data = service.chat(payload.message, user_id=str(current_user.id), reset=payload.reset)
-        # 智能选题信号：成功路径落一条提问日志；写失败绝不影响对话主流程。
-        try:
-            if data.get("intent") == "search":
-                hit_count = len(data.get("notes") or [])
-            else:
-                hit_count = len(data.get("events") or [])
-            keyword = str(data.get("keyword") or "")
-            # search 兜底会把整句回显为 keyword；整句不是话题词，置空让 planner 忽略（防污染需求信号）。
-            if keyword == payload.message:
-                keyword = ""
-            record_chat_query(
-                db,
-                user_id=str(current_user.id),
-                message=payload.message,
-                intent=str(data.get("intent") or ""),
-                keyword=keyword,
-                hit_count=hit_count,
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
+        _log_chat_query(db, str(current_user.id), payload.message, data)
         return ok(data)
     except Exception as exc:
         db.rollback()
@@ -114,6 +124,71 @@ def chat_public_opinion(
         except Exception:
             db.rollback()
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _sse(event: str, payload: dict) -> str:
+    """一条 SSE 记录。
+
+    data 必须压成**单行** JSON：SSE 用换行分隔字段、空行分隔事件，正文里的裸换行
+    会把一条消息劈成两条。json.dumps 默认就会把 \\n 转义成 \\\\n，所以只要不开 indent 即可。
+    """
+
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/agent/public/chat/stream")
+def chat_public_opinion_stream(
+    payload: PublicChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """对话式舆情助手（流式）。
+
+    实测：简报意图非流式要 43 秒才出现第一个字（路由 4.2s + 生成 19.4s + AI 审校 19.4s），
+    用户全程盯着一个按秒数猜出来的假进度条。流式后 2.7 秒开始出字，进度条说的是真话。
+
+    事件：meta（意图）→ step（ReAct 每步）→ delta（正文增量）→ done（事件/引用/审校）。
+    """
+
+    user_id = str(current_user.id)
+
+    def event_stream():
+        final: dict = {}
+        try:
+            service = OpinionChatService(db)
+            for event, data in service.chat_stream(payload.message, user_id=user_id, reset=payload.reset):
+                if event == "done":
+                    final = data
+                yield _sse(event, data)
+        except Exception as exc:
+            # 已经开始流了，HTTP 状态码早就发出去了——只能把错误作为一个事件送下去。
+            db.rollback()
+            try:
+                write_system_log(
+                    db,
+                    level="error",
+                    module="agent",
+                    message="public opinion chat stream failed",
+                    detail={"message": payload.message[:100], "error": str(exc)},
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+            yield _sse("error", {"message": str(exc)})
+            return
+
+        if final:
+            _log_chat_query(db, user_id, payload.message, final)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # nginx 默认会缓冲上游响应，缓冲住了流式就等于没有——必须显式关掉。
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/agent/public/analyze")

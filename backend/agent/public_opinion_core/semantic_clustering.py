@@ -35,8 +35,31 @@ import math
 import re
 
 from .clustering import build_event_from_group, note_rank_key, sort_events
+from .concurrency import DEFAULT_LLM_CONCURRENCY
 from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner, refine_clusters
+from .recency import note_time
 from .schemas import MemorySnapshot, OpinionEvent, OpinionNote
+
+
+# 一个事件的成员帖，时间跨度不得超过这么多天。
+#
+# 为什么需要它：embedding 只问"像不像"，从不问"是不是同一时候发生的"。真实事故——
+# 一条 **2021 年**的「中山大学东校区封闭管理」（疫情封校，热度 9839）和 2026 年的
+# 「东校区宿舍搬迁」被聚成了一个事件，跨度 **1782 天**。语义上它俩确实接近（都是
+# "东校区 + 管理措施 + 影响学生"），但**一个事件是某个时候发生的一件事**。
+# 后果：该事件对外宣称的热度 10982，其中 90% 来自那条 5 年前的疫情帖。
+# EVT-57「作息调整争议」同病，跨度 1666 天。
+#
+# 为什么用算术而不是 LLM：项目的原则是「可测量的用算术，需要判断的用 AI」。
+# "这两条帖子是不是一个话题"需要判断 → embedding；"它们差了 5 年吗"**可测量** → 减法。
+# （LLM 精修也拆不掉它：送进模型的只有标题，模型根本不知道哪条是 2021 年的。）
+#
+# 90 天怎么来的：线上 5 个健康事件的跨度是 0 / 2 / 2 / 5 / 42 天，最宽的是
+# EVT-77「东校区宿舍火情」的 42 天。取 2 倍余量，既容得下真实的慢燃事件，
+# 又足以把 1782 天和 1666 天那两个拆开。
+# 0 或负数 = 关闭（消融基线 / 答辩现场开关）。
+DEFAULT_MAX_SPAN_DAYS = 90.0
+MAX_SPAN_DAYS_ENV = "EVENT_MAX_SPAN_DAYS"
 
 
 # 0.65：聚类黄金集上成对 F1 最优（51.7%→65.7%，P=100%），与 fixture 平台期
@@ -101,13 +124,15 @@ def cluster_notes_semantic(
     min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
     refiner: ClusterRefiner | None = None,
     refine_min_size: int = DEFAULT_REFINE_MIN_SIZE,
+    refine_concurrency: int | None = DEFAULT_LLM_CONCURRENCY,
+    max_span_days: float = DEFAULT_MAX_SPAN_DAYS,
 ) -> SemanticClusterResult:
     if len(notes) != len(vectors):
         raise ValueError(f"notes/vectors length mismatch: {len(notes)} != {len(vectors)}")
     if not notes:
         return SemanticClusterResult()
 
-    clusters = _cluster(notes, vectors, cluster_threshold, merge_threshold)
+    clusters = _cluster(notes, vectors, cluster_threshold, merge_threshold, max_span_days)
 
     # LLM 精修：embedding 只会看"像不像"，不会看"是不是一件事"。它把 91 条帖子压成一个簇
     # 并按词频 top-1 命名成「饭堂相关讨论」（里面没有一条食堂帖）。精修在**压制之前**跑：
@@ -116,6 +141,7 @@ def cluster_notes_semantic(
     # 精修还负责**离群剔除**：模型判为"哪个话题都不属于"的帖子（火灾簇里那张 2023 年的
     # 宿舍照片）被移出事件、各自单独成簇，随即被下面的 min_cluster_size 压制——
     # 一条无关的帖子不是公共事件。帖子本身仍在语料里（情感/热度照算），只是不再当证据。
+    # 簇与簇之间互不依赖，精修调用并发跑（结果按簇序回填，与串行逐位一致——见 llm_refine）。
     refine_warnings: list[str] = []
     clusters, refined, ejected = refine_clusters(
         clusters,
@@ -123,6 +149,11 @@ def cluster_notes_semantic(
         make_cluster=_make_cluster,
         min_size=refine_min_size,
         warnings=refine_warnings,
+        concurrency=refine_concurrency,
+        # 精修的**跨父簇同名合并**是时间约束的最后一个洞：贪心和质心合并都在父簇层面守住了
+        # 窗，而它是跨父簇拼子簇的。真实干跑里它漏了「中大招生宣传」（384 天）和
+        # 「零散杂项帖」（94 天）出去。模型看不见日期，拦不住——只能在这里用减法拦。
+        max_span_days=max_span_days,
     )
 
     # 压制发生在"建事件"之前：不够大的簇不进对齐、不产出事件、也不留簇中心——
@@ -135,9 +166,19 @@ def cluster_notes_semantic(
     events: list[OpinionEvent] = []
     centroids: dict[str, list[float]] = {}
     used_titles: set[str] = set()
+    # 继承来的 key 先占坑：它们是跨轮次身份的锚（一个已发布事件靠它保住 status）。
+    # 若让新 key 先来先得，一个新簇可能抢走某个已发布事件的 key，把后者挤成带后缀的
+    # 陌生 key —— 那个事件就在看板上变成孤儿了。
+    used_keys: set[str] = {key for key, _title in inherited.values()}
+
     for index, cluster in enumerate(kept):
         group_notes = cluster["notes"]
         event_key, title = inherited.get(index) or _new_key_and_title(group_notes)
+        # key 必须在本轮内唯一：persist_public_events 拿 event_key 做 upsert 主键，
+        # 撞车 = 事件行互相覆盖 + 两个簇的链接叠加进同一个事件（见 _disambiguate_key）。
+        if index not in inherited:
+            event_key = _disambiguate_key(event_key, group_notes, used_keys)
+        used_keys.add(event_key)
         # LLM 给的标题优先于词频标题、也优先于快照里继承来的旧标题：event_key 负责"还是同一件事"，
         # 标题负责"这件事是什么"——而旧快照里存的正是本次要修掉的那批错标题。
         title = cluster.get("llm_title") or title
@@ -190,13 +231,22 @@ def _cluster(
     vectors: list[list[float]],
     threshold: float,
     merge_threshold: float,
+    max_span_days: float = DEFAULT_MAX_SPAN_DAYS,
 ) -> list[dict]:
     """贪心分配 + 质心合并，直到没有可合的一对。"""
 
-    return _merge_clusters(_greedy_cluster(notes, vectors, threshold), merge_threshold)
+    return _merge_clusters(
+        _greedy_cluster(notes, vectors, threshold, max_span_days),
+        merge_threshold,
+        max_span_days,
+    )
 
 
-def _merge_clusters(clusters: list[dict], merge_threshold: float) -> list[dict]:
+def _merge_clusters(
+    clusters: list[dict],
+    merge_threshold: float,
+    max_span_days: float = DEFAULT_MAX_SPAN_DAYS,
+) -> list[dict]:
     """凝聚式后合并：反复把质心最像的一对簇合成一个，直到没有一对达到 merge_threshold。
 
     贪心是**单趟**的：每条帖子只在"当时已经存在的簇"里挑一个最像的，挑不到就新开一簇，
@@ -220,6 +270,11 @@ def _merge_clusters(clusters: list[dict], merge_threshold: float) -> list[dict]:
             for right in range(left + 1, len(working)):
                 similarity = _dot(working[left]["centroid"], working[right]["centroid"])
                 if similarity < best_similarity - _EPSILON:
+                    continue
+                # 合并趟也守时间窗——否则贪心刚按年份拆开的两个簇，这里又给缝回去。
+                if not _within_span(
+                    working[left]["members"] + working[right]["members"], max_span_days
+                ):
                     continue
                 tiebreak = (_signature(working[left]), _signature(working[right]))
                 # 数学上并列的相似度（比如三对夹角都是 20°）在浮点里并不逐位相等，
@@ -281,10 +336,38 @@ def _signature(cluster: dict) -> tuple[str, ...]:
     return tuple(sorted(note.note_id for note in cluster["notes"]))
 
 
+def _span_days(members: list[tuple[OpinionNote, int, list[float]]]) -> float | None:
+    """一组成员的时间跨度（天）。没有任何可解析时间戳时返回 None。"""
+
+    times = [t for t in (note_time(note) for note, _index, _vector in members) if t is not None]
+    if len(times) < 2:
+        return None
+    return (max(times) - min(times)).total_seconds() / 86400.0
+
+
+def _within_span(
+    members: list[tuple[OpinionNote, int, list[float]]], max_span_days: float
+) -> bool:
+    """这组成员放在一个事件里，时间上说得通吗？
+
+    约束的是**整簇的跨度**（max - min），不是"离某个成员有多远"。后者可以被接力绕过：
+    A(第0天) - B(第80天) - C(第160天)，每一步都在窗口内，但 A 和 C 差了 160 天。
+
+    没有时间戳的帖子**不参与判定、也不被排除**——"不知道多老" ≠ "很老"
+    （与 recency.age_in_days 的 None 语义一致）。
+    """
+
+    if max_span_days <= 0:
+        return True  # 关掉时间约束（消融基线 / 现场开关）
+    span = _span_days(members)
+    return span is None or span <= max_span_days
+
+
 def _greedy_cluster(
     notes: list[OpinionNote],
     vectors: list[list[float]],
     threshold: float,
+    max_span_days: float = DEFAULT_MAX_SPAN_DAYS,
 ) -> list[dict]:
     # 谁先当簇种子是"选择"，按可跨平台比较的 heat_rank 排（高互动量平台不再天然占先）。
     # 末位加 note_id：note_rank_key 是三个浮点数，真实数据里大量并列（老数据全是 0），
@@ -298,19 +381,33 @@ def _greedy_cluster(
     clusters: list[dict] = []
     for i in order:
         vector = _normalize(vectors[i])
-        best_index = None
-        best_similarity = 0.0
-        for index, cluster in enumerate(clusters):
-            similarity = _dot(vector, cluster["centroid"])
-            if similarity > best_similarity:
-                best_index, best_similarity = index, similarity
         member = (notes[i], i, vector)
-        if best_index is None or best_similarity < threshold:
-            clusters.append(_make_cluster([member]))
-        else:
+
+        # 候选簇按相似度降序试：最像的那个若时间上说不通（并簇之后跨度会超窗），
+        # **退而求其次试下一个**，而不是直接另开新簇——同一个话题在不同年份各自成事件，
+        # 新帖该落到同期的那个事件上，而不是因为最像的是那个老事件就被迫独立。
+        candidates = sorted(
+            (
+                (_dot(vector, cluster["centroid"]), index)
+                for index, cluster in enumerate(clusters)
+            ),
+            key=lambda pair: (-pair[0], pair[1]),
+        )
+
+        joined = False
+        for similarity, index in candidates:
+            if similarity < threshold:
+                break  # 已按相似度降序，后面只会更低
+            if not _within_span(clusters[index]["members"] + [member], max_span_days):
+                continue  # 语义像，但差了好几年——不是同一件事
             # 质心按成员集合重算（见 _make_cluster），不做增量累加：
             # 增量累加的结果取决于成员加入顺序，那正是这次要拆掉的东西。
-            clusters[best_index] = _make_cluster(clusters[best_index]["members"] + [member])
+            clusters[index] = _make_cluster(clusters[index]["members"] + [member])
+            joined = True
+            break
+
+        if not joined:
+            clusters.append(_make_cluster([member]))
     return clusters
 
 
@@ -405,6 +502,29 @@ def _disambiguate_title(title: str, group_notes: list[OpinionNote], used: set[st
 def _truncate(base: str) -> str:
     # 无关键词时代表帖标题可能是整段原文，截断后再做事件标题。
     return base[:20] + "…" if len(base) > 20 else base
+
+
+def _disambiguate_key(key: str, group_notes: list[OpinionNote], used: set[str]) -> str:
+    """撞车的 event_key 用**成员集合**消歧；没撞车的原样返回。
+
+    为什么会撞：``_new_key_and_title`` 只哈希"热度最高那条成员帖的标题"。两个不同的簇
+    完全可能有同名的头帖（同一篇文章在不同年份被转发）——改造前它俩本来在一个簇里、
+    不会撞，**时间窗按年份把它们拆开之后，两个簇各自拿同一个标题去算 key，撞了**。
+    真实数据上重跑出 65 个事件却只有 60 个不同的 key。
+
+    撞车的代价不是"标题重复"这么轻：``persist_public_events`` 拿 event_key 做 upsert
+    主键，于是**事件行互相覆盖**（source_count 只剩一个）、**两个簇的链接全写进同一个
+    事件**（3 + 2 = 5 条）。线上表现是已发布的「项飙中大对谈」里混进了「广州雨天好去处」。
+
+    为什么不干脆全部改成按成员集合哈希：那会让**每一个** key 都变，跨轮次记忆对齐全部
+    失效，已发布事件一夜之间变成孤儿。所以保留按标题的 key（稳定性），只在真撞车时加后缀。
+    """
+
+    if key not in used:
+        return key
+    members = "\n".join(sorted(note.note_id for note in group_notes))
+    suffix = hashlib.sha1(members.encode("utf-8")).hexdigest()[:6]
+    return f"{key}-{suffix}"
 
 
 def _new_key_and_title(group_notes: list[OpinionNote]) -> tuple[str, str]:
