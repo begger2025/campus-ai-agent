@@ -65,7 +65,9 @@
                   </el-tag>
                 </div>
                 <div class="heat-row">
-                  <div class="heat-track">
+                  <!-- 热度条是**对比**工具：只有一个事件时没有可比对象，条子必然满格、
+                       毫无信息量还像卡住的进度条——单事件只报数字 -->
+                  <div v-if="msg.meta.events.length >= 2" class="heat-track">
                     <span class="heat-fill" :style="{ width: heatWidth(ev, msg.meta.events) }"></span>
                   </div>
                   <span class="heat-value">热度 {{ Math.round(ev.heat_score || 0) }} · {{ ev.source_count || 0 }} 条</span>
