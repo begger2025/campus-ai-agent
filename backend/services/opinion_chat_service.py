@@ -130,7 +130,20 @@ class OpinionChatService:
             self._notes_cache[keyword] = analyze_notes_sentiment_and_risk(score_notes(notes))
         return self._notes_cache[keyword]
 
-    def _events(self, keyword: str = "") -> list[OpinionEvent]:
+    def _published_events(self, keyword: str = "", limit: int = EVENT_TIER_LIMIT) -> list[OpinionEvent]:
+        """事件层（已发布的 LLM 研判事件），查库故障时返回空。
+
+        单独抽出来是因为它有两个消费方，且降级语义必须一致：
+          - ``_events``：事件层空了回落帖子层；
+          - search 兜底：事件层命中就升级为真正的回答，空了才退回帖子清单。
+        """
+
+        try:
+            return query_published_events(self.db, keyword=keyword, limit=limit)
+        except Exception:
+            return []  # 事件层故障 -> 降级，别让整个对话跟着挂
+
+    def _events(self, keyword: str = "", limit: int = EVENT_TIER_LIMIT) -> list[OpinionEvent]:
         """两层检索：已发布的 LLM 事件优先，命中不了才回落到帖子层。
 
         ## 层① 事件层
@@ -153,16 +166,17 @@ class OpinionChatService:
         事件层查库出任何问题也走兜底：聊天可用性优先于 AI 深度。
         """
 
-        try:
-            events = query_published_events(self.db, keyword=keyword, limit=EVENT_TIER_LIMIT)
-        except Exception:
-            events = []  # 事件层故障 -> 降级到帖子层，别让整个对话跟着挂
+        events = self._published_events(keyword, limit=limit)
         if events:
             return events
         return cluster_notes(self._notes(keyword))
 
     def _risk_sorted_events(self, keyword: str = "") -> list[OpinionEvent]:
-        events = self._events(keyword)
+        # 截断必须发生在**风险排序之后**。_events 默认按展示优先级截 8——一个年头久
+        # 但 high 的事件（时效权重 0.5^(age/21) 趋零）会先被截掉，low 的新事件反而在列
+        # （实测：「最近有什么风险」的名单里有火箭试验成功，没有刘一阳去世）。
+        # published 事件量级很小（几十个），全量取回再让调用方按风险截断，代价可忽略。
+        events = self._events(keyword, limit=0)
         return sorted(
             events,
             # 同风险时按 ranking_score（平台先验权重 × 平台内百分位）排；
@@ -263,7 +277,19 @@ class OpinionChatService:
             _record_turn(user_id, message, answer, "hotspots")
             return self._response("hotspots", keyword, answer, routed, events)
 
-        # search 兜底
+        # search 兜底。路由没认出意图 ≠ 库里没有这件事：「刘一阳的事怎么样了」这类
+        # 问法（X怎么样了/X的事）不落在任何单步意图里，曾在这里只得到一句
+        # 「已找到 5 条相关校园公开内容」——而「刘一阳去世」是 published 的 high 风险
+        # 事件。事件层（字面→语义→裁决的完整三层）命中时升级为观点问答；
+        # 只有事件层也一无所获，才退回帖子清单（那条路保持零 LLM 调用）。
+        events = self._published_events(keyword)[:8] if keyword else []
+        if events:
+            spec = _ANSWER_INTENTS["opinion_answer"]
+            answer = self._llm_answer(
+                contextual, events, fallback_title=spec["title"], instruction=spec["instruction"]
+            )
+            _record_turn(user_id, message, answer, "search")
+            return self._response("search", keyword, answer, routed, events)
         notes = self._search_ranked_notes(keyword or message, limit=10)
         answer = f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
         _record_turn(user_id, message, answer, "search")
@@ -320,7 +346,25 @@ class OpinionChatService:
             yield from self._stream_answer(message, contextual, keyword, routed, user_id)
             return
 
-        # search 兜底：没有生成，一个 LLM 都不打。
+        # search 兜底：事件层命中时升级为观点问答——与阻塞版 chat() 同一语义，
+        # 两套实现漂移 = 同一个问题走聊天和走流式得到不同答案。
+        # 事件层一无所获才退回帖子清单，那条路保持零 LLM 调用。
+        events = self._published_events(keyword)[:8] if keyword else []
+        if events:
+            spec = _ANSWER_INTENTS["opinion_answer"]
+            outcome = LlmCallResult()
+            for delta in stream_llm_report(
+                user_task=contextual,
+                analysis_payload={"events": compact_events_for_llm(events)},
+                fallback_text=build_event_digest(events, title=spec["title"]),
+                output_instruction=spec["instruction"],
+                outcome=outcome,
+            ):
+                yield ("delta", {"text": delta})
+            answer = outcome.content or ""
+            _record_turn(user_id, message, answer, "search")
+            yield ("done", self._response("search", keyword, answer, routed, events))
+            return
         notes = self._search_ranked_notes(keyword or message, limit=10)
         answer = f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
         yield ("delta", {"text": answer})

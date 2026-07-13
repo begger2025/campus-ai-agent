@@ -616,10 +616,16 @@ def _send_chat_completion(
     # 显式注入池化的 httpx 客户端：SDK 默认 trust_env=True，会静默继承 Windows
     # 注册表里的系统代理（Clash）。见 llm_config.LLM_HTTP_TRUST_ENV。
     # OpenAI 包装器本身不做 I/O，每次新建很便宜；真正贵的是它底下的 httpx 连接池。
+    #
+    # max_retries=0：重试只能有一层。SDK 默认自带 max_retries=2，和 call_llm 的外层
+    # 重试（LLM_MAX_RETRIES）叠乘后，一次逻辑调用最坏要打 3×3=9 次真实请求——
+    # 中转站拥堵那天实测一份简报等了 373 秒才降级、一个 11 字符的回复花了 192 秒。
+    # 重试策略收敛在 call_llm（有退避、有不可重试白名单、有计费），SDK 层不许自作主张。
     client = OpenAI(
         api_key=endpoint.api_key,
         base_url=endpoint.base_url,
         timeout=LLM_TIMEOUT_SECONDS,
+        max_retries=0,
         http_client=_get_http_client(),
     )
     kwargs: dict[str, Any] = {"model": endpoint.model, "messages": messages}
@@ -654,10 +660,13 @@ def _send_chat_completion_stream(
     from openai import OpenAI
 
     endpoint = endpoint or LlmEndpoint.resolve()
+    # max_retries=0 同阻塞版：流式的重试窗口只在第一个字之前（call_llm_stream 管），
+    # SDK 再叠一层重试只会让用户在空屏前多等好几个 45 秒。
     client = OpenAI(
         api_key=endpoint.api_key,
         base_url=endpoint.base_url,
         timeout=LLM_TIMEOUT_SECONDS,
+        max_retries=0,
         http_client=_get_http_client(),
     )
     kwargs: dict[str, Any] = {"model": endpoint.model, "messages": messages, "stream": True}

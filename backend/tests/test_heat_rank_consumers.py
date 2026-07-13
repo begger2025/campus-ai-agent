@@ -305,7 +305,8 @@ class ChatServiceRanksByRankingScoreTest(ChatServiceSortsByHeatRankTest):
             risk_level="low", sentiment="neutral", heat_score=1.0, risk_score=1.0,
             heat_rank=90.0, ranking_score=90.0, source_count=1,
         )
-        service._events = lambda keyword="": [low_weight, high_weight]  # type: ignore[assignment]
+        # _risk_sorted_events 会传 limit=0（风险排序在全量上做，截断放在排序之后）
+        service._events = lambda keyword="", limit=0: [low_weight, high_weight]  # type: ignore[assignment]
 
         ordered = service._risk_sorted_events("")
 

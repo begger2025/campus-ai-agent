@@ -53,6 +53,20 @@
               :title="`审校提示：${msg.meta.review.issues.join('；')}`"
             />
 
+            <!-- search 兜底找到的帖子清单：后端一直带回，之前从未渲染——用户只看到
+                 "已找到 10 条内容"却看不见任何一条，等于白找 -->
+            <div v-if="msg.meta.notes && msg.meta.notes.length" class="note-list">
+              <p class="note-list-title">找到的相关内容</p>
+              <ol>
+                <li v-for="(note, ni) in msg.meta.notes" :key="ni">
+                  <a v-if="isSafeUrl(note.url)" :href="note.url" target="_blank" rel="noopener">
+                    {{ note.title }}
+                  </a>
+                  <span v-else>{{ note.title }}</span>
+                </li>
+              </ol>
+            </div>
+
             <el-collapse v-if="msg.meta.steps && msg.meta.steps.length" class="steps-collapse">
               <el-collapse-item :title="`查看推理过程（${msg.meta.steps.length} 步）`">
                 <ol class="steps">
@@ -166,6 +180,11 @@ function intentLabel(intent) {
   return INTENT_LABELS[intent] || intent
 }
 
+// 帖子链接来自爬取数据，只放行 http(s)，防 javascript: 一类伪协议（与 citations 同口径）
+function isSafeUrl(url) {
+  return typeof url === 'string' && /^https?:\/\//.test(url)
+}
+
 // ——— 等待期的进度显示 ———
 // 改流式之前，这里是按 elapsed 秒数**猜**阶段文案的（"8 秒了，那大概在检索吧"）——
 // 一个会说谎的进度条。现在后端会实时告诉我们它到底在干什么，直接说真话。
@@ -225,7 +244,7 @@ async function send(preset) {
   const bubble = reactive({
     role: 'agent',
     text: '',
-    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null },
+    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null, notes: [] },
   })
   let bubbleShown = false
   let streamError = null
@@ -264,6 +283,7 @@ async function send(preset) {
         bubble.meta.steps = data.steps || bubble.meta.steps
         bubble.meta.degraded = data.degraded || false
         bubble.meta.review = data.review || null
+        bubble.meta.notes = data.notes || []
       } else if (event === 'error') {
         streamError = new Error(data.message || '对话失败')
       }
@@ -545,6 +565,43 @@ async function send(preset) {
 
 .bubble .el-alert {
   margin-top: 8px;
+}
+
+/* ——— search 兜底的帖子清单 ——— */
+.note-list {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.note-list-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.note-list ol {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.note-list li::marker {
+  color: var(--brand-500);
+}
+
+.note-list a {
+  color: var(--brand-600);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.note-list a:hover {
+  text-decoration: underline;
 }
 
 .steps-collapse {

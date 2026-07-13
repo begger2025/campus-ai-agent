@@ -99,6 +99,26 @@ class ChatEndpointLoggingTest(unittest.TestCase):
         db.close()
 
     @mock.patch("backend.routers.agent_public.OpinionChatService")
+    def test_search_upgraded_with_events_counts_events(self, service_cls) -> None:
+        # search 兜底命中事件层升级作答时，响应里是 events 而不是 notes——
+        # 命中计数必须跟着数 events。否则"答得很好的问题"被记成 0 命中，
+        # 选题 planner 会把它当成数据缺口信号，推荐去爬一个已经答得上的话题。
+        service_cls.return_value.chat.return_value = {
+            "intent": "search",
+            "keyword": "刘一阳",
+            "answer": "刘一阳去世事件的观点问答正文。",
+            "route_source": "llm",
+            "events": [{"title": "刘一阳去世"}],
+        }
+
+        self.client.post("/api/agent/public/chat", json={"message": "刘一阳的事怎么样了"})
+
+        db = self.session_factory()
+        row = db.query(ChatQueryLog).one()
+        self.assertEqual(row.hit_count, 1, "升级后的 search 命中了 1 个事件，不能记成 0")
+        db.close()
+
+    @mock.patch("backend.routers.agent_public.OpinionChatService")
     def test_search_fallback_echoed_message_is_not_logged_as_keyword(self, service_cls) -> None:
         # search 兜底把整句回显为 keyword 时，不得把整句当话题词入库（会污染需求信号）
         service_cls.return_value.chat.return_value = {

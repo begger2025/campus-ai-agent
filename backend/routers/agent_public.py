@@ -73,7 +73,9 @@ def _log_chat_query(db: Session, user_id: str, message: str, data: dict) -> None
 
     try:
         if data.get("intent") == "search":
-            hit_count = len(data.get("notes") or [])
+            # search 命中事件层升级作答时响应里是 events（没有 notes）——计数要跟着数
+            # events，否则"答得很好的问题"被记成 0 命中，选题 planner 会误判为数据缺口。
+            hit_count = len(data.get("notes") or data.get("events") or [])
         else:
             hit_count = len(data.get("events") or [])
         keyword = str(data.get("keyword") or "")
