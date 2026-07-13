@@ -21,7 +21,7 @@ from backend.agent.public_opinion_core.sentiment_risk import analyze_notes_senti
 from backend.services.citations import attach_citation_ids
 from backend.services.critic import ReviewResult, review_report
 from backend.services.event_read_model import query_published_events
-from backend.services.intent_router import route_intent
+from backend.services.intent_router import is_follow_up, route_intent
 from backend.services.llm_client import LlmCallResult, generate_llm_report, stream_llm_report
 from backend.services.opinion_report import build_event_digest, compact_events_for_llm
 from backend.services.public_opinion_adapter import processed_posts_to_notes, query_agent_rows
@@ -241,7 +241,10 @@ class OpinionChatService:
             _record_turn(user_id, message, response["answer"], "complex_analysis")
             return response
 
-        keyword = routed.keyword or last_keyword
+        # 话题继承有闸门：只有句子确实在指代上文（再/继续/刚才/那个…）才续用旧话题。
+        # 「最近有什么热点？」的 keyword 本来就该是空串（检索全部）——无闸门时它会被
+        # 进程记忆里的旧话题绑架，同一句话的答案取决于用户看不见的隐藏状态。
+        keyword = routed.keyword or (last_keyword if is_follow_up(message) else "")
         if routed.keyword and user_id:
             _last_keyword_by_user[user_id] = routed.keyword
 
@@ -321,7 +324,8 @@ class OpinionChatService:
             yield from self._stream_complex(message, contextual, routed, user_id)
             return
 
-        keyword = routed.keyword or last_keyword
+        # 继承闸门与阻塞版 chat() 同一语义（见那边的注释）。
+        keyword = routed.keyword or (last_keyword if is_follow_up(message) else "")
         if routed.keyword and user_id:
             _last_keyword_by_user[user_id] = routed.keyword
         yield ("meta", {"intent": routed.intent, "keyword": keyword, "route_source": routed.source})

@@ -167,18 +167,47 @@ import BrandLogo from '@/components/BrandLogo.vue'
 
 const route = useRoute()
 
-const messages = ref([])
+// ——— 会话生命周期：前端界面和后端记忆必须对同一件事达成一致 ———
+// 后端的会话记忆（话题词 + 最近对话）按用户 ID 存在进程里，切页面不会消失；
+// 而聊天记录原本只存在组件状态里，切页即丢。两边一错位就出灵异现象（实测）：
+// 用户切去别的栏目再回来，界面空了，以为是新对话——后端却还记着上一段，
+// 于是「最近有什么热点？」被扣上旧话题，回答还引用着用户已经看不见的上文。
+// 约定：切页回来 → 记录恢复、对话继续（两边都记得）；
+//       新标签页/刷新（sessionStorage 为空）→ 界面是空的，第一条消息就带 reset，
+//       让后端同步翻篇（两边都不记得）。
+const STORAGE_KEY = 'agent-chat-transcript-v1'
+
+function loadTranscript() {
+  try {
+    const data = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null')
+    return Array.isArray(data) && data.length ? data : null
+  } catch {
+    return null
+  }
+}
+
+function saveTranscript() {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.value))
+  } catch {
+    /* 存储失败只影响切页恢复，不影响对话本身 */
+  }
+}
+
+const restored = loadTranscript()
+const messages = ref(restored || [])
 // 支持从舆情工作台带问题跳转过来（?q=...），预填不自动发送
 const draft = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const loading = ref(false)
 const listEl = ref(null)
-// 点过"新对话"后，下一条消息带 reset 让后端清空会话记忆
-const pendingReset = ref(false)
+// 界面上没有历史 = 用户眼里这是新对话 → 首条消息带 reset 清后端记忆
+const pendingReset = ref(!restored)
 // 当前进行中的流；离开页面时 abort，别让请求悬着
 let streamHandle = null
 
 function startNewConversation() {
   messages.value = []
+  saveTranscript()
   pendingReset.value = true
 }
 
@@ -260,6 +289,7 @@ watch(loading, (active) => {
 onBeforeUnmount(() => {
   if (elapsedTimer) clearInterval(elapsedTimer)
   streamHandle?.abort()
+  saveTranscript() // 切页前落盘，回来时记录还在
 })
 
 const TOOL_LABELS = {
@@ -360,6 +390,7 @@ async function send(preset) {
     streamHandle = null
     loading.value = false
     liveStage.value = ''
+    saveTranscript() // 每轮收尾落盘（不用 deep watch：流式期间每个字都触发序列化太浪费）
     await scrollToBottom()
   }
 }

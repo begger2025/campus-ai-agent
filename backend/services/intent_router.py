@@ -123,6 +123,18 @@ class IntentRoute:
     source: str  # "llm" or "rules"
 
 
+def is_follow_up(message: str) -> bool:
+    """句子里带指代式追问信号（再/继续/刚才/那个/展开…）吗？
+
+    这是**话题继承的闸门**：`keyword = routed.keyword or last_keyword` 的继承只该发生在
+    句子确实在指代上文时。否则「最近有什么热点？」这种自足的泛问（正确 keyword 就是空串、
+    检索范围就该是全部）会被扣上进程记忆里的旧话题——实测被继承了「辅导员」，同一句话的
+    回答取决于一个用户看不见的隐藏状态。
+    """
+
+    return any(signal in message for signal in FOLLOW_UP_SIGNALS)
+
+
 def route_intent(message: str, last_keyword: str = "", last_intent: str = "") -> IntentRoute:
     route = _confident_rule_route(message)
     if route is not None:
