@@ -84,15 +84,17 @@ class ChatHistoryTest(ChatHistoryTestBase):
         self.assertNotIn(long_answer, self.tasks[-1])
         self.assertIn("答" * HISTORY_ANSWER_MAX_CHARS + "…", self.tasks[-1])
 
-    def test_history_keeps_only_last_three_rounds(self) -> None:
-        for index in range(5):
+    def test_history_keeps_only_last_five_rounds(self) -> None:
+        # 窗口从 3 轮加到 5 轮（2026-07-13）：用户的真实对话七八轮起步，3 轮窗口意味着
+        # 聊到后半段，开头交代的话题背景已经滑出窗口——"混乱感"的来源之一。
+        for index in range(7):
             self.chat(f"第{index}个问题")
 
-        # 第 5 问（第4个问题）时，deque(maxlen=6) 只保留第 1~3 问三轮，第 0 问被挤出。
+        # 第 7 问（第6个问题）时，deque(maxlen=10) 保留第 1~5 问五轮，第 0 问被挤出。
         last_task = self.tasks[-1]
         self.assertNotIn("第0个问题", last_task)
         self.assertIn("第1个问题", last_task)
-        self.assertIn("第3个问题", last_task)
+        self.assertIn("第5个问题", last_task)
 
     def test_reset_clears_history(self) -> None:
         self.chat("第一问")

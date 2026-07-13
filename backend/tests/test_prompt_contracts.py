@@ -52,6 +52,12 @@ class SystemPromptStaysStructureFreeTests(unittest.TestCase):
         for rule in ("不要编造", "不做个人画像", "数据不足", "<data>", "三级标题"):
             self.assertIn(rule, SYSTEM_PROMPT, f"系统提示词的地基规则「{rule}」被误删了")
 
+    def test_the_agent_stays_on_the_campus_opinion_theme(self):
+        """通用性提升的是对话形态，不是话题范围——域外请求要礼貌拒答并引导回舆情。"""
+
+        self.assertIn("无关", SYSTEM_PROMPT, "系统提示词需要一条域内守则：无关请求怎么处置")
+        self.assertIn("引导回", SYSTEM_PROMPT, "处置方式（礼貌说明并引导回舆情话题）必须写明")
+
 
 class ReportKeepsItsSectionsTests(unittest.TestCase):
     def test_the_formal_report_still_has_all_sections(self):

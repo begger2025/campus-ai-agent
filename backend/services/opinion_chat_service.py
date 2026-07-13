@@ -41,10 +41,10 @@ _ANSWER_INTENTS: dict[str, dict[str, str]] = {
     "risk_analysis": {
         "title": "校园风险预警",
         "instruction": (
-            "请直接回答用户的风险问题，用较短的问答口吻输出。"
-            "重点说明是否有风险、风险等级、最主要的 3 条依据和处理建议。"
-            "涉及多个风险事件时，先用一张 Markdown 表格汇总（事件、风险等级、热度、主要依据），"
-            "再展开说明。不要写成完整简报，标题最多使用三级标题。"
+            "围绕用户实际问的那个问题直接回答，把风险结论自然融进去：是否有风险、什么等级、"
+            "最主要的依据、可以怎么应对。不要采用 Q:/A: 式的自问自答，不要替用户编造他没问的问题，"
+            "不要写成完整简报。涉及多个风险事件时，先用一张 Markdown 表格汇总"
+            "（事件、风险等级、热度、主要依据）再展开。标题最多使用三级标题。"
         ),
     },
     "opinion_answer": {
@@ -52,6 +52,8 @@ _ANSWER_INTENTS: dict[str, dict[str, str]] = {
         "instruction": (
             "用自然的对话口吻直接回答，答其所问——先用两三句话正面回应用户问的那个问题，"
             "再补充必要的依据（大家怎么看、情绪、值得注意的点，只挑与问题相关的说）。"
+            "用户陈述自身处境、表达感受或征求建议时，先回应他的处境本身，"
+            "再基于数据给出背景和可行的建议，不要反过来先做风险评估。"
             "像一位手里有数据的同事在聊天：可以用少量要点，但不要套热点/风险/建议的固定栏目，"
             "不要写成简报或工作汇报。标题最多使用三级标题，简短问题直接用段落回答即可。"
         ),
@@ -93,8 +95,10 @@ _last_keyword_by_user: dict[str, str] = {}
 _last_intent_by_user: dict[str, str] = {}
 _history_by_user: dict[str, deque] = {}
 
-# 最近 3 轮对话（6 条记录）进 prompt；助手回答截断存储，控 token。
-HISTORY_MAX_ENTRIES = 6
+# 最近 5 轮对话（10 条记录）进 prompt；助手回答截断存储，控 token。
+# 曾经是 3 轮——用户的真实对话七八轮起步，聊到后半段，开头交代的话题背景已经
+# 滑出窗口，"混乱感"的来源之一。5 轮的代价是每次多几百 token，值。
+HISTORY_MAX_ENTRIES = 10
 HISTORY_ANSWER_MAX_CHARS = 200
 
 
@@ -116,6 +120,42 @@ def _history_block(user_id: str) -> str:
         return ""
     lines = [("用户" if role == "user" else "助手") + "：" + text for role, text in entries]
     return "（最近对话回顾，仅用于理解本轮问题中的指代：\n" + "\n".join(lines) + "）\n"
+
+
+def _last_user_question(user_id: str) -> str:
+    """上一轮用户问了什么——路由判断 continue/switch 需要它（光有话题词不够：
+    「新宿舍条件更差」延续的是「搬迁」这件事，词面上毫无交集）。"""
+
+    entries = _history_by_user.get(user_id)
+    if not entries:
+        return ""
+    for role, text in reversed(entries):
+        if role == "user":
+            return text
+    return ""
+
+
+def _resolve_topic_keyword(routed: Any, message: str, last_keyword: str) -> tuple[str, str]:
+    """话题状态机：返回（本轮检索话题词, 归一化后的 topic）。
+
+    「这句话还在不在聊刚才那件事」是判断题——路由 LLM 给出 topic 判断就服从它：
+
+        continue → 沿用上一轮话题（即使句子里没有指代词、即使冒出了新名词）
+        switch   → 用路由提取的新话题词
+        global   → 空话题词，检索全部
+
+    路由没给 topic（老缓存 / LLM 降级 / 测试桩）时按 is_follow_up 规则近似——
+    这是判断能力缺席时的算术兜底，不是首选路径。
+    """
+
+    topic = routed.topic or (
+        "switch" if routed.keyword else ("continue" if is_follow_up(message) else "global")
+    )
+    if topic == "continue":
+        return (last_keyword or routed.keyword, topic)
+    if topic == "switch":
+        return (routed.keyword, topic)
+    return ("", topic)
 
 
 def _record_turn(user_id: str, message: str, answer: str, intent: str = "") -> None:
@@ -226,11 +266,12 @@ class OpinionChatService:
             _clear_user_memory(user_id)
         last_keyword = _last_keyword_by_user.get(user_id, "")
         # 路由用原句（历史会干扰关键词提取）；答案生成用带历史的版本。
-        # last_intent 让"再展开讲讲"式追问沿用上一轮意图，而不是落进 search 兜底。
+        # last_intent/last_question 供路由判断"这轮是不是还在聊同一件事"。
         routed = route_intent(
             message,
             last_keyword=last_keyword,
             last_intent=_last_intent_by_user.get(user_id, ""),
+            last_question=_last_user_question(user_id),
         )
         history = _history_block(user_id)
         contextual = f"{history}本轮问题：{message}" if history else message
@@ -241,12 +282,14 @@ class OpinionChatService:
             _record_turn(user_id, message, response["answer"], "complex_analysis")
             return response
 
-        # 话题继承有闸门：只有句子确实在指代上文（再/继续/刚才/那个…）才续用旧话题。
-        # 「最近有什么热点？」的 keyword 本来就该是空串（检索全部）——无闸门时它会被
-        # 进程记忆里的旧话题绑架，同一句话的答案取决于用户看不见的隐藏状态。
-        keyword = routed.keyword or (last_keyword if is_follow_up(message) else "")
-        if routed.keyword and user_id:
+        keyword, topic = _resolve_topic_keyword(routed, message, last_keyword)
+        # 只有 switch 才改写话题记忆：continue 时句子里冒出的新名词（"新宿舍"）
+        # 不是换话题，不许顺手把记忆改了——下一轮的 continue 还要靠它。
+        if topic == "switch" and routed.keyword and user_id:
             _last_keyword_by_user[user_id] = routed.keyword
+        if keyword:
+            # 话题锚：生成也要围绕当前话题组织，别被泛化数据带跑。
+            contextual = f"（当前对话话题：{keyword}）\n{contextual}"
 
         if routed.intent == "report":
             response = self._chat_report(contextual, keyword, routed)
@@ -315,6 +358,7 @@ class OpinionChatService:
             message,
             last_keyword=last_keyword,
             last_intent=_last_intent_by_user.get(user_id, ""),
+            last_question=_last_user_question(user_id),
         )
         history = _history_block(user_id)
         contextual = f"{history}本轮问题：{message}" if history else message
@@ -324,10 +368,12 @@ class OpinionChatService:
             yield from self._stream_complex(message, contextual, routed, user_id)
             return
 
-        # 继承闸门与阻塞版 chat() 同一语义（见那边的注释）。
-        keyword = routed.keyword or (last_keyword if is_follow_up(message) else "")
-        if routed.keyword and user_id:
+        # 话题状态机与阻塞版 chat() 同一语义（见 _resolve_topic_keyword）。
+        keyword, topic = _resolve_topic_keyword(routed, message, last_keyword)
+        if topic == "switch" and routed.keyword and user_id:
             _last_keyword_by_user[user_id] = routed.keyword
+        if keyword:
+            contextual = f"（当前对话话题：{keyword}）\n{contextual}"
         yield ("meta", {"intent": routed.intent, "keyword": keyword, "route_source": routed.source})
 
         if routed.intent == "report":

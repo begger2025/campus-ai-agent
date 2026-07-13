@@ -99,6 +99,67 @@ class GeneralQuestionTests(TopicInheritanceTestBase):
         self.assertEqual(meta["keyword"], "", "流式版的泛问同样不许继承旧话题")
 
 
+class RouterTopicStateTests(TopicInheritanceTestBase):
+    """路由给出 topic 判断时，service 必须服从它——判断收归 LLM，算术只做兜底。"""
+
+    def test_continue_inherits_even_without_signal_words(self):
+        """「你觉得为什么学生会产生负面的情绪」——没有任何指代词，但路由判了 continue。
+
+        这正是指代词表学不会的那一类（用户七轮实测：省去背景词后答案基于全部事件）。
+        """
+
+        self.seed_stale_topic()
+
+        response = self.chat(
+            "你觉得为什么学生会产生负面的情绪",
+            IntentRoute(intent="opinion_answer", keyword="", source="llm", topic="continue"),
+        )
+
+        self.assertEqual(
+            response["keyword"],
+            "辅导员",
+            "路由判定 continue 时必须沿用上一轮话题——哪怕句子里一个指代词都没有",
+        )
+
+    def test_continue_does_not_let_a_new_noun_hijack_the_topic(self):
+        """「关键是我搬到的新宿舍条件更差」——句中冒出的新名词不是换话题。"""
+
+        self.seed_stale_topic()
+
+        response = self.chat(
+            "关键是我搬到的新宿舍，条件比原来的还差",
+            IntentRoute(intent="opinion_answer", keyword="新宿舍", source="llm", topic="continue"),
+        )
+
+        self.assertEqual(response["keyword"], "辅导员", "continue 时沿用旧话题，新名词不接管检索")
+        # 话题记忆也不许被顺手改掉——下一轮的 continue 还要靠它
+        from backend.services.opinion_chat_service import _last_keyword_by_user
+
+        self.assertEqual(_last_keyword_by_user.get("u1"), "辅导员", "continue 不许覆盖话题记忆")
+
+    def test_global_ignores_the_stale_topic(self):
+        self.seed_stale_topic()
+
+        response = self.chat(
+            "最近有什么热点？",
+            IntentRoute(intent="hotspots", keyword="", source="rules", topic="global"),
+        )
+
+        self.assertEqual(response["keyword"], "")
+
+    def test_switch_updates_the_topic_memory(self):
+        self.seed_stale_topic()
+
+        response = self.chat(
+            "换个话题，食堂最近怎么样",
+            IntentRoute(intent="opinion_answer", keyword="食堂", source="llm", topic="switch"),
+        )
+        from backend.services.opinion_chat_service import _last_keyword_by_user
+
+        self.assertEqual(response["keyword"], "食堂")
+        self.assertEqual(_last_keyword_by_user.get("u1"), "食堂", "switch 才更新话题记忆")
+
+
 class FollowUpTests(TopicInheritanceTestBase):
     def test_a_real_follow_up_still_inherits_the_topic(self):
         """「再展开讲讲」含指代信号——继承是它的正确语义，不许误伤。"""

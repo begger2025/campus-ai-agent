@@ -279,7 +279,11 @@ class LlmUnavailableTest(unittest.TestCase):
     def test_simple_question_still_routed_by_rules(self) -> None:
         route = route_intent("最近宿舍有什么风险吗")
 
-        self.assertEqual(route, IntentRoute(intent="risk_analysis", keyword="宿舍", source="rules"))
+        self.assertEqual(
+            route,
+            # 规则抢答提取到话题词 = 用户在点名一个话题 -> topic="switch"
+            IntentRoute(intent="risk_analysis", keyword="宿舍", source="rules", topic="switch"),
+        )
         self.assertEqual(self.call_llm.call_count, 0)
 
     def test_complex_question_falls_back_to_rules_without_llm(self) -> None:

@@ -57,7 +57,9 @@
                  热度条画的是算术字段，来自后端数据，不经过 LLM——图表不可能被幻觉画歪 -->
             <div v-if="msg.meta.events && msg.meta.events.length" class="event-cards">
               <p class="event-cards-title">关联事件（{{ msg.meta.events.length }}）</p>
-              <div v-for="(ev, ei) in msg.meta.events" :key="ei" class="event-card">
+              <!-- 全局提问会带回 8 个事件——全量平铺是一面卡片墙，盖过正文。
+                   超过 3 张默认收起，想看再展开；话题聚焦时（1~3 张）保持平铺 -->
+              <div v-for="(ev, ei) in visibleEvents(msg)" :key="ei" class="event-card">
                 <div class="event-card-head">
                   <span class="event-card-title">{{ ev.title }}</span>
                   <el-tag size="small" :type="riskTagType(ev.risk_level)" effect="light">
@@ -73,6 +75,14 @@
                   <span class="heat-value">热度 {{ Math.round(ev.heat_score || 0) }} · {{ ev.source_count || 0 }} 条</span>
                 </div>
               </div>
+              <button
+                v-if="msg.meta.events.length > 3"
+                class="event-toggle"
+                type="button"
+                @click="msg.meta.eventsExpanded = !msg.meta.eventsExpanded"
+              >
+                {{ msg.meta.eventsExpanded ? '收起' : `展开全部 ${msg.meta.events.length} 个事件` }}
+              </button>
             </div>
 
             <!-- search 兜底找到的帖子清单：后端一直带回，之前从未渲染——用户只看到
@@ -256,6 +266,12 @@ function heatWidth(ev, events) {
   return `${Math.max(Math.round(ratio * 100), 2)}%`
 }
 
+// 超过 3 张默认只露前 3；归一化仍按全量算（收起状态下条子长度也不许说谎）
+function visibleEvents(msg) {
+  const events = msg.meta.events || []
+  return events.length > 3 && !msg.meta.eventsExpanded ? events.slice(0, 3) : events
+}
+
 // 审校提示封顶展示（与后端追加进正文的口径一致）：审校是提示，不是第二份报告。
 const REVIEW_ALERT_MAX_ISSUES = 3
 
@@ -327,7 +343,7 @@ async function send(preset) {
   const bubble = reactive({
     role: 'agent',
     text: '',
-    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null, notes: [], events: [] },
+    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null, notes: [], events: [], eventsExpanded: false },
   })
   let bubbleShown = false
   let streamError = null
@@ -716,6 +732,23 @@ async function send(preset) {
   flex-shrink: 0;
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+.event-toggle {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 0;
+  border: none;
+  background: none;
+  color: var(--brand-600);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.event-toggle:hover {
+  text-decoration: underline;
 }
 
 /* ——— search 兜底的帖子清单 ——— */
