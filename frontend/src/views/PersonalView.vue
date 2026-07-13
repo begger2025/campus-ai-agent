@@ -1,12 +1,9 @@
 <template>
   <div class="watch-page">
-    <!-- 统计（全部来自真实已发布事件） -->
-    <div class="stat-row">
-      <StatCard title="已发布事件" :value="publishedEvents.length" :icon="Collection" color="primary" desc="事件全链路真实数据" :loading="eventsLoading" />
-      <StatCard title="高风险事件" :value="highRiskCount" :icon="Warning" color="danger" desc="需要优先关注" :loading="eventsLoading" />
-      <StatCard title="中风险事件" :value="mediumRiskCount" :icon="Bell" color="warning" desc="持续跟踪观察" :loading="eventsLoading" />
-      <StatCard title="需关注合计" :value="watchEvents.length" :icon="View" color="teal" desc="已发布的中高风险事件" :loading="eventsLoading" />
-    </div>
+    <!-- 四张统计卡已移除（2026-07-14）：「已发布事件 / 高风险 / 中风险」在**首页**已经有一份，
+         「需关注合计」不过是前两者之和。三处展示同一组数字，是页面重叠的典型症状。
+         这一页的职责是**处置**（中高风险事件的跟进清单 + 影响评估），不是再做一次仪表盘。
+         见 docs/page-responsibilities.md。 -->
 
     <!-- 事件影响评估（从事件详情页 ?event_id= 跳转，全部真实字段） -->
     <div v-if="impactEvent" class="section-card impact-card">
@@ -92,8 +89,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Bell, ChatDotRound, CircleCheckFilled, Collection, View, Warning } from '@element-plus/icons-vue'
-import StatCard from '@/components/StatCard.vue'
+import { ChatDotRound, CircleCheckFilled } from '@element-plus/icons-vue'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { fetchPublishedEvents } from '@/api/events'
 import { formatHeat } from '@/utils/heat'
@@ -106,12 +102,9 @@ const events = ref([])
 const eventsLoading = ref(false)
 
 const publishedEvents = computed(() => events.value.filter((e) => (e.status ?? 'published') === 'published'))
-const highRiskCount = computed(
-  () => publishedEvents.value.filter((e) => (e.riskLevel ?? e.risk_level) === 'high').length,
-)
-const mediumRiskCount = computed(
-  () => publishedEvents.value.filter((e) => (e.riskLevel ?? e.risk_level) === 'medium').length,
-)
+
+// 这一页的全部内容：**需要跟进的**中高风险事件（低风险不进处置清单）。
+// 统计卡已删——那三个数字在首页有一份，这里再摆一遍就是页面重叠。
 const watchEvents = computed(() =>
   publishedEvents.value.filter((e) => ['high', 'medium'].includes(e.riskLevel ?? e.risk_level)),
 )
@@ -201,12 +194,6 @@ watch(
   flex-direction: column;
   gap: 16px;
   max-width: 1080px;
-}
-
-.stat-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 14px;
 }
 
 .section-card {
@@ -345,9 +332,4 @@ watch(
   gap: 10px;
 }
 
-@media (max-width: 1100px) {
-  .stat-row {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
 </style>

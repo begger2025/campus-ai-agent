@@ -33,9 +33,11 @@ from backend.agent.public_opinion_core.recency import (
     event_time_from_payload,
     growth_signal,
     lifecycle_judgement_from_payload,
+    lifecycle_weight,
     member_times_from_payload,
     priority_score,
     recency_weight,
+    severity_weight,
 )
 from backend.agent.public_opinion_core.schemas import OpinionEvent, OpinionNote
 from backend.models import EventPostLink, ProcessedPost, PublicEvent
@@ -110,6 +112,7 @@ def recency_fields(row: PublicEvent, now: datetime) -> dict:
     age = age_in_days(event_time, now)
     weight = recency_weight(age)
     lifecycle, lifecycle_reason, growth = lifecycle_now(row, now)
+    risk = risk_level_of(row)
     return {
         "event_time": event_time,
         "age_days": None if age is None else round(age, 1),
@@ -119,7 +122,24 @@ def recency_fields(row: PublicEvent, now: datetime) -> dict:
         # 「持续发酵」的**证据**：近 21 天几条 / 一共几条 / 速率。徽标背后必须有"凭什么"——
         # 一个说不出依据的徽标只是一句主张。管理员点开就能看到"近 21 天 3/4 帖"。
         "growth": growth,
-        "priority_score": priority_score(risk_level_of(row), weight, lifecycle),
+        "priority_score": priority_score(risk, weight, lifecycle),
+        # 排序分的**分解**：「凭什么这条 3 个月前的事排第一」必须能当场答上来。
+        # 三个因子乘起来 == priority_score（有测试钉死），每一根轴都能单独解释：
+        #     severity   这件事有多严重（LLM 研判，9/3/1，不随时间打折）
+        #     recency    这件事多新（纯算术，0.5 ** (age/21天)）
+        #     lifecycle  这件事完了没有（LLM 研判，4/2/0.5；未研判 -> 1.0 逐位退化回两轴）
+        # 分解由**后端**给：权重表在核心里只有一份，前端自己复制一遍迟早漂移。
+        #
+        # 这里的 recency **不舍入**（上面那个 recency_weight 字段是给展示用的、舍到 6 位）：
+        # 分解的契约是「这三个因子乘起来 == priority_score」，而 priority_score 用的是未舍入
+        # 的 weight。舍一个不舍另一个，展示出来的三个数就乘不出展示的那个分数——差 5e-06，
+        # 但那份「凭什么」就是编的。舍入是**展示**的事，交给前端。
+        "priority_breakdown": {
+            "severity": severity_weight(risk),
+            "recency": weight,
+            "lifecycle": lifecycle_weight(lifecycle),
+            "score": priority_score(risk, weight, lifecycle),
+        },
     }
 
 

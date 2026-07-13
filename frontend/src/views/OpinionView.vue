@@ -36,13 +36,16 @@
               <div class="event-row-title">{{ event.title }}</div>
               <div class="event-row-meta">
                 <span :class="['risk-tag', `risk-tag--${event.risk_level}`]">{{ riskLabel(event.risk_level) }}</span>
-                <span :title="`精确值 ${event.heat_score}`">热度 {{ formatHeat(event.heat_score) }}</span>
-                <span>· {{ event.source_count }} 来源</span>
-                <!-- 年龄要看得见：列表已按时效性排序，但陈旧事件不能"默默"留在列表里冒充新闻。 -->
-                <span
-                  :class="['event-age', { 'event-age--stale': isStale(event.age_days) }]"
-                  :title="event.event_time ? `事件代表时间（成员帖发布时间中位数）：${formatEventTime(event.event_time)}` : '该事件没有可用的发布时间'"
-                >· {{ formatAge(event.age_days) }}</span>
+                <!-- 中段数字（热度·来源·时龄）合为一段弹性文本，空间不足时整体省略，保证两侧色标签不被挤断 -->
+                <span class="event-row-stats">
+                  <span :title="`精确值 ${event.heat_score}`">{{ formatHeat(event.heat_score) }}</span>
+                  <span>· {{ event.source_count }}源</span>
+                  <!-- 年龄要看得见：列表已按时效性排序，但陈旧事件不能"默默"留在列表里冒充新闻。 -->
+                  <span
+                    :class="['event-age', { 'event-age--stale': isStale(event.age_days) }]"
+                    :title="event.event_time ? `事件代表时间（成员帖发布时间中位数）：${formatEventTime(event.event_time)}` : '该事件没有可用的发布时间'"
+                  >· {{ formatAge(event.age_days) }}</span>
+                </span>
                 <!-- 状态要看得见：一个 3.5 个月前的火情排第 4、一个 2 个月前的举报排第 1，
                      光看年龄解释不了这个顺序——管理员有权一眼看到「已了结」还是「悬而未决」。
                      未研判（LLM 关掉/失败/老数据）时不显示徽标：不知道结没结 ≠ 已经结了。 -->
@@ -77,18 +80,6 @@
 
             <p class="detail-summary">{{ selectedEvent.summary }}</p>
 
-            <!-- 「凭什么这条 3 个月前的事还在前面」：模型给的理由，原样摆出来。 -->
-            <p v-if="hasLifecycle(selectedEvent.lifecycle)" class="detail-lifecycle">
-              <strong>{{ lifecycleLabel(selectedEvent.lifecycle) }}</strong>
-              <span v-if="selectedEvent.lifecycle_reason">· {{ selectedEvent.lifecycle_reason }}</span>
-            </p>
-
-            <!-- 「持续发酵」不是模型说的，是**算出来的**：把那组数字摆出来，管理员能自己复核。
-                 别的三个状态是判断（理由是一句话），这一个是测量（依据是一组帖子的发布时间）。 -->
-            <p v-if="growthEvidence(selectedEvent.growth) && selectedEvent.lifecycle === 'escalating'" class="detail-growth">
-              发酵依据（算术）：{{ growthEvidence(selectedEvent.growth) }}
-            </p>
-
             <div class="detail-metrics">
               <el-tooltip :content="`${HEAT_TOOLTIP}。精确值：${selectedEvent.heat_score}`" placement="top" :show-after="150">
                 <div class="metric-item metric-item--help">
@@ -105,36 +96,113 @@
                 <span>来源数</span>
               </div>
               <div class="metric-item metric-item--text">
-                <strong>{{ riskLabel(selectedEvent.risk_level) }}</strong>
-                <span>风险等级</span>
+                <strong>{{ sentimentLabel(selectedEvent.sentiment) }}</strong>
+                <span>情感倾向</span>
               </div>
             </div>
 
-            <div class="detail-section">
-              <h3>话题分类</h3>
-              <el-tag>{{ selectedEvent.topic }}</el-tag>
-              <el-tag
-                v-if="selectedEvent.event_type && selectedEvent.event_type !== selectedEvent.topic"
-                type="info"
-                style="margin-left:8px"
-              >{{ selectedEvent.event_type }}</el-tag>
-            </div>
+            <!-- ============ 这一段是工作台的立身之本：AI 研判的「凭什么」 ============
+                 事件列表回答"有哪些事件"，工作台回答"**这件事到底怎么回事、凭什么这么判**"。
+                 下面每一块都是一次可追问的研判，而不是一个不容置疑的结论。 -->
 
-            <div class="detail-section">
-              <h3>情感倾向</h3>
-              <span :class="['sentiment-tag', `sentiment--${selectedEvent.sentiment}`]">
-                {{ sentimentLabel(selectedEvent.sentiment) }}
-              </span>
-            </div>
-
-            <div class="detail-section">
-              <h3>来源帖子</h3>
-              <div class="source-tags">
-                <span v-for="pid in selectedEvent.source_post_ids?.slice(0, 5)" :key="pid" class="source-pid">{{ pid }}</span>
-                <span v-if="selectedEvent.source_post_ids?.length > 5" class="source-more">
-                  +{{ selectedEvent.source_post_ids.length - 5 }} 条
-                </span>
+            <!-- ① 排序：凭什么它排第一 —— 四根正交轴的乘积，每根都能单独解释 -->
+            <div v-if="breakdown" class="detail-section">
+              <h3>
+                展示优先级
+                <span class="section-hint">四轴乘积 · 决定它在列表里排第几</span>
+              </h3>
+              <div class="axis-row">
+                <div class="axis-chip">
+                  <strong>{{ breakdown.severity }}</strong>
+                  <span>严重性</span>
+                  <em>{{ riskLabel(selectedEvent.risk_level) }} · LLM 研判</em>
+                </div>
+                <span class="axis-op">×</span>
+                <div class="axis-chip">
+                  <strong>{{ breakdown.recency.toFixed(3) }}</strong>
+                  <span>时效性</span>
+                  <em>{{ formatAge(selectedEvent.age_days) }} · 算术衰减</em>
+                </div>
+                <span class="axis-op">×</span>
+                <div class="axis-chip">
+                  <strong>{{ breakdown.lifecycle }}</strong>
+                  <span>生命周期</span>
+                  <em>{{ hasLifecycle(selectedEvent.lifecycle) ? lifecycleLabel(selectedEvent.lifecycle) : '未研判' }}</em>
+                </div>
+                <span class="axis-op">=</span>
+                <div class="axis-chip axis-chip--result">
+                  <strong>{{ breakdown.score.toFixed(2) }}</strong>
+                  <span>优先级</span>
+                  <em>排序键</em>
+                </div>
               </div>
+              <p class="axis-note">
+                严重性与热度<b>不被时间打折</b>（火灾不会因为过了三个月变得不严重）；
+                时效性与生命周期只影响<b>顺序</b>。生命周期未研判时因子为 1.0，逐位退化回两轴排序。
+              </p>
+            </div>
+
+            <!-- ② 风险：凭什么判成高风险 —— LLM 给的依据，原样摆出来 -->
+            <div v-if="riskReasons.length" class="detail-section">
+              <h3>
+                风险依据
+                <span :class="['risk-tag', `risk-tag--${selectedEvent.risk_level}`]">{{ riskLabel(selectedEvent.risk_level) }}</span>
+                <span class="section-hint">LLM 研判 · 不是规则算的</span>
+              </h3>
+              <ol class="reason-list">
+                <li v-for="(reason, i) in riskReasons" :key="i">{{ reason }}</li>
+              </ol>
+            </div>
+
+            <!-- ③ 状态：凭什么说它还没完 —— 判断（一句话理由）+ 测量（一组时间戳） -->
+            <div v-if="hasLifecycle(selectedEvent.lifecycle) || growthText" class="detail-section">
+              <h3>
+                事件状态
+                <span
+                  v-if="hasLifecycle(selectedEvent.lifecycle)"
+                  :class="['lifecycle-tag', `lifecycle-tag--${selectedEvent.lifecycle}`]"
+                >{{ lifecycleLabel(selectedEvent.lifecycle) }}</span>
+              </h3>
+              <!-- 「悬而未决」是**判断**：模型读完帖子，说出还有什么事没了结。 -->
+              <p v-if="selectedEvent.lifecycle_reason" class="evidence-line">
+                <span class="evidence-kind evidence-kind--llm">判断</span>
+                {{ selectedEvent.lifecycle_reason }}
+              </p>
+              <!-- 「还在发酵」是**测量**：新帖还在不在来，成员帖的时间戳就摆在那儿。
+                   不问 LLM——问它「这件事还在扩大吗」，和问它「这条帖子有多火」是同一类错误。 -->
+              <p v-if="growthText" class="evidence-line">
+                <span class="evidence-kind evidence-kind--math">测量</span>
+                {{ growthText }}
+              </p>
+            </div>
+
+            <!-- ④ 关注点：模型从帖子里提炼的诉求 -->
+            <div v-if="concerns.length" class="detail-section">
+              <h3>
+                关注点
+                <span class="section-hint">LLM 从成员帖里提炼</span>
+              </h3>
+              <div class="concern-tags">
+                <span v-for="c in concerns" :key="c" class="tag">{{ c }}</span>
+              </div>
+            </div>
+
+            <!-- ⑤ 代表帖子：**可溯源**。原本这里只显示三个光秃秃的数字 ID（4 365 334）——
+                 那是主键，不是证据。研判的每一句话都该能点回原帖。 -->
+            <div class="detail-section">
+              <h3>
+                代表帖子
+                <span class="section-hint">共 {{ selectedEvent.source_count }} 条 · 展示热度前 {{ representatives.length }}</span>
+              </h3>
+              <div v-if="detailLoading" class="rep-loading">加载中…</div>
+              <ol v-else-if="representatives.length" class="rep-list">
+                <li v-for="post in representatives" :key="post.processed_post_id || post.raw_post_id">
+                  <a v-if="isSafeUrl(post.url)" :href="post.url" target="_blank" rel="noopener">{{ post.title || '（无标题）' }}</a>
+                  <span v-else>{{ post.title || '（无标题）' }}</span>
+                  <em>{{ post.platform }} · {{ post.author || '匿名' }}</em>
+                </li>
+              </ol>
+              <p v-else class="rep-empty">该事件没有可展示的代表帖。</p>
             </div>
 
             <div class="detail-actions">
@@ -185,7 +253,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Pointer } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
@@ -193,9 +261,21 @@ import { formatAge, formatEventTime, isStale } from '@/utils/age'
 import { growthEvidence, hasLifecycle, lifecycleLabel, lifecycleTitle } from '@/utils/lifecycle'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { sourceOptions } from '@/mock/events'
-import { fetchPublishedEvents } from '@/api/events'
+import { fetchEventDetail, fetchPublishedEvents } from '@/api/events'
 
 const router = useRouter()
+const route = useRoute()
+
+// —— 页面职责 ——
+// 舆情工作台 = **单事件 × 研判**：回答"这件事到底怎么回事、**凭什么这么判**"。
+// （"有哪些事件"是事件列表的活；"数据在说什么"是舆情分析的活。见 docs/page-responsibilities.md）
+//
+// 所以这一页的中栏必须把 AI 研判的**证据链**全摆出来：
+//     排序     四轴分解（严重性 × 时效性 × 生命周期 = 优先级）
+//     风险     LLM 给的依据（不是规则算的）
+//     状态     判断（模型的一句话理由）+ 测量（成员帖时间戳算出来的发酵证据）
+//     关注点   模型从帖子里提炼的诉求
+//     代表帖   **可点回原帖**——改造前这里只显示三个光秃秃的数字主键（4 365 334）
 
 // —— 搜索 & 筛选（纯本地过滤，真实分析走舆情助手） ——
 const keyword = ref('')
@@ -205,7 +285,23 @@ const selectedSources = ref([])
 const events = ref([])
 const selectedId = ref('')
 
+// 列表接口不返回 risk_reasons / concerns / 代表帖标题（只有 raw json 串和一串主键），
+// 选中一个事件才去取它的完整详情——研判证据要的就是这些。
+const detail = ref(null)
+const detailLoading = ref(false)
+
 const selectedEvent = computed(() => events.value.find(e => e.id === selectedId.value) || null)
+
+const breakdown = computed(() => selectedEvent.value?.priority_breakdown || null)
+
+// 详情里的解析好的字段；详情还没到时优雅地空着（列表项已经把标题/风险/热度撑起来了）
+const riskReasons = computed(() => detail.value?.risk_reasons || [])
+const concerns = computed(() => detail.value?.concerns || [])
+const representatives = computed(() => detail.value?.representative_posts || [])
+
+// 「还在发酵」是算出来的：近 N 天几条 / 一共几条 / 速率。不止 escalating 时才该看见——
+// 一个「已了结」的事件如果新帖还在来，那本身就是要复核的信号。
+const growthText = computed(() => growthEvidence(selectedEvent.value?.growth))
 
 const filteredEvents = computed(() => {
   const kw = keyword.value.trim()
@@ -230,17 +326,34 @@ onMounted(loadEvents)
 async function loadEvents() {
   try {
     events.value = await fetchPublishedEvents()
-    if (events.value.length) {
-      selectedId.value = events.value[0].id
-    }
+    if (!events.value.length) return
+    // 从事件列表点「研判」跳过来时带着 ?event_id=——直接选中那一条（列表找 → 工作台研判）
+    const wanted = String(route.query.event_id || '')
+    const target =
+      events.value.find((e) => String(e.raw_id) === wanted || String(e.id) === wanted) ||
+      events.value[0]
+    selectEvent(target)
   } catch {
     ElMessage.warning('事件数据加载失败，请刷新页面重试')
   }
 }
 
-// —— 选择事件 ——
-function selectEvent(event) {
+// —— 选择事件：拉它的完整研判证据 ——
+async function selectEvent(event) {
   selectedId.value = event.id
+  detail.value = null
+  detailLoading.value = true
+  const requested = event.id
+  try {
+    const data = await fetchEventDetail(event.raw_id ?? event.id)
+    // 用户可能在请求飞行途中点了别的事件——晚到的响应不许覆盖当前选中项
+    if (selectedId.value === requested) detail.value = data
+  } catch {
+    // 详情拿不到不影响列表和四轴分解（那些来自列表接口）——证据区留空，不弹错。
+    if (selectedId.value === requested) detail.value = null
+  } finally {
+    if (selectedId.value === requested) detailLoading.value = false
+  }
 }
 
 function resetFilters() {
@@ -285,9 +398,156 @@ function sentimentLabel(s) {
   const map = { positive: '正向', negative: '负向', neutral: '中性', controversial: '争议' }
   return map[s] || s || '—'
 }
+
+// 代表帖链接来自爬取数据，只放行 http(s)，防 javascript: 一类伪协议
+function isSafeUrl(url) {
+  return typeof url === 'string' && /^https?:\/\//.test(url)
+}
 </script>
 
 <style scoped>
+/* ——— AI 研判证据区（工作台的立身之本） ——— */
+.section-hint {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+/* 四轴分解：严重性 × 时效性 × 生命周期 = 优先级 */
+.axis-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.axis-chip {
+  flex: 1;
+  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.axis-chip strong {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.axis-chip span {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.axis-chip em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+}
+
+.axis-chip--result {
+  border-color: var(--brand-300);
+  background: var(--brand-50);
+}
+
+.axis-chip--result strong { color: var(--brand-700); }
+
+.axis-op {
+  align-self: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.axis-note {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
+.axis-note b { color: var(--color-text-secondary); font-weight: 600; }
+
+/* 风险依据（LLM 给的理由） */
+.reason-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.reason-list li::marker { color: var(--brand-500); font-weight: 600; }
+
+/* 证据行：判断（LLM）vs 测量（算术）——两种东西，两种标记 */
+.evidence-line {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.evidence-kind {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.evidence-kind--llm {
+  background: var(--brand-50);
+  color: var(--brand-700);
+  border: 1px solid var(--brand-100);
+}
+
+.evidence-kind--math {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border: 1px solid #c8e5d0;
+}
+
+.concern-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* 代表帖：可点回原帖（改造前这里是三个光秃秃的数字主键） */
+.rep-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.rep-list li::marker { color: var(--brand-500); }
+
+.rep-list a {
+  color: var(--brand-600);
+  text-decoration: none;
+}
+
+.rep-list a:hover { text-decoration: underline; }
+
+.rep-list em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.rep-loading,
+.rep-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
 .opinion-page {
   display: flex;
   flex-direction: column;
@@ -401,19 +661,40 @@ function sentimentLabel(s) {
   margin-top: 4px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: 5px;
   font-size: 11px;
   color: var(--color-text-muted);
+  min-width: 0;
+}
+
+/* 两侧色标签固定尺寸不被挤断；中段数字承担收缩 */
+.event-row-meta > .risk-tag,
+.event-row-meta > .lifecycle-tag {
+  flex-shrink: 0;
+}
+
+.event-row-stats {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-row-stats > span {
+  white-space: nowrap;
 }
 
 .risk-tag {
   display: inline-block;
-  padding: 0 6px;
+  padding: 0 5px;
   height: 18px;
   line-height: 18px;
   border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .risk-tag--high { color: var(--color-danger-text); background: var(--color-danger-bg); border: 1px solid #f4c2c4; }
@@ -428,12 +709,13 @@ function sentimentLabel(s) {
    「非事件」比「已了结」还要淡一档：它连"曾经是一件事"都不是（咨询/攻略/分享）。 */
 .lifecycle-tag {
   display: inline-block;
-  padding: 0 6px;
+  padding: 0 5px;
   height: 18px;
   line-height: 18px;
   border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: help;
 }
 

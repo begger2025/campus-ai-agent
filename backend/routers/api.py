@@ -237,6 +237,9 @@ def _event_item(
         # 平均 3 周才来 2 条。这是一个**可以复核的测量**，不是模型的语气判断。
         "growth": recency["growth"],
         "priority_score": recency["priority_score"],
+        # 排序分的分解：severity × recency × lifecycle == priority_score。
+        # 「凭什么这条 3 个月前的事排第一」——工作台把这三个因子摆出来，管理员自己复核。
+        "priority_breakdown": recency["priority_breakdown"],
         "confidence": row.confidence,
         "source_count": source_count,
         "sourcePlatforms": source_platforms,

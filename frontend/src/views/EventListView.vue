@@ -74,9 +74,8 @@
               <tr
                 v-for="(event, rowIndex) in pagedEvents"
                 :key="event.id"
-                :class="{ 'row-active': selectedEvent?.id === event.id }"
                 :style="{ '--row-i': rowIndex }"
-                @click="selectEvent(event)"
+                @click="openWorkbench(event)"
               >
                 <td class="title-cell">
                   <span>{{ event.title }}</span>
@@ -104,7 +103,11 @@
                   已发布
                 </td>
                 <td class="action-cell">
-                  <button type="button" @click.stop="openDetail(event)">查看详情</button>
+                  <!-- 「研判」跳工作台并选中这一条：列表负责**找到**事件，工作台负责
+                       **研判**它（AI 的风险依据 / 四轴分解 / 状态证据 / 代表帖）。
+                       两页因此是互补的，不是各做一半。 -->
+                  <button type="button" @click.stop="openWorkbench(event)">研判</button>
+                  <button type="button" @click.stop="openDetail(event)">详情</button>
                   <button type="button" @click.stop="openFeedback(event)">反馈</button>
                 </td>
               </tr>
@@ -128,78 +131,10 @@
         </div>
       </section>
 
-      <aside class="panel-card event-preview-card">
-        <div class="preview-header">
-          <span>事件预览</span>
-        </div>
-
-        <div v-if="selectedEvent" class="preview-content">
-          <div class="preview-title-row">
-            <h2>{{ selectedEvent.title }}</h2>
-            <span :class="['badge', riskClass(selectedEvent.riskLevel)]">{{ selectedEvent.riskLabel }}</span>
-          </div>
-          <p class="preview-summary">{{ selectedEvent.summary }}</p>
-
-          <div class="preview-stats">
-            <div :title="`精确值 ${selectedEvent.heatScore}`">
-              <strong>{{ formatHeat(selectedEvent.heatScore) }}</strong>
-              <span>热度 · {{ heatLevel(selectedEvent.heatScore).label }}</span>
-            </div>
-            <div>
-              <strong>{{ selectedEvent.representativeCount }}</strong>
-              <span>代表内容</span>
-            </div>
-            <div>
-              <strong>{{ selectedEvent.confidence.toFixed(2) }}</strong>
-              <span>置信度</span>
-            </div>
-            <div>
-              <strong>{{ displayTime(selectedEvent.updatedAt).replace('今天 ', '') }}</strong>
-              <span>最近更新</span>
-            </div>
-          </div>
-
-          <div class="preview-tags">
-            <span class="preview-label">关联标签</span>
-            <div>
-              <span v-for="tag in selectedEvent.tags.slice(0, 3)" :key="tag" class="tag tag-blue">{{ tag }}</span>
-            </div>
-          </div>
-
-          <div class="preview-actions">
-            <el-button type="primary" @click="openDetail(selectedEvent)">查看详情</el-button>
-            <el-button @click="openFeedback(selectedEvent)">提交反馈</el-button>
-            <el-button @click="router.push('/opinion')">返回工作台</el-button>
-          </div>
-
-          <div class="preview-bottom">
-            <section>
-              <h3>热度趋势（近7天）</h3>
-              <svg :key="selectedEvent?.id" viewBox="0 0 280 144" class="mini-chart">
-                <line x1="18" y1="118" x2="260" y2="118" class="axis-line" />
-                <polyline :points="trendLine" class="trend-line" pathLength="1" />
-                <circle v-for="point in trendPoints" :key="point.label" :cx="point.x" :cy="point.y" r="3.5" class="trend-point" />
-              </svg>
-            </section>
-            <section>
-              <h3>来源分布</h3>
-              <div class="source-breakdown">
-                <div v-for="item in sourceBreakdown" :key="item.value">
-                  <span :class="['source-icon', `source-icon-${item.value}`]">{{ sourceShort(item.value) }}</span>
-                  <span>{{ sourceLabel(item.value) }}</span>
-                  <strong>{{ item.percent }}%</strong>
-                </div>
-              </div>
-            </section>
-          </div>
-        </div>
-
-        <div v-else class="preview-empty">
-          <el-icon :size="26"><Pointer /></el-icon>
-          <p>暂无可预览的事件</p>
-          <span>调整筛选条件后，点击左侧列表任意一行查看</span>
-        </div>
-      </aside>
+      <!-- 「事件预览」侧栏已移除：它和舆情工作台的中栏做同一件事（摘要/热度/置信度/
+           标签/趋势），而工作台做得更深（AI 风险依据、四轴分解、状态证据、代表帖溯源）。
+           这一页的职责是**检索**——找到事件，然后交给工作台去研判。
+           见 docs/page-responsibilities.md。 -->
     </div>
 
     <div class="event-footnote">
@@ -214,7 +149,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { InfoFilled, Pointer, Search } from '@element-plus/icons-vue'
+import { InfoFilled, Search } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { gsap } from 'gsap'
 import { Flip } from 'gsap/Flip'
@@ -228,7 +163,6 @@ const router = useRouter()
 
 const loading = ref(false)
 const events = ref([])
-const selectedId = ref('')
 const feedbackVisible = ref(false)
 const feedbackEvent = ref(null)
 
@@ -311,32 +245,12 @@ const pagedEvents = computed(() => {
   return filteredEvents.value.slice(start, start + pagination.pageSize)
 })
 
-const selectedEvent = computed(() => {
-  return filteredEvents.value.find((event) => event.id === selectedId.value) || pagedEvents.value[0] || null
-})
-
-const trendPoints = computed(() => {
-  const trend = selectedEvent.value?.trend || []
-  if (!trend.length) return []
-  const maxHeat = Math.max(...trend.map((item) => item.heat), 1)
-  const step = 240 / Math.max(trend.length - 1, 1)
-  return trend.map((item, index) => ({
-    label: item.label,
-    x: 20 + index * step,
-    y: 118 - (item.heat / maxHeat) * 92,
-  }))
-})
-
-const trendLine = computed(() => trendPoints.value.map((point) => `${point.x},${point.y}`).join(' '))
-
-const sourceBreakdown = computed(() => {
-  const sources = selectedEvent.value?.sourcePlatforms || []
-  const weights = { weibo: 56.2, xhs: 28.1, tieba: 15.7 }
-  return sources.map((value, index) => ({
-    value,
-    percent: weights[value] || Math.max(12, Math.round(100 / (index + 2))),
-  }))
-})
+// 「事件预览」侧栏连同它的两处假数据一起删了（2026-07-14）：
+//   - 「来源分布」的百分比是**写死的**（weibo 56.2 / xhs 28.1 / tieba 15.7，其余按下标瞎算），
+//     和这个事件真实的来源构成毫无关系——一个看板不能展示编出来的比例。
+//   - 「热度趋势（近7天）」的 `event.trend` 后端**根本不返回**，画出来是一张只有坐标轴的空图。
+// 这一页的职责是**检索**（找到事件）；研判交给工作台（那里有 AI 的风险依据、四轴分解、
+// 状态证据、代表帖溯源）。见 docs/page-responsibilities.md。
 
 watch(
   () => [pagination.page, filteredEvents.value.length],
@@ -376,7 +290,6 @@ async function loadEvents() {
   loading.value = true
   try {
     events.value = await fetchPublishedEvents()
-    selectedId.value = events.value[0]?.id || ''
   } catch (error) {
     ElMessage.error(error.message || '事件列表加载失败')
   } finally {
@@ -384,9 +297,13 @@ async function loadEvents() {
   }
 }
 
+// 找到事件之后去研判它：跳工作台并选中这一条（列表找 → 工作台研判）。
+function openWorkbench(event) {
+  router.push({ path: '/opinion', query: { event_id: event.raw_id ?? event.id } })
+}
+
 function applyFilters() {
   pagination.page = 1
-  selectedId.value = ''
   if (!filteredEvents.value.length) {
     ElMessage.info('当前筛选条件下没有公开事件')
   }
@@ -400,18 +317,12 @@ function resetFilters() {
   filters.sortBy = 'heat'
   filters.quick = 'all'
   pagination.page = 1
-  selectedId.value = ''
 }
 
 function setQuick(value) {
   filters.quick = value
   filters.risk = ['high', 'medium', 'low'].includes(value) ? value : 'all'
   pagination.page = 1
-  selectedId.value = ''
-}
-
-function selectEvent(event) {
-  selectedId.value = event.id
 }
 
 function openDetail(event) {
@@ -565,15 +476,16 @@ function sourceShort(value) {
 .events-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 448px;
+  /* 预览侧栏已移除（见 script 里的说明）——表格独占整幅，检索页就该把列表铺开 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
 }
 
-.event-list-card, .event-preview-card { min-height: 0; display: flex; flex-direction: column; }
+.event-list-card { min-height: 0; display: flex; flex-direction: column; }
 
 /* 面板标题：收敛到产品级字阶（页面主标题在顶栏，这里只是分区名） */
-.compact-panel-title, .preview-header {
+.compact-panel-title {
   height: 46px;
   flex: 0 0 auto;
   display: flex;
@@ -766,7 +678,6 @@ function sourceShort(value) {
 
 @media (max-width: 1380px) {
   .event-filter { grid-template-columns: minmax(200px, 1fr) repeat(4, minmax(98px, 0.42fr)) 56px 56px 118px; gap: 8px; }
-  .events-layout { grid-template-columns: minmax(0, 1fr) 410px; }
 }
 @media (max-width: 1120px) {
   .event-filter, .events-layout { grid-template-columns: 1fr; }
