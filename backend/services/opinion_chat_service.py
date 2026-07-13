@@ -43,7 +43,8 @@ _ANSWER_INTENTS: dict[str, dict[str, str]] = {
         "instruction": (
             "请直接回答用户的风险问题，用较短的问答口吻输出。"
             "重点说明是否有风险、风险等级、最主要的 3 条依据和处理建议。"
-            "不要写成完整简报，标题最多使用三级标题。"
+            "涉及多个风险事件时，先用一张 Markdown 表格汇总（事件、风险等级、热度、主要依据），"
+            "再展开说明。不要写成完整简报，标题最多使用三级标题。"
         ),
     },
     "opinion_answer": {
@@ -58,6 +59,8 @@ _ANSWER_INTENTS: dict[str, dict[str, str]] = {
         "title": "校园热点分析",
         "instruction": (
             "请直接回答用户的热点问题，列出最重要的热点事件、热度和原因。"
+            "涉及多个事件时，先用一张 Markdown 表格汇总（事件、热度、风险、情绪），"
+            "再分点说明最重要的两三个事件为什么值得关注。"
             "不要写成完整简报，标题最多使用三级标题。"
         ),
     },
@@ -65,7 +68,8 @@ _ANSWER_INTENTS: dict[str, dict[str, str]] = {
 
 REPORT_INSTRUCTION = (
     "请生成正式的中文舆情简报，结构包含：热点概括、主要观点、情绪倾向、风险等级、"
-    "风险依据、建议关注点。语言偏报告体，标题最多使用三级标题。"
+    "风险依据、建议关注点。热点概括涉及多个事件时，可用一张 Markdown 表格汇总对比。"
+    "语言偏报告体，标题最多使用三级标题。"
 )
 
 _RISK_RANK = {"high": 3, "medium": 2, "low": 1}
@@ -240,54 +244,25 @@ class OpinionChatService:
         if routed.keyword and user_id:
             _last_keyword_by_user[user_id] = routed.keyword
 
-        if routed.intent == "risk_analysis":
-            events = self._risk_sorted_events(keyword)[:8]
-            answer = self._llm_answer(
-                contextual,
-                events,
-                fallback_title="校园风险预警",
-                instruction=(
-                    "请直接回答用户的风险问题，用较短的问答口吻输出。"
-                    "重点说明是否有风险、风险等级、最主要的 3 条依据和处理建议。"
-                    "不要写成完整简报，标题最多使用三级标题。"
-                ),
-            )
-            _record_turn(user_id, message, answer, "risk_analysis")
-            return self._response("risk_analysis", keyword, answer, routed, events)
-
         if routed.intent == "report":
             response = self._chat_report(contextual, keyword, routed)
             _record_turn(user_id, message, response["answer"], "report")
             return response
 
-        if routed.intent == "opinion_answer":
-            events = self._events(keyword)[:8]
+        # 三个单步问答意图共用 _ANSWER_INTENTS（唯一事实来源）。曾经这里各自内联一份
+        # 一模一样的指令文案——和流式版迟早漂移成"同一个问题两种答案"，且缓存键分裂。
+        if routed.intent in _ANSWER_INTENTS:
+            spec = _ANSWER_INTENTS[routed.intent]
+            events = (
+                self._risk_sorted_events(keyword)
+                if routed.intent == "risk_analysis"
+                else self._events(keyword)
+            )[:8]
             answer = self._llm_answer(
-                contextual,
-                events,
-                fallback_title="校园观点问答",
-                instruction=(
-                    "请用 Agent 问答口吻回答用户，不要写成舆情简报。"
-                    "用 1 段结论加 3 到 5 个要点说明大家主要怎么看、情绪倾向和应关注的问题。"
-                    "语气自然、简洁，标题最多使用三级标题。"
-                ),
+                contextual, events, fallback_title=spec["title"], instruction=spec["instruction"]
             )
-            _record_turn(user_id, message, answer, "opinion_answer")
-            return self._response("opinion_answer", keyword, answer, routed, events)
-
-        if routed.intent == "hotspots":
-            events = self._events(keyword)[:8]
-            answer = self._llm_answer(
-                contextual,
-                events,
-                fallback_title="校园热点分析",
-                instruction=(
-                    "请直接回答用户的热点问题，列出最重要的热点事件、热度和原因。"
-                    "不要写成完整简报，标题最多使用三级标题。"
-                ),
-            )
-            _record_turn(user_id, message, answer, "hotspots")
-            return self._response("hotspots", keyword, answer, routed, events)
+            _record_turn(user_id, message, answer, routed.intent)
+            return self._response(routed.intent, keyword, answer, routed, events)
 
         # search 兜底。路由没认出意图 ≠ 库里没有这件事：「刘一阳的事怎么样了」这类
         # 问法（X怎么样了/X的事）不落在任何单步意图里，曾在这里只得到一句
@@ -494,10 +469,7 @@ class OpinionChatService:
             user_task=f"{message}\n任务：生成校园公共舆情简报，关键词：{keyword or '全部'}",
             analysis_payload=payload,
             fallback_text=fallback,
-            output_instruction=(
-                "请生成正式的中文舆情简报，结构包含：热点概括、主要观点、情绪倾向、风险等级、"
-                "风险依据、建议关注点。语言偏报告体，标题最多使用三级标题。"
-            ),
+            output_instruction=REPORT_INSTRUCTION,  # 与流式版共用，别再内联一份等它漂移
             # 数据集为空时没有可引编号，不强制 LLM 标注引用。
             require_citations=bool(cite_map),
         )

@@ -53,6 +53,26 @@
               :title="reviewSummary(msg.meta.review)"
             />
 
+            <!-- 关联事件卡片：done.events 的结构化字段（风险/热度/条数）直接画出来。
+                 热度条画的是算术字段，来自后端数据，不经过 LLM——图表不可能被幻觉画歪 -->
+            <div v-if="msg.meta.events && msg.meta.events.length" class="event-cards">
+              <p class="event-cards-title">关联事件（{{ msg.meta.events.length }}）</p>
+              <div v-for="(ev, ei) in msg.meta.events" :key="ei" class="event-card">
+                <div class="event-card-head">
+                  <span class="event-card-title">{{ ev.title }}</span>
+                  <el-tag size="small" :type="riskTagType(ev.risk_level)" effect="light">
+                    {{ riskLabel(ev.risk_level) }}
+                  </el-tag>
+                </div>
+                <div class="heat-row">
+                  <div class="heat-track">
+                    <span class="heat-fill" :style="{ width: heatWidth(ev, msg.meta.events) }"></span>
+                  </div>
+                  <span class="heat-value">热度 {{ Math.round(ev.heat_score || 0) }} · {{ ev.source_count || 0 }} 条</span>
+                </div>
+              </div>
+            </div>
+
             <!-- search 兜底找到的帖子清单：后端一直带回，之前从未渲染——用户只看到
                  "已找到 10 条内容"却看不见任何一条，等于白找 -->
             <div v-if="msg.meta.notes && msg.meta.notes.length" class="note-list">
@@ -185,6 +205,26 @@ function isSafeUrl(url) {
   return typeof url === 'string' && /^https?:\/\//.test(url)
 }
 
+// 事件卡片：风险等级 → 标签色 / 文案
+const RISK_TAG_TYPES = { high: 'danger', medium: 'warning', low: 'info' }
+const RISK_LABELS = { high: '高风险', medium: '中风险', low: '低风险' }
+
+function riskTagType(level) {
+  return RISK_TAG_TYPES[level] || 'info'
+}
+
+function riskLabel(level) {
+  return RISK_LABELS[level] || level || '未知'
+}
+
+// 热度条宽度 = 本批事件内的相对占比。纯算术展示，不做对数、不做美化加工——
+// 条子的长短就是 heat_score 的真实比例（最短保留 2% 让条子可见）。
+function heatWidth(ev, events) {
+  const max = Math.max(...events.map((e) => Number(e.heat_score) || 0), 1)
+  const ratio = (Number(ev.heat_score) || 0) / max
+  return `${Math.max(Math.round(ratio * 100), 2)}%`
+}
+
 // 审校提示封顶展示（与后端追加进正文的口径一致）：审校是提示，不是第二份报告。
 const REVIEW_ALERT_MAX_ISSUES = 3
 
@@ -255,7 +295,7 @@ async function send(preset) {
   const bubble = reactive({
     role: 'agent',
     text: '',
-    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null, notes: [] },
+    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null, notes: [], events: [] },
   })
   let bubbleShown = false
   let streamError = null
@@ -295,6 +335,7 @@ async function send(preset) {
         bubble.meta.degraded = data.degraded || false
         bubble.meta.review = data.review || null
         bubble.meta.notes = data.notes || []
+        bubble.meta.events = data.events || []
       } else if (event === 'error') {
         streamError = new Error(data.message || '对话失败')
       }
@@ -576,6 +617,72 @@ async function send(preset) {
 
 .bubble .el-alert {
   margin-top: 8px;
+}
+
+/* ——— 关联事件卡片 ——— */
+.event-cards {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.event-cards-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.event-card {
+  padding: 6px 0;
+}
+
+.event-card + .event-card {
+  border-top: 1px dashed var(--color-border-light);
+}
+
+.event-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.event-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+.heat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.heat-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--brand-100);
+  overflow: hidden;
+}
+
+.heat-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-500);
+}
+
+.heat-value {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 
 /* ——— search 兜底的帖子清单 ——— */

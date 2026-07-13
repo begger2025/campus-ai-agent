@@ -110,14 +110,52 @@ export function renderMarkdown(source) {
       continue
     }
 
-    // 有序列表
+    // 有序列表。三件事必须一起做，缺一个编号就会全变成"1."：
+    //   1. 吸收缩进的续行/子弹点——LLM 的编号项下面常挂缩进的"- 热度：…"，
+    //      不吸收的话每个编号项都会被打断成独立的 <ol>；
+    //   2. 跳过项与项之间的空行（后面还是编号项就算同一张列表）；
+    //   3. 用 <li value> / <ol start> 保留原文编号——即使列表真被拆开，
+    //      浏览器也按原编号渲染，而不是每张都从 1 数起。
     if (/^\d+[.)]\s+/.test(trimmed)) {
       const items = []
-      while (i < lines.length && /^\d+[.)]\s+/.test(lines[i].trim())) {
-        items.push(`<li>${renderInline(lines[i].trim().replace(/^\d+[.)]\s+/, ''))}</li>`)
-        i += 1
+      let start = null
+      while (i < lines.length) {
+        const raw = lines[i]
+        const t = raw.trim()
+        if (!t) {
+          // 空行：向后看第一个非空行，还是编号项则视为同一张列表继续
+          let j = i + 1
+          while (j < lines.length && !lines[j].trim()) j += 1
+          if (j < lines.length && /^\d+[.)]\s+/.test(lines[j].trim())) {
+            i = j
+            continue
+          }
+          break
+        }
+        const numbered = t.match(/^(\d+)[.)]\s+(.*)$/)
+        if (numbered && (!/^\s/.test(raw) || !items.length)) {
+          if (start === null) start = Number(numbered[1])
+          items.push({ value: Number(numbered[1]), html: renderInline(numbered[2]), subs: [] })
+          i += 1
+          continue
+        }
+        // 缩进行归属当前编号项：子弹点变嵌套列表，普通文字接 <br>
+        if (items.length && /^\s/.test(raw)) {
+          const item = items[items.length - 1]
+          if (/^[-*]\s+/.test(t)) {
+            item.subs.push(`<li>${renderInline(t.replace(/^[-*]\s+/, ''))}</li>`)
+          } else {
+            item.html += `<br>${renderInline(t)}`
+          }
+          i += 1
+          continue
+        }
+        break
       }
-      out.push(`<ol>${items.join('')}</ol>`)
+      const body = items
+        .map((item) => `<li value="${item.value}">${item.html}${item.subs.length ? `<ul>${item.subs.join('')}</ul>` : ''}</li>`)
+        .join('')
+      out.push(`<ol start="${start ?? 1}">${body}</ol>`)
       continue
     }
 
