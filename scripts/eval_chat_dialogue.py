@@ -46,12 +46,18 @@ def _events_eq(n):
     return lambda r: r["event_count"] == n
 
 
+def _events_at_least(n):
+    # 2026-07-15 起弹出的事件 = 回答实际引用到的子集（_cited_event_subset），
+    # 不再等于检索集合大小——泛问断言从"恰好 8 个"放宽为"至少 N 个"。
+    return lambda r: r["event_count"] >= n
+
+
 # (提问, [(期望描述, 断言)])——期望针对的是**路由与检索层**的可判定结果，
 # 不评判生成文本的措辞（那由人读）。
 CONVERSATION = [
     (
         "最近有什么热点？",
-        [("泛问检索全部（8 个已发布事件）", _events_eq(8)), ("话题为空", _kw_empty)],
+        [("泛问弹出多个事件（引用子集）", _events_at_least(2)), ("话题为空", _kw_empty)],
     ),
     (
         "请给我一份东校宿舍搬迁的舆情简报",
@@ -84,7 +90,7 @@ CONVERSATION = [
     ),
     (
         "最近有什么热点？",
-        [("聊天中途的泛问跳出话题（global）", _kw_empty), ("检索回到全部", _events_eq(8))],
+        [("聊天中途的泛问跳出话题（global）", _kw_empty), ("弹出回到多事件", _events_at_least(2))],
     ),
 ]
 
