@@ -161,6 +161,7 @@
 入库（机器 A，参见 xhs-parallel-crawl-guide.md §入库四步）
   ├─ scripts\sync_media_to_raw_posts.py --limit 0     ← --limit 0 必须写！默认 100 会静默丢
   ├─ scripts\process_raw_posts.py --limit 0
+  ├─ scripts\build_post_vectors.py                     ← 刷新帖子语义向量（聊天的语义检索物料）
   └─ scripts\generate_public_events.py --preview → 确认 → 正式生成
 质量管控（管理员，5 分钟）
   └─ 数据管理页过一遍新帖：台湾国立中山大学 / 蹭校名广告 → 剔除（理由必填，可恢复）
