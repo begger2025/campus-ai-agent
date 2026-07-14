@@ -48,10 +48,10 @@
         :loading="eventsLoading"
       />
       <StatCard
-        title="今日新增"
+        title="最近新增"
         :value="todayNewCount"
         :icon="Clock"
-        desc="按最近数据日统计"
+        desc="最近数据日发生的事件"
         color="teal"
         :loading="eventsLoading"
       />
@@ -86,20 +86,20 @@
       <div class="section-card">
         <div class="section-header">
           <span class="section-title">
-            近7天事件热度趋势
-            <el-tooltip :content="HEAT_TOOLTIP" placement="top" :show-after="150">
+            近{{ trendDays }}天发帖趋势
+            <el-tooltip :content="TREND_TOOLTIP" placement="top" :show-after="150">
               <el-icon class="title-info" :size="13"><InfoFilled /></el-icon>
             </el-tooltip>
           </span>
-          <span v-if="!eventsLoading && !isLatestDayToday" class="section-hint">
-            截至 {{ latestDayLabel }} · 最近数据日
+          <span v-if="!trendLoading && trendEnd" class="section-hint">
+            截至 {{ trendEnd }} · 最近数据日
           </span>
         </div>
         <div class="section-body">
-          <div v-if="eventsLoading" class="chart-skeleton">
+          <div v-if="trendLoading" class="chart-skeleton">
             <span v-for="i in 7" :key="i" :style="{ height: 18 + ((i * 37) % 60) + '%' }" />
           </div>
-          <div v-else class="mini-chart" role="img" aria-label="近7天事件数量柱状图">
+          <div v-else class="mini-chart" role="img" :aria-label="`近${trendDays}天每日发帖数量柱状图`">
             <div
               v-for="(item, index) in trendData"
               :key="item.name"
@@ -113,10 +113,11 @@
                 <span
                   class="chart-value"
                   :class="{ 'chart-value--pinned': index === maxTrendIndex }"
-                >{{ formatHeat(item.value) }}</span>
+                >{{ item.value }}</span>
                 <div class="chart-bar"></div>
               </div>
-              <div class="chart-label">{{ item.name }}</div>
+              <!-- 30 根柱子放不下 30 个日期标签——每 5 天一个 + 收尾那天 -->
+              <div class="chart-label">{{ showLabel(index) ? item.name : '' }}</div>
             </div>
           </div>
         </div>
@@ -154,7 +155,7 @@
             </thead>
             <tbody>
               <tr v-for="post in posts.slice(0, 6)" :key="post.id">
-                <td><el-tag size="small">{{ post.platform }}</el-tag></td>
+                <td><span :class="['plat-pill', `plat-${post.platform}`]">{{ platformLabel(post.platform) }}</span></td>
                 <td class="post-title">{{ post.title }}</td>
                 <td class="text-muted">{{ post.author || '匿名' }}</td>
                 <td class="text-muted">{{ formatTime(post.publish_time) }}</td>
@@ -216,10 +217,10 @@ import {
   Warning,
   WarningFilled,
 } from '@element-plus/icons-vue'
-import { formatHeat, HEAT_TOOLTIP } from '@/utils/heat'
+import { formatHeat } from '@/utils/heat'
 import StatCard from '@/components/StatCard.vue'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
-import { checkHealth, fetchPosts } from '@/api/posts'
+import { checkHealth, fetchPosts, fetchSentimentStats } from '@/api/posts'
 import { fetchPublishedEvents } from '@/api/events'
 import { getCurrentUser, getCurrentRole } from '@/auth/session'
 import { mockPosts } from '@/mock/data'
@@ -261,7 +262,25 @@ onMounted(async () => {
   healthChecked.value = true
   loadPosts()
   loadEvents()
+  loadPostTrend()
 })
+
+// ——— 发帖趋势（服务端按天聚合，复用舆情分析页的统计接口） ———
+const postTrend = ref([])
+const trendDays = ref(30)
+const trendLoading = ref(true)
+
+async function loadPostTrend() {
+  try {
+    const stats = await fetchSentimentStats()
+    postTrend.value = stats.daily_trend || []
+    trendDays.value = stats.trend_days || 30
+  } catch {
+    postTrend.value = []
+  } finally {
+    trendLoading.value = false
+  }
+}
 
 // ——— 帖子数据 ———
 const posts = ref([])
@@ -317,13 +336,19 @@ function parseTime(value) {
   return Number.isFinite(ts) ? ts : null
 }
 
-// 以数据里最新一天为锚点（演示快照的数据可能不是"今天"）
+// —— 时间口径：一律用 `event_time`（事件**发生**的时间），不是 `updated_at`（入库时间）——
+//
+// 这三个数字此前全都建在 updated_at 上，而所有事件都是同一次流水线生成的：
+//   - 「今日新增 9」的真实含义是"上一次流水线生成了 9 个事件"，和"今天新增 9 个舆情事件"
+//     毫无关系（真实值是 0——最新的事件也在 50 天前）；
+//   - 「近7天事件热度趋势」画的是"我们什么时候跑的流水线"，7/13 那根 6.2 万的巨柱就是
+//     那天入了 9 个事件，不是那天爆了 6.2 万热度的舆情。
 const latestTime = computed(() => {
-  const times = publishedEvents.value.map((e) => parseTime(e.updatedAt)).filter(Boolean)
+  const times = publishedEvents.value.map((e) => parseTime(e.event_time)).filter(Boolean)
   return times.length ? Math.max(...times) : Date.now()
 })
 
-// 最近数据日不是"今天"时（如演示快照），在趋势图旁明确标注时间口径
+// 最近数据日不是"今天"时（语料是历史数据），明确标注时间口径
 const latestDayLabel = computed(() => {
   const d = new Date(latestTime.value)
   return `${d.getMonth() + 1}/${d.getDate()}`
@@ -339,10 +364,12 @@ const isLatestDayToday = computed(() => {
   )
 })
 
+// 「最近数据日新增」：和最新事件同一天**发生**的事件数。锚在最近数据日而不是今天——
+// 语料不是实时的，锚在今天会恒为 0。卡片文案已如实写明"按最近数据日统计"。
 const todayNewCount = computed(() => {
   const anchor = new Date(latestTime.value)
   return publishedEvents.value.filter((e) => {
-    const ts = parseTime(e.updatedAt)
+    const ts = parseTime(e.event_time)
     if (!ts) return false
     const d = new Date(ts)
     return (
@@ -353,37 +380,48 @@ const todayNewCount = computed(() => {
   }).length
 })
 
-// ——— 近7天趋势（按事件更新日聚合热度） ———
-const trendData = computed(() => {
-  const anchor = new Date(latestTime.value)
-  anchor.setHours(0, 0, 0, 0)
-  const days = []
-  for (let i = 6; i >= 0; i -= 1) {
-    const dayStart = anchor.getTime() - i * 86400000
-    days.push({
-      name: `${new Date(dayStart).getMonth() + 1}/${new Date(dayStart).getDate()}`,
-      start: dayStart,
-      end: dayStart + 86400000,
-      value: 0,
-    })
-  }
-  publishedEvents.value.forEach((e) => {
-    const ts = parseTime(e.updatedAt)
-    if (!ts) return
-    const bucket = days.find((d) => ts >= d.start && ts < d.end)
-    if (bucket) bucket.value += Math.max(1, Math.round(e.heatScore || 0))
-  })
-  return days
-})
+// ——— 近 30 天**发帖**趋势（按帖子发布日聚合，服务端算好） ———
+//
+// 为什么改用帖子而不是事件：10 个已发布事件分布在 340 天里，任何 7 天窗口最多 1 个——
+// 用事件做趋势，图上永远是一根孤零零的柱子。帖子有 397 条、每天都有，趋势才有形状。
+// 复用舆情分析页的 /api/sentiment/stats（服务端按天聚合，锚在最近数据日、空白天补 0）。
+const trendData = computed(() =>
+  postTrend.value.map((point) => ({
+    name: point.date.slice(5).replace('-', '/'), // 2026-05-24 -> 5/24
+    value: point.count,
+  })),
+)
 
 const maxTrend = computed(() => Math.max(...trendData.value.map((d) => d.value), 0))
 const maxTrendIndex = computed(() => trendData.value.findIndex((d) => d.value === maxTrend.value))
+
+// 趋势图的收尾日（= 最近数据日，服务端锚定的）
+const trendEnd = computed(() => {
+  const last = postTrend.value[postTrend.value.length - 1]
+  return last ? last.date.slice(5).replace('-', '/') : ''
+})
+
+// 30 根柱子塞不下 30 个日期标签：每 5 天标一个，外加最后一天
+function showLabel(index) {
+  const total = trendData.value.length
+  if (total <= 10) return true
+  return index % 5 === 0 || index === total - 1
+}
+
+const TREND_TOOLTIP =
+  '每日新采集的帖子数（按帖子的发布时间聚合）。用帖子而不是事件做趋势：' +
+  '已发布事件只有十几个、跨度大半年，任何一个短窗口里都最多一两个，画不出趋势。'
 
 // ——— 工具函数 ———
 function formatTime(ts) {
   if (!ts) return '未知'
   const d = new Date(ts)
   return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
+function platformLabel(platform) {
+  return PLATFORM_LABELS[platform] || platform || '未知'
 }
 
 </script>
@@ -394,6 +432,24 @@ function formatTime(ts) {
   flex-direction: column;
   gap: 16px;
 }
+
+/* 平台品牌标签：小红书红 / 快手金 / 微博橙 …，与事件详情、数据管理全站统一 */
+.plat-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-2, #f5f7fa);
+  border: 1px solid var(--color-border);
+}
+.plat-xhs { color: #be123c; background: #fff1f2; border-color: #fecdd3; }
+.plat-weibo { color: #c2410c; background: #fff7ed; border-color: #fed7aa; }
+.plat-ks { color: #a16207; background: #fefce8; border-color: #fde68a; }
+.plat-tieba { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.plat-zhihu { color: #0369a1; background: #f0f9ff; border-color: #bae6fd; }
+.plat-web { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
 
 /* 欢迎横幅 */
 .welcome-banner {
