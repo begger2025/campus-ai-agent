@@ -27,3 +27,6 @@ data/logs/
 
 # 帖子语义向量（本地构建产物，scripts/build_post_vectors.py 重建）
 data/post_vectors.npz
+
+# 会话记忆本地库（运行时状态，chat_memory_store 自建）
+data/chat_memory.sqlite3

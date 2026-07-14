@@ -18,6 +18,7 @@ from backend.agent.public_opinion_core.clustering import cluster_notes, note_ran
 from backend.agent.public_opinion_core.schemas import OpinionEvent, OpinionNote
 from backend.agent.public_opinion_core.scoring import score_notes
 from backend.agent.public_opinion_core.sentiment_risk import analyze_notes_sentiment_and_risk
+from backend.services import chat_memory_store
 from backend.services.citations import CITATION_HINT, attach_citation_ids, validate_citations
 from backend.services.critic import ReviewResult, review_report
 from backend.services.event_read_model import query_published_events
@@ -138,11 +139,16 @@ def _cited_event_subset(
 # 在气泡里出现两遍（实测截图）。正文是简报本身，审校是关于简报的元数据，
 # 展示位只能有一个：前端的警告卡。
 
-# 进程内会话记忆：user_id -> 上一轮话题关键词 / 最近对话历史。单进程限制：
-# 多 worker 部署或重启后丢失，丢失的后果只是追问需要重新带上话题词，可接受。
+# 进程内会话记忆：user_id -> 上一轮话题关键词 / 最近对话历史 / 话题轨迹。
+# 写穿到本地 SQLite（chat_memory_store，不碰共享库）：重启后从持久层水合，
+# 「那件事后来呢」不再答非所问。持久层故障 → 退回"重启失忆"的老行为。
 _last_keyword_by_user: dict[str, str] = {}
 _last_intent_by_user: dict[str, str] = {}
 _history_by_user: dict[str, deque] = {}
+# 本次会话点名过的话题（switch 时追加）：5 轮滑窗会吞掉更早的对话，
+# 但"聊过什么话题"这条线索很便宜，值得单独留着进历史块。
+_topic_trail_by_user: dict[str, list[str]] = {}
+TOPIC_TRAIL_MAX = 6
 
 # 最近 5 轮对话（10 条记录）进 prompt；助手回答截断存储，控 token。
 # 曾经是 3 轮——用户的真实对话七八轮起步，聊到后半段，开头交代的话题背景已经
@@ -155,12 +161,46 @@ def reset_chat_memory() -> None:
     _last_keyword_by_user.clear()
     _last_intent_by_user.clear()
     _history_by_user.clear()
+    _topic_trail_by_user.clear()
+    chat_memory_store.clear_all()  # 测试/评测隔离：两边一起清，否则持久层会诈尸
 
 
 def _clear_user_memory(user_id: str) -> None:
     _last_keyword_by_user.pop(user_id, None)
     _last_intent_by_user.pop(user_id, None)
     _history_by_user.pop(user_id, None)
+    _topic_trail_by_user.pop(user_id, None)
+    chat_memory_store.clear(user_id)  # 新对话必须两边一起翻篇
+
+
+def _hydrate_user_memory(user_id: str) -> None:
+    """进程字典 miss 时从持久层水合（重启后接得上话）。"""
+
+    if not user_id or user_id in _history_by_user or user_id in _last_keyword_by_user:
+        return
+    data = chat_memory_store.load(user_id)
+    if not data:
+        return
+    if data["last_keyword"]:
+        _last_keyword_by_user[user_id] = data["last_keyword"]
+    if data["last_intent"]:
+        _last_intent_by_user[user_id] = data["last_intent"]
+    if data["history"]:
+        _history_by_user[user_id] = deque(data["history"], maxlen=HISTORY_MAX_ENTRIES)
+    if data["topic_trail"]:
+        _topic_trail_by_user[user_id] = list(data["topic_trail"])[:TOPIC_TRAIL_MAX]
+
+
+def _remember_topic(user_id: str, keyword: str) -> None:
+    """switch 时把话题记进轨迹（去重保序，封顶）。"""
+
+    if not user_id or not keyword:
+        return
+    trail = _topic_trail_by_user.setdefault(user_id, [])
+    if keyword in trail:
+        trail.remove(keyword)
+    trail.append(keyword)
+    del trail[:-TOPIC_TRAIL_MAX]
 
 
 def _history_block(user_id: str) -> str:
@@ -168,7 +208,11 @@ def _history_block(user_id: str) -> str:
     if not entries:
         return ""
     lines = [("用户" if role == "user" else "助手") + "：" + text for role, text in entries]
-    return "（最近对话回顾，仅用于理解本轮问题中的指代：\n" + "\n".join(lines) + "）\n"
+    # 话题轨迹是**语境不是数据**：只帮模型理解指代（"最开始那个话题"），
+    # 事实性论断仍只能引用数据围栏内的编号。
+    trail = _topic_trail_by_user.get(user_id) or []
+    trail_line = f"本次会话聊过的话题：{' → '.join(trail)}\n" if len(trail) > 1 else ""
+    return f"（最近对话回顾，仅用于理解本轮问题中的指代：\n{trail_line}" + "\n".join(lines) + "）\n"
 
 
 def _last_user_question(user_id: str) -> str:
@@ -217,6 +261,14 @@ def _record_turn(user_id: str, message: str, answer: str, intent: str = "") -> N
     if len(answer) > HISTORY_ANSWER_MAX_CHARS:
         answer = answer[:HISTORY_ANSWER_MAX_CHARS] + "…"
     history.append(("assistant", answer))
+    # 写穿持久层：重启后水合回来（save 内部吞错，持久层坏了不影响本轮对话）
+    chat_memory_store.save(
+        user_id,
+        last_keyword=_last_keyword_by_user.get(user_id, ""),
+        last_intent=_last_intent_by_user.get(user_id, ""),
+        history=list(history),
+        topic_trail=_topic_trail_by_user.get(user_id, []),
+    )
 
 
 class OpinionChatService:
@@ -342,6 +394,7 @@ class OpinionChatService:
     def chat(self, message: str, user_id: str = "", reset: bool = False) -> dict[str, Any]:
         if reset and user_id:
             _clear_user_memory(user_id)
+        _hydrate_user_memory(user_id)  # 重启后从持久层接上话（miss 时才读，reset 后必然为空）
         last_keyword = _last_keyword_by_user.get(user_id, "")
         # 路由用原句（历史会干扰关键词提取）；答案生成用带历史的版本。
         # last_intent/last_question 供路由判断"这轮是不是还在聊同一件事"。
@@ -365,6 +418,7 @@ class OpinionChatService:
         # 不是换话题，不许顺手把记忆改了——下一轮的 continue 还要靠它。
         if topic == "switch" and routed.keyword and user_id:
             _last_keyword_by_user[user_id] = routed.keyword
+            _remember_topic(user_id, routed.keyword)
         if keyword:
             # 话题锚：生成也要围绕当前话题组织，别被泛化数据带跑。
             contextual = f"（当前对话话题：{keyword}）\n{contextual}"
@@ -453,6 +507,7 @@ class OpinionChatService:
 
         if reset and user_id:
             _clear_user_memory(user_id)
+        _hydrate_user_memory(user_id)  # 与阻塞版同语义：重启后从持久层接上话
         last_keyword = _last_keyword_by_user.get(user_id, "")
         routed = route_intent(
             message,
@@ -472,6 +527,7 @@ class OpinionChatService:
         keyword, topic = _resolve_topic_keyword(routed, message, last_keyword)
         if topic == "switch" and routed.keyword and user_id:
             _last_keyword_by_user[user_id] = routed.keyword
+            _remember_topic(user_id, routed.keyword)
         if keyword:
             contextual = f"（当前对话话题：{keyword}）\n{contextual}"
         yield ("meta", {"intent": routed.intent, "keyword": keyword, "route_source": routed.source})
@@ -701,11 +757,110 @@ class OpinionChatService:
                 "risk_distribution": risks,
             }
 
+        def run_event_detail(action_input: dict[str, Any]) -> dict[str, Any]:
+            """研判下钻：单个事件的完整证据链——「凭什么中风险」「凭什么标持续发酵」。
+
+            数据全是读模型现成的（LLM 研判结论 + 算术测量），这里零 LLM 调用。
+            """
+
+            keyword = str(action_input.get("keyword") or "")
+            events = self._events(keyword)[:1]
+            if not events:
+                return {"keyword": keyword, "count": 0, "event": None}
+            event = events[0]
+            return {
+                "keyword": keyword,
+                "count": 1,
+                "event": {
+                    "title": event.title,
+                    "summary": event.summary,
+                    "risk_level": event.risk_level,
+                    "risk_score": event.risk_score,
+                    "risk_reasons": event.risk_reasons,  # LLM 的判断依据
+                    "lifecycle": event.lifecycle,
+                    "lifecycle_judgement": event.lifecycle_judgement,
+                    "lifecycle_reason": event.lifecycle_reason,
+                    "growth": event.growth,  # 算术的增长证据
+                    "priority_score": event.priority_score,
+                    "recency_weight": event.recency_weight,
+                    "event_time": event.event_time,
+                    "heat_score": event.heat_score,
+                    "source_count": event.source_count,
+                    "sentiment": event.sentiment,
+                    "concerns": event.concerns,
+                    "representative_titles": [note.title for note in event.representative_notes[:5]],
+                },
+            }
+
+        def _note_age_days(note: OpinionNote) -> float | None:
+            raw = (note.publish_time or note.publish_date or "").strip()
+            if not raw:
+                return None
+            try:
+                from datetime import datetime
+
+                published = datetime.fromisoformat(raw[:19])
+            except ValueError:
+                return None
+            return max((datetime.now() - published).total_seconds() / 86400.0, 0.0)
+
+        def run_trend(action_input: dict[str, Any]) -> dict[str, Any]:
+            """发帖趋势：窗口内前后两半的发帖量对比（纯算术，不编造增长）。"""
+
+            keyword = str(action_input.get("keyword") or "")
+            try:
+                window = int(action_input.get("days") or 14)
+            except (TypeError, ValueError):
+                window = 14
+            window = max(window, 2)
+            ages = [age for age in (_note_age_days(note) for note in self._notes(keyword)) if age is not None]
+            in_window = [age for age in ages if age <= window]
+            recent = sum(1 for age in in_window if age <= window / 2)
+            earlier = len(in_window) - recent
+            return {
+                "keyword": keyword,
+                "window_days": window,
+                "total_in_window": len(in_window),
+                "recent_half": recent,
+                "earlier_half": earlier,
+                "growing": recent > earlier and recent > 0,
+                "no_timestamp_notes": sum(1 for note in self._notes(keyword) if _note_age_days(note) is None),
+            }
+
+        def run_sentiment_breakdown(action_input: dict[str, Any]) -> dict[str, Any]:
+            """话题的情绪分布（规则情绪计数，纯算术）。"""
+
+            keyword = str(action_input.get("keyword") or "")
+            distribution: dict[str, int] = {}
+            notes = self._notes(keyword)
+            for note in notes:
+                distribution[note.sentiment] = distribution.get(note.sentiment, 0) + 1
+            return {"keyword": keyword, "total": len(notes), "distribution": distribution}
+
         return {
             "search_notes": ReactTool(
                 name="search_notes",
                 description="按关键词检索原始帖子，返回标题、情绪和热度（keyword 为空时返回全部热门帖）",
                 run=run_search,
+            ),
+            "event_detail": ReactTool(
+                name="event_detail",
+                description=(
+                    "下钻单个事件的研判证据链：风险等级及其依据、生命周期状态及理由、"
+                    "增长证据、优先级分解、关注点、代表帖（问「为什么是X风险」「有什么依据」"
+                    "「进展如何」时用）"
+                ),
+                run=run_event_detail,
+            ),
+            "trend": ReactTool(
+                name="trend",
+                description="按关键词统计发帖趋势：窗口内前后两半的发帖量对比（问「最近在涨吗」「热度趋势」时用，可带 days 参数）",
+                run=run_trend,
+            ),
+            "sentiment_breakdown": ReactTool(
+                name="sentiment_breakdown",
+                description="按关键词统计帖子的情绪分布（问「大家情绪怎么样」「负面多吗」时用）",
+                run=run_sentiment_breakdown,
             ),
             "hotspots": ReactTool(
                 name="hotspots",
