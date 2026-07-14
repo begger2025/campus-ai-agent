@@ -57,7 +57,7 @@
               type="warning"
               :closable="false"
               show-icon
-              :title="reviewSummary(msg.meta.review)"
+              :title="reviewSummary(msg)"
             />
 
             <!-- 参考来源：正文角标的脚注清单——每个编号是什么、点开去哪，一目了然 -->
@@ -206,7 +206,7 @@ import {
 } from '@element-plus/icons-vue'
 import { streamAgentChat } from '@/api/agentChat'
 import { renderMarkdown } from '@/utils/markdown'
-import { citeTarget, extractCitations, isSafeUrl } from '@/utils/citations'
+import { citeTarget, extractCitations, humanizeCiteIds, isSafeUrl } from '@/utils/citations'
 import BrandLogo from '@/components/BrandLogo.vue'
 
 const route = useRoute()
@@ -333,11 +333,16 @@ function visibleEvents(msg) {
   return events.length > 3 && !msg.meta.eventsExpanded ? events.slice(0, 3) : events
 }
 
-// 审校提示封顶展示（与后端追加进正文的口径一致）：审校是提示，不是第二份报告。
+// 审校提示封顶展示：审校是提示，不是第二份报告。
 const REVIEW_ALERT_MAX_ISSUES = 3
 
-function reviewSummary(review) {
-  const issues = review?.issues || []
+// critic 的 issue 原文里带内部编号（[来源:e1]、"p4 仅能支持…"）——那是审计口径，
+// 数据里保留；展示前用 citations 映射翻译成「事件“…”」「帖子“…”」（实测截图：
+// 编号直接漏给用户就是天书）。
+function reviewSummary(msg) {
+  const issues = (msg.meta?.review?.issues || []).map((issue) =>
+    humanizeCiteIds(issue, msg.meta?.citations),
+  )
   const shown = issues.slice(0, REVIEW_ALERT_MAX_ISSUES).join('；')
   return issues.length > REVIEW_ALERT_MAX_ISSUES
     ? `审校提示（共 ${issues.length} 条，仅展示前 ${REVIEW_ALERT_MAX_ISSUES} 条）：${shown}`

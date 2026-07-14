@@ -45,6 +45,37 @@ export function isSafeUrl(url) {
   return typeof url === 'string' && /^https?:\/\//.test(url)
 }
 
+// 裸编号形态（「e1 的 risk_reasons」「p4 仅能支持」）。\b 保证 top1 / P2P
+// 这类普通英文词不被误伤：p/e 前后必须是词边界（中文字符对 \b 是非词字符，
+// 所以「但e1的」也能命中）。
+const BARE_CITE_ID = /\b[pPeE][0-9]+\b/g
+
+/**
+ * 把文本里的内部编号翻译成人话——给「审校提示」这类**转述**引用的场合用。
+ *
+ * critic 的 issue 原文里既有完整标记 [来源:e1]，也有裸编号（"e1 的 risk_reasons
+ * 仅写明…"）。编号是审计口径，issues 数据里保留；但直接展示给用户就是天书
+ * （实测截图）。这里统一换成「事件“东校区宿舍搬迁”」「帖子“标题…”」。
+ * 查不到的编号原样保留——宁可露出编号，不可吞掉内容。
+ */
+export function humanizeCiteIds(text, citations) {
+  const source = String(text || '')
+  if (!citations) return source
+  const label = (raw) => {
+    const entry = citations[normalizeCiteId(raw)]
+    const title = String(entry?.title || '')
+    if (!title) return null
+    const kind = normalizeCiteId(raw).startsWith('e') ? '事件' : '帖子'
+    return `${kind}“${title.length > 16 ? `${title.slice(0, 16)}…` : title}”`
+  }
+  return source
+    .replace(CITE_MARK, (_match, group) => {
+      const names = group.split(/[,，、]/).map((raw) => label(raw) || raw.trim())
+      return `[来源:${names.join('、')}]`
+    })
+    .replace(BARE_CITE_ID, (raw) => label(raw) || raw)
+}
+
 /**
  * 一个引用编号 → 跳转目标。返回 null = 不可点（宁可不可点，不可点错）。
  *
