@@ -26,6 +26,7 @@ from backend.services.llm_client import LlmCallResult, generate_llm_report, stre
 from backend.services.opinion_report import build_event_digest, compact_events_for_llm
 from backend.services.public_opinion_adapter import processed_posts_to_notes, query_agent_rows
 from backend.services.react_loop import ReactResult, ReactStep, ReactTool, iter_react, run_react
+from backend.services.semantic_posts import semantic_post_ids
 
 
 CHAT_NOTE_LIMIT = 200
@@ -230,6 +231,18 @@ class OpinionChatService:
     def _notes(self, keyword: str = "") -> list[OpinionNote]:
         if keyword not in self._notes_cache:
             rows = query_agent_rows(self.db, keyword=keyword, platforms=None, limit=CHAT_NOTE_LIMIT)
+            # 混合检索：LIKE 认不出改写说法（「饭堂涨价」搜不到「食堂调价」），语义候选
+            # 补字面漏掉的。只补**集合**、不重排——下游按自己的键重排，这里的顺序不重要。
+            # 字面命中永远全收（正文真含这个词，高精度）；语义候选已被阈值筛过
+            # （见 semantic_posts，防假阳性），失败/未建向量时返回空 = 自动退回纯字面。
+            # keyword 为空 = 全量检索，没有"漏"可补，不白付一次 embed。
+            if keyword:
+                seen = {row.get("processed_post_id") for row in rows}
+                # 孤证从严：字面零命中时语义在独自作答，阈值更高（见 semantic_posts 实测形状）。
+                candidate_ids = semantic_post_ids(keyword, corroborated=bool(rows))
+                extra_ids = [pid for pid in candidate_ids if pid not in seen]
+                if extra_ids:
+                    rows = (rows + query_agent_rows(self.db, ids=extra_ids))[:CHAT_NOTE_LIMIT]
             notes = processed_posts_to_notes(rows, warnings=[])
             # 对话工具用规则情绪（快）；LLM 级情绪在分析端点里做。
             self._notes_cache[keyword] = analyze_notes_sentiment_and_risk(score_notes(notes))

@@ -196,18 +196,33 @@ def query_agent_rows(
     keyword: str = "",
     platforms: list[str] | None = None,
     limit: int = 50,
+    ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Load processed_posts rows as dictionaries accepted by the Agent core.
 
     ``limit <= 0`` 表示不设上限（全量）。历史实现把 limit 钳到 ``max(limit, 1)``，
     于是"全量"根本没法表达，而默认值又只取最新的一段——旧帖被无声丢掉。
+
+    ``ids`` 给定时按主键取数（语义检索的候选走这条路），**忽略 keyword**，
+    但仍过 _filtered_post_query 的剔除过滤——被剔除的帖子按 id 也取不回来，
+    否则语义检索就成了剔除机制的旁路（静默错误答案）。返回顺序保持 ids 的
+    顺序（那是语义相似度序，调用方要用）。
     """
 
-    query = _filtered_post_query(db, keyword=keyword, platforms=platforms)
-    query = query.order_by(ProcessedPost.id.desc())
-    if limit and limit > 0:
-        query = query.limit(limit)
-    rows = query.all()
+    if ids is not None:
+        if not ids:
+            return []
+        rank = {post_id: index for index, post_id in enumerate(ids)}
+        rows = sorted(
+            _filtered_post_query(db, platforms=platforms).filter(ProcessedPost.id.in_(ids)).all(),
+            key=lambda row: rank.get(row.id, len(rank)),
+        )
+    else:
+        query = _filtered_post_query(db, keyword=keyword, platforms=platforms)
+        query = query.order_by(ProcessedPost.id.desc())
+        if limit and limit > 0:
+            query = query.limit(limit)
+        rows = query.all()
     agent_rows = [processed_post_to_agent_row(row) for row in rows]
 
     # 附高赞评论摘录（评论区风向进情绪/风险分析与简报语料）；表缺失时为空。
