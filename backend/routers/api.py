@@ -278,8 +278,13 @@ def _event_item(
         "date_range_json": row.date_range_json,
         "source_keywords_json": row.source_keywords_json,
         "top_tags_json": row.top_tags_json,
+        # 生串保留（老调用方在读），同时给**解析好的**版本：一个接口不该把"我存的是
+        # JSON 字符串"这个实现细节漏给每一个调用方。处置台要聚合所有中高风险事件的诉求，
+        # 没有这个就得为了拿一个数组去逐个打详情接口。
         "concerns_json": row.concerns_json,
         "risk_reasons_json": row.risk_reasons_json,
+        "concerns": _json_value(row.concerns_json, []),
+        "risk_reasons": _json_value(row.risk_reasons_json, []),
         "reviewed_by": row.reviewed_by,
         "reviewed_at": row.reviewed_at,
         "review_comment": row.review_comment,
