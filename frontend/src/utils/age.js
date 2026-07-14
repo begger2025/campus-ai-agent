@@ -35,3 +35,23 @@ export function formatEventTime(eventTime) {
   if (!text) return ''
   return text.slice(0, 10)
 }
+
+/**
+ * 事件代表时间，**日期 + 时分**（"2026-05-24 18:25"）。
+ *
+ * 直接切字符串，不过 `new Date()`：后端给的是带时区的 ISO 串，交给 Date 再格式化会被
+ * 转成浏览器本地时区，同一条事件在不同人的电脑上显示不同的时间。这里要展示的是
+ * **事件的代表时间**（成员帖发布时间的中位数），它已经是后端算好的一个事实，不该被
+ * 时区再动一次手。
+ *
+ * 没有时间戳的老数据返回 "—"：**不知道什么时候发生 ≠ 今天发生**。事件列表原本用
+ * `updated_at`（这行数据什么时候写进库的）当"发布时间"，而所有事件都是同一次流水线
+ * 生成的——于是 10 个事件全都显示"今天"，其中包括一个 340 天前的（刘一阳去世）。
+ */
+export function formatEventDateTime(eventTime) {
+  const text = String(eventTime || '').trim()
+  if (!text) return '—'
+  const date = text.slice(0, 10)
+  const hm = text.slice(11, 16)
+  return hm ? `${date} ${hm}` : date
+}

@@ -16,9 +16,14 @@
         <el-option label="来源平台：全部" value="all" />
         <el-option v-for="item in sourceOptions" :key="item.value" :label="`来源平台：${item.label}`" :value="item.value" />
       </el-select>
+      <!-- 默认「全部」：时间口径改用真实的事件发生时间后，语料的现实是最新事件也在 50 天前
+           （旧口径用入库时间，所有事件都是"今天"，默认近7天等于没筛）。默认 7 天会筛掉几乎
+           所有事件，页面看起来是空的——那是把数据问题伪装成产品问题。
+           各档都锚在**最近数据日**（见 latestTime），不是锚在今天。 -->
       <el-select v-model="filters.timeRange" class="filter-select">
-        <el-option label="时间范围：近7天" value="7d" />
+        <el-option label="时间范围：全部" value="all" />
         <el-option label="时间范围：近24小时" value="24h" />
+        <el-option label="时间范围：近7天" value="7d" />
         <el-option label="时间范围：近30天" value="30d" />
       </el-select>
       <el-select v-model="filters.sortBy" class="filter-select">
@@ -65,7 +70,11 @@
                   </el-tooltip>
                 </th>
                 <th>来源</th>
-                <th>发布时间</th>
+                <th class="time-head">
+                  <el-tooltip :content="EVENT_TIME_TOOLTIP" placement="top" :show-after="150">
+                    <span class="time-head-label">事件时间 <el-icon :size="13"><InfoFilled /></el-icon></span>
+                  </el-tooltip>
+                </th>
                 <th>状态</th>
                 <th>操作</th>
               </tr>
@@ -112,7 +121,14 @@
                     >+{{ event.sourcePlatforms.length - 3 }}</span>
                   </div>
                 </td>
-                <td>{{ displayTime(event.updatedAt) }}</td>
+                <!-- 事件**发生**的时间，不是数据入库的时间。年龄跟着一起给：一个 340 天前的
+                     事件必须让人一眼看出它是陈年旧事，而不是被默默当成当前舆情。 -->
+                <td class="time-cell">
+                  <span class="time-main">{{ formatEventDateTime(event.event_time) }}</span>
+                  <span :class="['time-age', { 'time-age--stale': isStale(event.age_days) }]">
+                    {{ formatAge(event.age_days) }}
+                  </span>
+                </td>
                 <td>
                   <span class="published-dot"></span>
                   已发布
@@ -166,6 +182,12 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { InfoFilled, Search } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
+import { formatAge, formatEventDateTime, isStale } from '@/utils/age'
+
+// 这一列展示的是**事件什么时候发生**，不是**这行数据什么时候写进库**——后者是所有事件
+// 共享的流水线运行时刻，拿它当"发布时间"会让全部事件都显示成「今天」。
+const EVENT_TIME_TOOLTIP =
+  '事件代表时间 = 成员帖发布时间的中位数（这件事什么时候发生的），不是数据入库时间'
 import { gsap } from 'gsap'
 import { Flip } from 'gsap/Flip'
 
@@ -185,7 +207,7 @@ const filters = reactive({
   keyword: '',
   risk: 'all',
   source: 'all',
-  timeRange: '7d',
+  timeRange: 'all',
   sortBy: 'heat',
   quick: 'all',
 })
@@ -202,8 +224,20 @@ const riskWeight = {
 }
 
 const publishedEvents = computed(() => events.value.filter((event) => event.status === 'published'))
+
+// —— 时间口径：一律用 `event_time`（事件代表时间 = 成员帖发布时间的中位数）——
+//
+// 这一页此前**通篇用 `updatedAt`**，而那是"这行数据什么时候被分析写进库的"。所有事件
+// 都是同一次流水线生成的，于是它们的 updated_at 全挤在同一个凌晨——页面上 10 个事件
+// 因此全都显示「今天」，其中包括一个 **340 天前**的（刘一阳去世，2025-08-07）。
+//
+// 假时间不只是显示问题，它污染了四处逻辑：时间范围筛选、时间排序、「今日新增」统计、
+// 以及"最新数据日"锚点。全部改用 event_time。
+//
+// 锚点是**最近数据日**，不是今天：语料不是实时的（最新事件也在 50 天前），锚在今天的话
+// 「近 7 天」会筛掉全部事件。同 SentimentView 的发帖趋势口径。
 const latestTime = computed(() => {
-  const times = publishedEvents.value.map((event) => parseTime(event.updatedAt)).filter(Boolean)
+  const times = publishedEvents.value.map((event) => parseTime(event.event_time)).filter(Boolean)
   return times.length ? Math.max(...times) : Date.now()
 })
 
@@ -218,14 +252,15 @@ function heatBarWidth(value) {
 const highRiskCount = computed(() => publishedEvents.value.filter((event) => event.riskLevel === 'high').length)
 const mediumRiskCount = computed(() => publishedEvents.value.filter((event) => event.riskLevel === 'medium').length)
 const lowRiskCount = computed(() => publishedEvents.value.filter((event) => event.riskLevel === 'low').length)
-const todayCount = computed(() => publishedEvents.value.filter((event) => isLatestDay(event.updatedAt)).length)
-
+// 「今日新增」这个 tab 已删：它统计的是"今天**入库**的事件"，而所有事件都是同一次流水线
+// 生成的——于是它恒等于事件总数（截图里显示「今日新增 10」，而真实情况是**一个今天发生的
+// 事件都没有**，最新的也在 50 天前）。改用真实的 event_time 后它会恒为 0，一个永远是 0 的
+// tab 没有存在意义。时间筛选交给上面的「时间范围」下拉框。
 const quickTabs = computed(() => [
   { label: '全部', value: 'all', count: publishedEvents.value.length },
   { label: '高风险', value: 'high', count: highRiskCount.value },
   { label: '中风险', value: 'medium', count: mediumRiskCount.value },
   { label: '低风险', value: 'low', count: lowRiskCount.value },
-  { label: '今日新增', value: 'today', count: todayCount.value },
 ])
 
 const filteredEvents = computed(() => {
@@ -239,17 +274,18 @@ const filteredEvents = computed(() => {
       .includes(keyword)
     const riskMatched = filters.risk === 'all' || event.riskLevel === filters.risk
     const sourceMatched = filters.source === 'all' || event.sourcePlatforms.includes(filters.source)
-    const timeMatched = !rangeMs || latestTime.value - parseTime(event.updatedAt) <= rangeMs
-    const quickMatched =
-      filters.quick === 'all' ||
-      event.riskLevel === filters.quick ||
-      (filters.quick === 'today' && isLatestDay(event.updatedAt))
+    // 时间筛选用 event_time；**没有时间戳的老数据一律保留**——不知道什么时候发生的
+    // 不等于很老，不许凭空筛掉（同 recency_weight 对 age=None 的口径）。
+    const eventAt = parseTime(event.event_time)
+    const timeMatched = !rangeMs || !eventAt || latestTime.value - eventAt <= rangeMs
+    const quickMatched = filters.quick === 'all' || event.riskLevel === filters.quick
 
     return keywordMatched && riskMatched && sourceMatched && timeMatched && quickMatched
   })
 
   return [...rows].sort((a, b) => {
-    if (filters.sortBy === 'time') return parseTime(b.updatedAt) - parseTime(a.updatedAt)
+    // 「时间优先」排的是**事件发生的先后**，不是入库顺序。没有时间戳的排最后。
+    if (filters.sortBy === 'time') return (parseTime(b.event_time) || 0) - (parseTime(a.event_time) || 0)
     if (filters.sortBy === 'risk') return riskWeight[b.riskLevel] - riskWeight[a.riskLevel] || b.heatScore - a.heatScore
     return b.heatScore - a.heatScore
   })
@@ -349,29 +385,25 @@ function openFeedback(event) {
   feedbackVisible.value = true
 }
 
-function displayTime(value) {
-  const timestamp = parseTime(value)
-  const latest = new Date(latestTime.value).toISOString().slice(0, 10)
-  const current = new Date(timestamp).toISOString().slice(0, 10)
-  const hm = value.slice(11, 16)
-  return current === latest ? `今天 ${hm}` : `昨天 ${hm}`
-}
+// displayTime 已删。它只有两种可能的输出：
+//
+//     return current === latest ? `今天 ${hm}` : `昨天 ${hm}`
+//
+// **一个 340 天前的事件也会显示成"昨天"**——这个函数里根本没有第三种分支。
+// 现在直接用 formatEventDateTime(event_time) 给出完整的日期时分。
 
 function parseTime(value) {
-  return new Date(value.replace(' ', 'T')).getTime()
+  const text = String(value || '').trim()
+  if (!text) return 0 // 没有时间戳：返回 0，调用方负责"不知道 ≠ 很老"的语义
+  const ms = new Date(text.replace(' ', 'T')).getTime()
+  return Number.isNaN(ms) ? 0 : ms
 }
 
 function timeRangeToMs(value) {
   if (value === '24h') return 24 * 60 * 60 * 1000
   if (value === '7d') return 7 * 24 * 60 * 60 * 1000
   if (value === '30d') return 30 * 24 * 60 * 60 * 1000
-  return 0
-}
-
-function isLatestDay(value) {
-  const date = new Date(parseTime(value)).toISOString().slice(0, 10)
-  const latest = new Date(latestTime.value).toISOString().slice(0, 10)
-  return date === latest
+  return 0 // 'all'
 }
 
 function riskClass(value) {
@@ -522,7 +554,7 @@ function sourceShort(value) {
 .compact-table th:nth-child(2) { width: 80px; }   /* 风险 */
 .compact-table th:nth-child(3) { width: 128px; }  /* 热度 */
 .compact-table th:nth-child(4) { width: 168px; }  /* 来源 */
-.compact-table th:nth-child(5) { width: 100px; }  /* 发布时间 */
+.compact-table th:nth-child(5) { width: 132px; }  /* 事件时间（日期时分 + 年龄两行） */
 .compact-table th:nth-child(6) { width: 84px; }   /* 状态 */
 .compact-table th:nth-child(7) { width: 132px; }  /* 操作 */
 
@@ -551,6 +583,15 @@ function sourceShort(value) {
 
 .heat-head-label { display: inline-flex; align-items: center; gap: 3px; cursor: help; }
 .heat-head-label .el-icon { color: var(--color-text-faint); }
+
+.time-head-label { display: inline-flex; align-items: center; gap: 3px; cursor: help; }
+.time-head-label .el-icon { color: var(--color-text-faint); }
+
+/* 事件时间：日期时分 + 年龄。年龄不是装饰——它让「340 天前」无处遁形 */
+.time-cell span { display: block; }
+.time-main { color: var(--color-text); font-variant-numeric: tabular-nums; }
+.time-age { margin-top: 1px; color: var(--color-text-muted); font-size: 11px; }
+.time-age--stale { color: var(--color-danger); font-weight: 600; }
 
 .heat-cell { color: var(--color-text); font-weight: 600; }
 .heat-num { display: inline-flex; align-items: center; gap: 6px; }
