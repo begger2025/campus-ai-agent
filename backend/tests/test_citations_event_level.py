@@ -18,8 +18,8 @@
 1. attach_citation_ids 给每个事件也编号（e1…eN），注册进 cite_map；
 2. 引用指令说明两级：帖子内容 → pN，事件级聚合结论 → eN；
 3. critic 的引用核对规则同步两级（事件级论断标 eN 不算问题）；
-4. 追加进正文的审校提示封顶 3 条（完整清单仍随 review 字段返回）——
-   审校是提示，不是第二份报告。
+4. 审校结论只随 review 字段返回，不追加进正文——前端警告卡是唯一展示位，
+   两头都写会让同一份审校在气泡里出现两遍（实测截图）。
 """
 
 from __future__ import annotations
@@ -35,12 +35,7 @@ from backend.services.citations import (
 )
 from backend.services.critic import ReviewResult, review_report
 from backend.services.intent_router import IntentRoute
-from backend.services.opinion_chat_service import (
-    REVIEW_NOTICE_MAX_ISSUES,
-    OpinionChatService,
-    _review_notice,
-    reset_chat_memory,
-)
+from backend.services.opinion_chat_service import OpinionChatService, reset_chat_memory
 
 
 def _payload():
@@ -148,35 +143,20 @@ class CriticAcceptsEventCitationsTests(unittest.TestCase):
         self.assertTrue(any("e7" in issue for issue in review.issues))
 
 
-class ReviewNoticeCapTests(unittest.TestCase):
-    """追加进正文的审校提示封顶：审校是提示，不是第二份报告。"""
-
-    def test_a_short_issue_list_keeps_the_original_wording(self):
-        self.assertEqual(_review_notice(["缺少引用"]), "\n\n> ⚠️ 审校提示：缺少引用")
-
-    def test_a_long_issue_list_is_capped_with_a_count(self):
-        issues = [f"问题{i}" for i in range(1, 9)]
-
-        notice = _review_notice(issues)
-
-        self.assertIn("问题1", notice)
-        self.assertIn("问题3", notice)
-        self.assertNotIn("问题4", notice, "正文里只留前几条，别糊一面比简报还长的警告墙")
-        self.assertIn("8 条", notice, "总数要说清楚，完整清单在 review 字段里")
-
-
 FAKE_NOTES = [
     OpinionNote(note_id="1", title="食堂排队太久", content="食堂排队太久", heat_score=50.0),
     OpinionNote(note_id="2", title="食堂新窗口不错", content="食堂新窗口不错", heat_score=30.0),
 ]
 
 
-class ChatReportNoticeCapTests(unittest.TestCase):
+class ChatReportReviewChannelTests(unittest.TestCase):
     def setUp(self) -> None:
         reset_chat_memory()
         self.addCleanup(reset_chat_memory)
 
-    def test_the_full_issue_list_survives_in_the_response_while_the_text_is_capped(self):
+    def test_review_issues_travel_in_the_review_field_never_in_the_answer(self):
+        """审校结论只随 review 字段返回：正文追加 + 前端警告卡 = 同一份审校出现两遍。"""
+
         issues = [f"问题{i}" for i in range(1, 9)]
         critic = MagicMock(return_value=ReviewResult(verdict="warn", issues=list(issues)))
         service = OpinionChatService(db=None)
@@ -196,12 +176,8 @@ class ChatReportNoticeCapTests(unittest.TestCase):
             response = service.chat("给我一份食堂简报", user_id="u1")
 
         self.assertEqual(len(response["review"]["issues"]), 8, "完整清单必须随 review 字段返回")
-        self.assertIn("问题1", response["answer"])
-        self.assertNotIn(
-            f"问题{REVIEW_NOTICE_MAX_ISSUES + 1}",
-            response["answer"],
-            "正文里的审校提示要封顶——8 条全量 join 会比简报本身还长",
-        )
+        self.assertNotIn("审校提示", response["answer"], "正文里不许再出现审校提示——展示位是前端警告卡")
+        self.assertNotIn("问题1", response["answer"])
 
 
 if __name__ == "__main__":

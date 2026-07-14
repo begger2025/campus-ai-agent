@@ -418,6 +418,9 @@ def _row_to_event(row: PublicEvent, notes: list[OpinionNote], now: datetime) -> 
         risk_reasons=list(json_value(row.risk_reasons_json, [])),
         representative_notes=notes,
         agent_summary=row.summary or "",
+        # 落库 id 随行带走：聊天要拿它拼「去工作台研判」的跳转链接（?event_id=）。
+        # extra 本来就是给应用侧附加信息留的口袋，核心 schema 不必为此加列。
+        extra={"event_id": int(row.id)},
     )
 
 

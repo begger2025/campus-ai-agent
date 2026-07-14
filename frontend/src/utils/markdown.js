@@ -2,9 +2,13 @@
  * 轻量 Markdown 渲染器 —— 专为舆情助手的回答格式设计，零依赖。
  *
  * 支持：#~###### 标题、| 表格 |（含对齐语法）、- / 1. 列表、
- * **加粗**、`行内代码`、--- 分隔线、段落（单换行转 <br>）。
- * 输入先整体做 HTML 转义，再套结构标签，v-html 使用是安全的。
+ * **加粗**、`行内代码`、--- 分隔线、段落（单换行转 <br>）、
+ * [来源:pN]/[来源:eN] 引用标记 → 按首次出现编号的上标角标（见 utils/citations.js）。
+ * 输入先整体做 HTML 转义，再套结构标签；角标里的 href/title 也逐一转义，
+ * v-html 使用是安全的。
  */
+
+import { CITE_MARK, citeTarget, extractCitations, normalizeCiteId } from './citations'
 
 function escapeHtml(text) {
   return String(text)
@@ -41,7 +45,38 @@ function cellAlign(sep) {
   return ''
 }
 
-export function renderMarkdown(source) {
+/**
+ * [来源:pN]/[来源:eN] → 上标角标。
+ *
+ * 内部编号对用户是天书（实测截图：正文里满是 e1、p3），统一换成按首次出现
+ * 编号的 [1][2]…；cite_map（done.citations）到位后角标变成链接——
+ * pN 跳原帖（新窗口）/ 站内搜索，eN 跳工作台该事件（data-nav 交给组件层
+ * 用 router.push 接管，保持 SPA 内跳转）。流式期间 cite_map 还没到，
+ * 角标先以纯序号出现；正文只增不改，首次出现顺序稳定，序号不会跳变。
+ */
+function renderCiteMarks(html, source, citations) {
+  const order = extractCitations(source)
+  if (!order.length) return html
+  const numberOf = new Map(order.map((id, index) => [id, index + 1]))
+  return html.replace(CITE_MARK, (_match, group) =>
+    group
+      .split(/[,，、]/)
+      .map((raw) => {
+        const id = normalizeCiteId(raw)
+        const number = numberOf.get(id)
+        const target = citeTarget(id, citations?.[id])
+        if (!target) {
+          return `<sup class="cite-chip"><span title="来源 ${escapeHtml(id)}">${number}</span></sup>`
+        }
+        const label = escapeHtml(`${target.kind === 'event' ? '事件' : '帖子'}：${target.title || id}`)
+        const nav = target.external ? ' target="_blank" rel="noopener"' : ' data-nav="1"'
+        return `<sup class="cite-chip"><a href="${escapeHtml(target.href)}"${nav} title="${label}">${number}</a></sup>`
+      })
+      .join('')
+  )
+}
+
+export function renderMarkdown(source, { citations = null } = {}) {
   if (!source) return ''
   const lines = escapeHtml(source).split(/\r?\n/)
   const out = []
@@ -185,5 +220,5 @@ export function renderMarkdown(source) {
     }
   }
 
-  return out.join('')
+  return renderCiteMarks(out.join(''), source, citations)
 }

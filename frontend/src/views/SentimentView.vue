@@ -60,9 +60,7 @@
               @click="togglePost(post)"
             >
               <div class="post-top">
-                <el-tag size="small" :type="platformTagType(post.platform)">
-                  {{ post.platform }}
-                </el-tag>
+                <span :class="['plat-pill', `plat-${post.platform}`]">{{ platformLabel(post.platform) }}</span>
                 <!-- 帖子只显示**情绪**：帖子级风险是规则算的，真实分布 low 385 / medium 12 /
                      high 0——一个几乎恒为「低风险」的徽章不携带任何信息。
                      真正的风险研判在事件级、由 LLM 做（事件列表 / 工作台）。 -->
@@ -140,7 +138,7 @@
             <div class="insight-block">
               <div class="insight-title">平台分布</div>
               <div v-for="item in stats.platforms" :key="item.platform" class="dist-row">
-                <span class="dist-label">{{ item.platform }}</span>
+                <span class="dist-label"><span :class="['plat-dot', `plat-dot-${item.platform}`]"></span>{{ platformLabel(item.platform) }}</span>
                 <div class="dist-track">
                   <span class="dist-fill dist-fill--platform" :style="{ width: pct(item.count, stats.total) }"></span>
                 </div>
@@ -186,6 +184,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { Bell, ChatLineSquare, DataAnalysis, Loading, Warning } from '@element-plus/icons-vue'
 import StatCard from '@/components/StatCard.vue'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
@@ -201,7 +200,10 @@ import { fetchSentimentPosts, fetchSentimentStats } from '@/api/posts'
 //     舆情工作台 单事件 × 研判
 //     舆情关注   中高风险 × 处置
 
-const keyword = ref('')
+// 舆情助手的引用角标「站内检索」跳过来时带着 ?keyword=（原帖无外链的帖子
+// 用标题前缀在这里溯源），预填并直接按它检索。
+const route = useRoute()
+const keyword = ref(typeof route.query.keyword === 'string' ? route.query.keyword : '')
 const sentimentFilter = ref('')
 const currentPage = ref(1)
 const pageSize = 8
@@ -307,9 +309,9 @@ function sentimentLabel(sentiment) {
   return SENTIMENT_LABELS[sentiment] || '—'
 }
 
-function platformTagType(platform) {
-  const map = { weibo: 'warning', zhihu: 'primary', tieba: 'success', xhs: 'danger', ks: 'info' }
-  return map[platform] || 'info'
+const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
+function platformLabel(platform) {
+  return PLATFORM_LABELS[platform] || platform || '未知'
 }
 
 // 帖子链接来自爬取数据，只放行 http(s)，防 javascript: 一类伪协议
@@ -504,11 +506,47 @@ function togglePost(post) {
 }
 
 .dist-label {
-  width: 44px;
+  width: 72px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: var(--color-text-secondary);
 }
+
+/* 平台品牌标签：与全站统一（小红书红 / 快手金 / 微博橙 …） */
+.plat-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-2, #f5f7fa);
+  border: 1px solid var(--color-border);
+}
+.plat-xhs { color: #be123c; background: #fff1f2; border-color: #fecdd3; }
+.plat-weibo { color: #c2410c; background: #fff7ed; border-color: #fed7aa; }
+.plat-ks { color: #a16207; background: #fefce8; border-color: #fde68a; }
+.plat-tieba { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.plat-zhihu { color: #0369a1; background: #f0f9ff; border-color: #bae6fd; }
+.plat-web { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+
+/* 分布行的平台圆点：同一套品牌色（实心） */
+.plat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #94a3b8;
+}
+.plat-dot-xhs { background: #f43f5e; }
+.plat-dot-weibo { background: #ef4444; }
+.plat-dot-ks { background: #f59e0b; }
+.plat-dot-tieba { background: #3b82f6; }
+.plat-dot-zhihu { background: #0284c7; }
+.plat-dot-web { background: #10b981; }
 
 .dist-track {
   flex: 1;

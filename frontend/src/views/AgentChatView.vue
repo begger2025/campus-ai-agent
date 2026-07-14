@@ -25,8 +25,15 @@
           <BrandLogo :size="30" />
         </span>
         <div class="bubble">
-          <!-- Agent 回答是 Markdown（表格/标题/加粗），渲染前已整体 HTML 转义 -->
-          <div v-if="msg.role === 'agent'" class="bubble-text md-body" v-html="renderMarkdown(msg.text)"></div>
+          <!-- Agent 回答是 Markdown（表格/标题/加粗），渲染前已整体 HTML 转义。
+               [来源:pN/eN] 内部编号在这里换成可点击角标（citations 映射随 done 到达）；
+               角标的站内跳转（data-nav）由 onBodyClick 代理成 router.push，保持 SPA -->
+          <div
+            v-if="msg.role === 'agent'"
+            class="bubble-text md-body"
+            @click="onBodyClick"
+            v-html="renderMarkdown(msg.text, { citations: msg.meta?.citations })"
+          ></div>
           <div v-else class="bubble-text" v-text="msg.text"></div>
 
           <template v-if="msg.role === 'agent' && msg.meta">
@@ -53,18 +60,44 @@
               :title="reviewSummary(msg.meta.review)"
             />
 
+            <!-- 参考来源：正文角标的脚注清单——每个编号是什么、点开去哪，一目了然 -->
+            <div v-if="citationItems(msg).length" class="cite-sources">
+              <p class="cite-sources-title">参考来源</p>
+              <ol>
+                <li v-for="c in citationItems(msg)" :key="c.id" :value="c.number">
+                  <el-tag size="small" :type="c.kind === 'event' ? 'primary' : 'info'" effect="plain">
+                    {{ c.kind === 'event' ? '事件' : '帖子' }}
+                  </el-tag>
+                  <a v-if="c.external" :href="c.href" target="_blank" rel="noopener">{{ c.title }} ↗</a>
+                  <a v-else :href="c.href" @click.prevent="router.push(c.href)">
+                    {{ c.title }}{{ c.kind === 'event' ? '（去工作台研判）' : '（站内检索）' }}
+                  </a>
+                </li>
+              </ol>
+            </div>
+
             <!-- 关联事件卡片：done.events 的结构化字段（风险/热度/条数）直接画出来。
-                 热度条画的是算术字段，来自后端数据，不经过 LLM——图表不可能被幻觉画歪 -->
+                 热度条画的是算术字段，来自后端数据，不经过 LLM——图表不可能被幻觉画歪。
+                 有落库 id 的事件整卡可点，跳工作台研判；规则聚类的兜底事件没有 id，保持不可点 -->
             <div v-if="msg.meta.events && msg.meta.events.length" class="event-cards">
               <p class="event-cards-title">关联事件（{{ msg.meta.events.length }}）</p>
               <!-- 全局提问会带回 8 个事件——全量平铺是一面卡片墙，盖过正文。
                    超过 3 张默认收起，想看再展开；话题聚焦时（1~3 张）保持平铺 -->
-              <div v-for="(ev, ei) in visibleEvents(msg)" :key="ei" class="event-card">
+              <div
+                v-for="(ev, ei) in visibleEvents(msg)"
+                :key="ei"
+                class="event-card"
+                :class="{ 'event-card--linkable': ev.id }"
+                @click="openEvent(ev)"
+              >
                 <div class="event-card-head">
                   <span class="event-card-title">{{ ev.title }}</span>
-                  <el-tag size="small" :type="riskTagType(ev.risk_level)" effect="light">
-                    {{ riskLabel(ev.risk_level) }}
-                  </el-tag>
+                  <span class="event-card-side">
+                    <el-tag size="small" :type="riskTagType(ev.risk_level)" effect="light">
+                      {{ riskLabel(ev.risk_level) }}
+                    </el-tag>
+                    <span v-if="ev.id" class="event-card-go">研判 →</span>
+                  </span>
                 </div>
                 <div class="heat-row">
                   <!-- 热度条是**对比**工具：只有一个事件时没有可比对象，条子必然满格、
@@ -161,7 +194,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   DataAnalysis,
@@ -173,9 +206,11 @@ import {
 } from '@element-plus/icons-vue'
 import { streamAgentChat } from '@/api/agentChat'
 import { renderMarkdown } from '@/utils/markdown'
+import { citeTarget, extractCitations, isSafeUrl } from '@/utils/citations'
 import BrandLogo from '@/components/BrandLogo.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 // ——— 会话生命周期：前端界面和后端记忆必须对同一件事达成一致 ———
 // 后端的会话记忆（话题词 + 最近对话）按用户 ID 存在进程里，切页面不会消失；
@@ -241,9 +276,35 @@ function intentLabel(intent) {
   return INTENT_LABELS[intent] || intent
 }
 
-// 帖子链接来自爬取数据，只放行 http(s)，防 javascript: 一类伪协议（与 citations 同口径）
-function isSafeUrl(url) {
-  return typeof url === 'string' && /^https?:\/\//.test(url)
+// ——— 引用溯源：正文角标 + 参考来源脚注 ———
+// pN/eN 是后端三方对口径用的内部编号，用户看不懂（实测截图）。markdown 渲染器
+// 把它们换成按首次出现编号的角标，这里给出对应的脚注清单：每个编号是帖子还是
+// 事件、标题是什么、点开去哪。编号必须与角标同源（同一个 extractCitations 顺序）。
+function citationItems(msg) {
+  const citations = msg.meta?.citations
+  if (!citations) return []
+  const items = []
+  extractCitations(msg.text).forEach((id, index) => {
+    const target = citeTarget(id, citations[id])
+    if (target && target.title) {
+      items.push({ id, number: index + 1, ...target })
+    }
+  })
+  return items
+}
+
+// v-html 里没法用 router-link：角标的站内链接带 data-nav 标记，点击在这里
+// 代理成 router.push（原生 href 仍在，中键新开标签页照常工作）
+function onBodyClick(event) {
+  const link = event.target.closest?.('a[data-nav]')
+  if (!link) return
+  event.preventDefault()
+  router.push(link.getAttribute('href'))
+}
+
+// 关联事件卡 → 工作台研判。规则聚类的兜底事件没有落库 id，保持不可点。
+function openEvent(ev) {
+  if (ev?.id) router.push(`/opinion?event_id=${ev.id}`)
 }
 
 // 事件卡片：风险等级 → 标签色 / 文案
@@ -343,7 +404,7 @@ async function send(preset) {
   const bubble = reactive({
     role: 'agent',
     text: '',
-    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null, notes: [], events: [], eventsExpanded: false },
+    meta: { intent: '', keyword: '', route_source: '', steps: [], degraded: false, review: null, notes: [], events: [], citations: null, eventsExpanded: false },
   })
   let bubbleShown = false
   let streamError = null
@@ -384,6 +445,8 @@ async function send(preset) {
         bubble.meta.review = data.review || null
         bubble.meta.notes = data.notes || []
         bubble.meta.events = data.events || []
+        // 引用映射到位，正文里的角标从纯序号变成可点击链接（重渲染由响应式触发）
+        bubble.meta.citations = data.citations || null
       } else if (event === 'error') {
         streamError = new Error(data.message || '对话失败')
       }
@@ -657,6 +720,33 @@ async function send(preset) {
 .md-body :deep(tbody tr:last-child td) { border-bottom: 0; }
 .md-body :deep(tbody tr:hover) { background: var(--color-surface-2); }
 
+/* ——— 引用角标（[来源:pN/eN] 渲染成的上标序号） ——— */
+.md-body :deep(.cite-chip) {
+  margin: 0 1px;
+  line-height: 0;
+}
+
+.md-body :deep(.cite-chip a),
+.md-body :deep(.cite-chip span) {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--brand-50);
+  color: var(--brand-600);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+
+.md-body :deep(.cite-chip a:hover) {
+  background: var(--brand-500);
+  color: #fff;
+}
+
 .meta-row {
   margin-top: 10px;
   display: flex;
@@ -666,6 +756,48 @@ async function send(preset) {
 
 .bubble .el-alert {
   margin-top: 8px;
+}
+
+/* ——— 参考来源脚注 ——— */
+.cite-sources {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.cite-sources-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.cite-sources ol {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.9;
+}
+
+.cite-sources li::marker {
+  color: var(--brand-500);
+  font-weight: 600;
+}
+
+.cite-sources .el-tag {
+  margin-right: 6px;
+}
+
+.cite-sources a {
+  color: var(--brand-600);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.cite-sources a:hover {
+  text-decoration: underline;
 }
 
 /* ——— 关联事件卡片 ——— */
@@ -690,6 +822,33 @@ async function send(preset) {
 
 .event-card + .event-card {
   border-top: 1px dashed var(--color-border-light);
+}
+
+.event-card--linkable {
+  cursor: pointer;
+}
+
+.event-card-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.event-card-go {
+  font-size: 12px;
+  color: var(--brand-600);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.event-card--linkable:hover .event-card-go {
+  opacity: 1;
+}
+
+.event-card--linkable:hover .event-card-title {
+  color: var(--brand-600);
 }
 
 .event-card-head {

@@ -179,8 +179,13 @@ class ReportStreamTests(unittest.TestCase):
         self.assertEqual(done["review"]["verdict"], "warn")
         self.assertEqual(done["review"]["issues"], ["缺少引用"])
 
-    def test_a_warned_report_appends_the_review_notice_to_the_streamed_text(self):
-        """审校提示要真的追加到正文末尾（非流式版就是这么做的，行为不能变）。"""
+    def test_review_issues_travel_only_in_done_never_in_the_streamed_text(self):
+        """审校提示只随 done.review 返回，绝不混进正文。
+
+        曾经两头都写：后端把提示追加进正文（流式还作为 delta 推送），前端又用
+        done.review 画了一个警告卡——同一份审校在气泡里出现两遍（实测截图）。
+        正文是简报本身，审校是关于简报的元数据，展示位只能有一个：前端的警告卡。
+        """
 
         service = _StubService()
         routed = IntentRoute(intent="report", keyword="", source="llm")
@@ -194,8 +199,11 @@ class ReportStreamTests(unittest.TestCase):
         ):
             events = _collect(service.chat_stream("给我简报", user_id="u1"))
 
-        self.assertIn("⚠️ 审校提示", _text(events), "审校提示必须作为增量流给用户，而不是悄悄丢掉")
-        self.assertIn("缺少引用", _text(events))
+        self.assertNotIn("审校提示", _text(events), "审校提示不许再追加进正文——前端警告卡已经在展示它")
+        done = _payload(events, "done")
+        self.assertNotIn("审校提示", done["answer"])
+        self.assertEqual(done["review"]["verdict"], "warn")
+        self.assertEqual(done["review"]["issues"], ["缺少引用"], "完整清单必须随 review 字段返回")
 
 
 class ComplexStreamTests(unittest.TestCase):

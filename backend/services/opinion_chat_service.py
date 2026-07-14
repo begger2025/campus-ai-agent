@@ -77,17 +77,26 @@ REPORT_INSTRUCTION = (
 
 _RISK_RANK = {"high": 3, "medium": 2, "low": 1}
 
-# 审校意见追加进正文时最多带几条。审校是提示，不是第二份报告：实测一份简报被报
-# 8 条 issue，全量 join 会在正文尾部糊一面近千字的警告墙，比简报本身还长。
-# 完整清单仍随响应的 review 字段返回（前端/日志可见），正文只留前几条 + 总数。
-REVIEW_NOTICE_MAX_ISSUES = 3
 
+def _link_event_citations(cite_map: dict[str, dict[str, Any]], events: list[OpinionEvent]) -> None:
+    """给 eN 引用补上可跳转的事件 id（工作台 ?event_id=）。
 
-def _review_notice(issues: list[str]) -> str:
-    shown = "；".join(issues[:REVIEW_NOTICE_MAX_ISSUES])
-    if len(issues) > REVIEW_NOTICE_MAX_ISSUES:
-        return f"\n\n> ⚠️ 审校提示（共 {len(issues)} 条，仅展示前 {REVIEW_NOTICE_MAX_ISSUES} 条）：{shown}"
-    return f"\n\n> ⚠️ 审校提示：{shown}"
+    citations.attach_citation_ids 吃的是喂给 LLM 的压缩 payload，里面刻意不放
+    数据库 id（对模型是噪声）；跳转信息在这里、也只在这里回填。编号顺序与
+    compact_events_for_llm 一致（events[:8] 原序），所以 zip 对得上。
+    规则聚类的兜底事件没有落库 id —— 不回填，前端保持不可点：宁可不可点，不可点错。
+    """
+
+    for index, event in enumerate(events[:8], start=1):
+        entry = cite_map.get(f"e{index}")
+        event_id = (event.extra or {}).get("event_id")
+        if entry is not None and event_id is not None:
+            entry["event_id"] = event_id
+
+# 审校结论只随响应的 review 字段返回，**不追加进正文**。曾经两头都写：后端把提示
+# 拼在正文末尾（流式还作为 delta 推送），前端又用 review 字段画警告卡——同一份审校
+# 在气泡里出现两遍（实测截图）。正文是简报本身，审校是关于简报的元数据，
+# 展示位只能有一个：前端的警告卡。
 
 # 进程内会话记忆：user_id -> 上一轮话题关键词 / 最近对话历史。单进程限制：
 # 多 worker 部署或重启后丢失，丢失的后果只是追问需要重新带上话题词，可接受。
@@ -441,6 +450,7 @@ class OpinionChatService:
     ) -> Iterator[tuple[str, dict[str, Any]]]:
         events = self._events(keyword)
         tagged_events, cite_map = attach_citation_ids(compact_events_for_llm(events))
+        _link_event_citations(cite_map, events)
         payload = {"keyword": keyword, "events": tagged_events}
         fallback = build_event_digest(events, title=f"校园舆情简报：{keyword or '全部数据'}")
 
@@ -464,10 +474,6 @@ class OpinionChatService:
         verdict = ReviewResult()
         if not report_text.startswith(fallback):
             verdict = review_report(report_text, payload, citations=cite_map or None)
-        if verdict.verdict == "warn" and verdict.issues:
-            notice = _review_notice(verdict.issues)
-            report_text += notice
-            yield ("delta", {"text": notice})
 
         _record_turn(user_id, message, report_text, "report")
         done = self._response("report", keyword, report_text, routed, events[:8])
@@ -514,6 +520,7 @@ class OpinionChatService:
         events = self._events(keyword)
         # 引用强制：代表帖编号 p1..pN，简报论断必须标注 [来源:pN]，映射随响应返回供前端溯源。
         tagged_events, cite_map = attach_citation_ids(compact_events_for_llm(events))
+        _link_event_citations(cite_map, events)
         payload = {"keyword": keyword, "events": tagged_events}
         fallback = build_event_digest(events, title=f"校园舆情简报：{keyword or '全部数据'}")
         report_text = generate_llm_report(
@@ -529,8 +536,6 @@ class OpinionChatService:
         verdict = ReviewResult()
         if not report_text.startswith(fallback):
             verdict = review_report(report_text, payload, citations=cite_map or None)
-        if verdict.verdict == "warn" and verdict.issues:
-            report_text += _review_notice(verdict.issues)
         response = self._response("report", keyword, report_text, routed, events[:8])
         response["review"] = {"verdict": verdict.verdict, "issues": verdict.issues}
         response["citations"] = cite_map
@@ -644,6 +649,9 @@ class OpinionChatService:
             "route_source": routed.source,
             "events": [
                 {
+                    # 落库 id：前端「关联事件」卡片跳工作台（?event_id=）用。
+                    # 规则聚类的兜底事件没有 —— None，卡片保持不可点。
+                    "id": (event.extra or {}).get("event_id"),
                     "title": event.title,
                     "sentiment": event.sentiment,
                     "risk_level": event.risk_level,
