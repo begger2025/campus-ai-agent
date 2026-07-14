@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from backend.database import SessionLocal, init_db, uses_mysql  # noqa: E402
 from backend.logging_setup import setup_logging  # noqa: E402
 from backend.services.embedding import warm_up as warm_up_embedding  # noqa: E402
+from backend.services.router_keywords import refresh_router_keywords  # noqa: E402
 from backend.routers.admin import router as admin_router  # noqa: E402
 from backend.routers.admin_events import router as admin_events_router  # noqa: E402
 from backend.routers.admin_evidence import router as admin_evidence_router  # noqa: E402
@@ -60,6 +61,13 @@ async def lifespan(app: FastAPI):
     # （之后每次 0.015 秒）。不预热的话，重启后第一个提问的用户要替所有人付这 26 秒。
     # 在后台线程里跑，不拖慢启动（见 embedding.warm_up）。
     warm_up_embedding()
+    # 路由话题词表：把语料的播种关键词注入规则抢答（命中即省一次 ~4 秒的分类 LLM）。
+    # 一次查询几百行，同步跑；失败不致命——退回手写的 KNOWN_KEYWORDS。
+    db = SessionLocal()
+    try:
+        refresh_router_keywords(db)
+    finally:
+        db.close()
     yield
 
 

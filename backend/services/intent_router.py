@@ -16,6 +16,7 @@ behavior without an API key is unchanged.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from backend.services.llm_client import call_llm, extract_json_object, llm_available
@@ -24,6 +25,30 @@ from backend.services.llm_client import call_llm, extract_json_object, llm_avail
 ALLOWED_INTENTS = {"risk_analysis", "report", "opinion_answer", "hotspots", "search", "complex_analysis"}
 
 KNOWN_KEYWORDS = ["作息调整", "作息", "课表", "食堂", "计算机", "中山大学", "宿舍", "校庆", "新生"]
+
+# 动态话题词：来自语料的播种关键词（processed_posts.source_keyword），由部署侧注入
+# （见 backend/services/router_keywords.py）。手写的 9 个词覆盖不了语料的真实话题——
+# 「宿舍搬迁有什么风险」这类库里明明有的话题也要白付一次 ~4 秒的分类 LLM。
+# intent_router 在 sync 白名单里必须保持可移植，所以这里只收词，不连库。
+_dynamic_keywords: list[str] = []
+
+
+def set_dynamic_keywords(keywords: list[str]) -> None:
+    """整表替换动态话题词。空列表 = 清空，退回手写表（测试隔离也用它）。"""
+
+    global _dynamic_keywords
+    _dynamic_keywords = [keyword for keyword in keywords if keyword]
+
+
+def _known_keywords() -> list[str]:
+    """静态 + 动态合并，长词优先。
+
+    「宿舍」和「宿舍搬迁」同时命中时必须取长的——keyword 被截成头词，
+    检索 LIKE '%宿舍%' 会把搬迁内容淹掉（比慢 4 秒糟糕得多）。
+    """
+
+    merged = list(dict.fromkeys([*KNOWN_KEYWORDS, *_dynamic_keywords]))
+    return sorted(merged, key=len, reverse=True)
 
 # 规则抢答的总开关。出了误判先关它，路由立刻退回"每次都问 LLM"的老行为。
 RULE_FAST_PATH_ENABLED = True
@@ -291,7 +316,7 @@ def _matched_keywords(message: str) -> list[str]:
     命中两个词。不去重就会被当成"两个话题"而白白放弃抢答。
     """
 
-    matched = [keyword for keyword in KNOWN_KEYWORDS if keyword in message]
+    matched = [keyword for keyword in _known_keywords() if keyword in message]
     return [
         keyword
         for keyword in matched
@@ -300,7 +325,8 @@ def _matched_keywords(message: str) -> list[str]:
 
 
 def _extract_keyword_by_rules(message: str) -> str:
-    for keyword in KNOWN_KEYWORDS:
+    # _known_keywords 长词优先，所以第一个命中就是最长命中。
+    for keyword in _known_keywords():
         if keyword in message:
             return keyword
     return ""
@@ -325,12 +351,17 @@ def _call_llm_router(
         #（"新宿舍条件更差"延续的是"搬迁"这个事，词面上毫无交集）。
         parts.append(f"上一问：{last_question[:80]}")
     context = f"（{'，'.join(parts)}）\n" if parts else ""
+    # 路由是 15 个 token 的分类活，可以指到更快的模型（ROUTER_LLM_*，不设 = 主端点）。
+    # 用 os.getenv 而不是 llm_config：intent_router 在 sync 白名单里，保持可移植。
     result = call_llm(
         [
             {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
             {"role": "user", "content": f"{context}<user_message>{message}</user_message>"},
         ],
         temperature=0,
+        model=os.getenv("ROUTER_LLM_MODEL") or None,
+        api_key=os.getenv("ROUTER_LLM_API_KEY") or None,
+        base_url=os.getenv("ROUTER_LLM_BASE_URL") or None,
     )
     return result.content
 
