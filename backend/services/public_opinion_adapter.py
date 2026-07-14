@@ -136,9 +136,16 @@ def _filtered_post_query(
     keyword: str = "",
     platforms: list[str] | None = None,
 ):
-    """processed_posts 的过滤查询（不含排序/limit），供取数和计数共用。"""
+    """processed_posts 的过滤查询（不含排序/limit），供取数和计数共用。
 
-    query = db.query(ProcessedPost)
+    **这是事件聚类和舆情助手共用的取数口**——两条下游在这里一起被切断：
+    被管理员剔除的帖子（`excluded=True`）不进聚类、也检索不到。
+
+    漏掉这一层是最坏的失败：帖子从舆情分析页上消失了，却还在**参与事件聚类**、
+    还能被 agent 检索到——用户以为剔掉了，它仍然在影响 AI 的结论。**静默的错误答案。**
+    """
+
+    query = db.query(ProcessedPost).filter(ProcessedPost.excluded.is_(False))
     keyword = (keyword or "").strip()
     if keyword:
         like = f"%{keyword}%"

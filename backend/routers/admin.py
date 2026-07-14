@@ -80,6 +80,7 @@ def list_admin_raw_posts(
     keyword: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    excluded: str | None = None,
 ):
     return ok(
         list_raw_posts_data(
@@ -90,6 +91,7 @@ def list_admin_raw_posts(
             keyword=keyword,
             start_date=start_date,
             end_date=end_date,
+            excluded=excluded,
         )
     )
 

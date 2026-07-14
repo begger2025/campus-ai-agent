@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.admin_models import (
@@ -59,9 +59,25 @@ def overview_data(db: Session) -> dict[str, Any]:
     }
 
 
-def raw_post_item(row: RawPost) -> dict[str, Any]:
+def raw_post_item(row: RawPost, processed: "ProcessedPost | None" = None) -> dict[str, Any]:
+    """一行原始采集帖 + 它在下游（processed_posts）的**剔除状态**。
+
+    ## 为什么要带 processed_post_id
+
+    数据管理页读的是 `raw_posts`，而剔除标记在 `processed_posts` 上（下游——舆情分析页 /
+    事件聚类 / agent 检索——查的都是那张表）。**两张表的主键不是同一个**：拿 raw_post.id
+    去 PATCH 剔除接口，会剔掉另一条毫不相干的帖子。
+
+    `processed_post_id=None` = 这条还没跑清洗流水线，下游根本没有它——前端把剔除按钮
+    禁掉，不能假装能剔一个还不存在的东西。
+    """
+
     return {
         "id": row.id,
+        # 剔除按钮要 PATCH 的是它，不是上面那个 id
+        "processed_post_id": processed.id if processed is not None else None,
+        "excluded": bool(processed.excluded) if processed is not None else False,
+        "excluded_reason": (processed.excluded_reason or "") if processed is not None else "",
         "platform": row.platform,
         "external_id": row.external_id,
         "source_table": row.source_table,
@@ -92,8 +108,25 @@ def list_raw_posts_data(
     keyword: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    excluded: str | None = None,
 ) -> dict[str, Any]:
     query = db.query(RawPost)
+
+    # 「已剔除 / 未剔除」筛选：管理员要能复核自己剔了什么（不然也谈不上恢复）。
+    # 剔除标记在 processed_posts 上，所以按子查询过滤。
+    # 注意 "未剔除" 要包含**还没跑清洗流水线**的帖子（它们在下游根本不存在，谈不上被剔除）。
+    clean_excluded = (excluded or "").strip().lower()
+    if clean_excluded in ("true", "1"):
+        excluded_raw_ids = select(ProcessedPost.raw_post_id).where(
+            ProcessedPost.excluded.is_(True)
+        )
+        query = query.filter(RawPost.id.in_(excluded_raw_ids))
+    elif clean_excluded in ("false", "0"):
+        excluded_raw_ids = select(ProcessedPost.raw_post_id).where(
+            ProcessedPost.excluded.is_(True)
+        )
+        query = query.filter(RawPost.id.not_in(excluded_raw_ids))
+
     if platform:
         query = query.filter(RawPost.platform == platform)
     if keyword:
@@ -114,8 +147,19 @@ def list_raw_posts_data(
     query = query.order_by(RawPost.publish_time.desc(), RawPost.id.desc())
     total = query.count()
     rows = query.offset((page - 1) * page_size).limit(page_size).all()
+
+    # 一次查完这一页所有帖子的下游状态（避免 N+1）
+    processed_by_raw_id: dict[int, ProcessedPost] = {}
+    if rows:
+        processed_rows = (
+            db.query(ProcessedPost)
+            .filter(ProcessedPost.raw_post_id.in_([row.id for row in rows]))
+            .all()
+        )
+        processed_by_raw_id = {post.raw_post_id: post for post in processed_rows}
+
     return {
-        "items": [raw_post_item(row) for row in rows],
+        "items": [raw_post_item(row, processed_by_raw_id.get(row.id)) for row in rows],
         "total": total,
         "page": page,
         "page_size": page_size,

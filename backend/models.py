@@ -1,6 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -80,6 +90,19 @@ class ProcessedPost(Base):
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
     risk_reasons_json: Mapped[str] = mapped_column(Text, default="")
     concerns_json: Mapped[str] = mapped_column(Text, default="")
+    # 数据质量管控：管理员剔除的无关帖（同名的台湾国立中山大学、蹭校名的地产广告、
+    # 早期乱填关键词爬回的噪声…）。剔除后它**不进任何下游**：舆情分析页看不到、
+    # 事件聚类不收、agent 检索不到。
+    #
+    # 为什么是「剔除」而不是「审核」：帖子是**别人已经公开发布的客观事实**，审核它
+    # 语义上说不通，而且几千条逐条人审会把整条 AI 流水线卡死。需要人工定夺的是
+    # **AI 的主张**（事件的聚类和研判），那道闸门在 public_events.status 上。
+    # 这里要的不是闸门，是**质量管控**——发现噪声，剔掉它。
+    #
+    # 软删除而不是 DELETE：上一次清噪声帖是直接删库（375 行 / 6 张表 / 撞了外键回滚），
+    # 太危险。剔除可恢复，也留得下"谁在什么时候以什么理由剔的"。
+    excluded: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    excluded_reason: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

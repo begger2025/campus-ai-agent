@@ -29,6 +29,16 @@ export function fetchEventReviewLogs(eventId, params = {}) {
 }
 
 // —— 数据管理 ——
+/**
+ * 数据质量管控：把一条无关帖剔除出所有下游（或恢复回来）。
+ *
+ * postId 是 **processed_post_id**，不是 raw_post.id——剔除标记在 processed_posts 上
+ * （下游查的都是那张表），两张表的主键不是同一个。列表接口每行都带 processed_post_id。
+ */
+export function excludeProcessedPost(postId, { excluded, reason = '' }) {
+  return http.patch(`/admin/posts/${postId}/exclude`, { excluded, reason })
+}
+
 export function fetchRawPosts(params = {}) {
   return http.get('/admin/raw-posts', { params })
 }

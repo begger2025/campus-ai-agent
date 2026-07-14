@@ -27,6 +27,13 @@
         class="filter-date"
         @change="reload(1)"
       />
+      <!-- 数据质量管控：剔除的帖子不进舆情分析页/事件聚类/agent 检索。
+           「已剔除」页签让管理员能复核自己剔了什么（也才谈得上恢复）。 -->
+      <el-select v-model="filters.excluded" class="filter-select" @change="reload(1)">
+        <el-option label="状态：全部" value="" />
+        <el-option label="状态：生效中" value="false" />
+        <el-option label="状态：已剔除" value="true" />
+      </el-select>
       <el-button type="primary" @click="reload(1)">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
     </div>
@@ -43,20 +50,32 @@
               <th>作者</th>
               <th>互动</th>
               <th style="width: 150px">发布时间</th>
-              <th style="width: 76px">操作</th>
+              <th style="width: 150px">操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="post in posts" :key="post.id">
+            <tr v-for="post in posts" :key="post.id" :class="{ 'row-excluded': post.excluded }">
               <td>{{ post.id }}</td>
               <td><span :class="['source-pill', `source-${post.platform}`]">{{ platformLabel(post.platform) }}</span></td>
-              <td class="title-cell" :title="post.title || post.content">{{ post.title || post.content || '—' }}</td>
+              <td class="title-cell" :title="post.excluded ? `已剔除：${post.excluded_reason}` : (post.title || post.content)">
+                <span :class="{ 'title-struck': post.excluded }">{{ post.title || post.content || '—' }}</span>
+                <span v-if="post.excluded" class="excluded-tag" :title="post.excluded_reason">已剔除</span>
+              </td>
               <td>{{ post.source_keyword || '—' }}</td>
               <td>{{ post.author || '—' }}</td>
               <td class="metrics-cell">赞 {{ post.like_count ?? 0 }} · 评 {{ post.comment_count ?? 0 }}</td>
               <td>{{ post.publish_time || '—' }}</td>
               <td>
                 <el-button link type="primary" @click="openDetail(post)">详情</el-button>
+                <el-button
+                  v-if="!post.excluded"
+                  link
+                  type="danger"
+                  :disabled="!post.processed_post_id"
+                  :title="post.processed_post_id ? '' : '该帖尚未进入清洗流水线，下游还没有它'"
+                  @click="openExclude(post)"
+                >剔除</el-button>
+                <el-button v-else link type="success" @click="restore(post)">恢复</el-button>
               </td>
             </tr>
             <tr v-if="!posts.length && !loading">
@@ -113,6 +132,31 @@
         <p class="post-link-note">原帖直链依赖采集时的访问凭证（xsec_token），会随时间自然过期；站内搜索入口长期有效。</p>
       </div>
     </el-drawer>
+
+    <!-- 剔除确认：**理由必填**。一个说不出理由的剔除只是一次任性，
+         而它会静默地改变 AI 的结论（那条帖子不再进聚类、不再被检索到）。 -->
+    <el-dialog v-model="exclude.visible" title="剔除这条帖子" width="480px">
+      <p class="exclude-title">{{ exclude.post?.title || exclude.post?.content }}</p>
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="剔除后它不再进入舆情分析页、事件聚类和舆情助手的检索。数据保留，可随时恢复。"
+        style="margin-bottom: 12px"
+      />
+      <el-input
+        v-model="exclude.reason"
+        type="textarea"
+        :rows="2"
+        maxlength="200"
+        show-word-limit
+        placeholder="剔除理由（必填，如：同名的台湾国立中山大学，与本校无关 / 蹭校名的商业广告）"
+      />
+      <template #footer>
+        <el-button @click="exclude.visible = false">取消</el-button>
+        <el-button type="danger" :loading="exclude.submitting" @click="submitExclude">确认剔除</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -120,7 +164,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { fetchRawPosts } from '@/api/admin'
+import { excludeProcessedPost, fetchRawPosts } from '@/api/admin'
 import { LINK_EXPIRY_TIP, platformSearchUrl } from '@/utils/postLink'
 
 const route = useRoute()
@@ -131,8 +175,54 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 15
 
-const filters = reactive({ keyword: '', platform: '', dateRange: null })
+const filters = reactive({ keyword: '', platform: '', dateRange: null, excluded: '' })
 const detail = reactive({ visible: false, post: null })
+
+// —— 数据质量管控：剔除无关帖 ——
+//
+// 这一页的动词是**质量管控**，不是审核。帖子是从公开平台爬来的客观事实，审核别人已经
+// 公开发布的话语义上说不通；需要人工定夺的是 **AI 的主张**（事件的聚类和研判），
+// 那道闸门在事件审核页。这里要做的是：发现噪声（同名的台湾国立中山大学、蹭校名的地产
+// 广告、早期乱填关键词爬回的 Python 教程帖），剔掉它。
+//
+// 剔除会切断**所有**下游：舆情分析页、事件聚类、舆情助手的检索。软删除，可恢复。
+const exclude = reactive({ visible: false, post: null, reason: '', submitting: false })
+
+function openExclude(post) {
+  exclude.post = post
+  exclude.reason = ''
+  exclude.visible = true
+}
+
+async function submitExclude() {
+  const reason = exclude.reason.trim()
+  if (!reason) {
+    // 理由必填：一个说不出理由的剔除只是一次任性，而它会静默地改变 AI 的结论。
+    ElMessage.warning('请填写剔除理由')
+    return
+  }
+  exclude.submitting = true
+  try {
+    await excludeProcessedPost(exclude.post.processed_post_id, { excluded: true, reason })
+    ElMessage.success('已剔除：该帖不再进入舆情分析、事件聚类和舆情助手检索')
+    exclude.visible = false
+    await reload()
+  } catch (error) {
+    ElMessage.error(error.message || '剔除失败')
+  } finally {
+    exclude.submitting = false
+  }
+}
+
+async function restore(post) {
+  try {
+    await excludeProcessedPost(post.processed_post_id, { excluded: false })
+    ElMessage.success('已恢复：该帖重新进入下游')
+    await reload()
+  } catch (error) {
+    ElMessage.error(error.message || '恢复失败')
+  }
+}
 
 const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
 
@@ -157,6 +247,7 @@ async function reload(nextPage) {
     const data = await fetchRawPosts({
       keyword: filters.keyword || undefined,
       platform: filters.platform || undefined,
+      excluded: filters.excluded || undefined,
       start_date: start || undefined,
       end_date: end || undefined,
       page: page.value,
@@ -175,6 +266,7 @@ function resetFilters() {
   filters.keyword = ''
   filters.platform = ''
   filters.dateRange = null
+  filters.excluded = ''
   reload(1)
 }
 
@@ -193,6 +285,27 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* —— 已剔除的行：看得出来，但不刺眼（它还在，只是不进下游了） —— */
+.row-excluded { background: var(--color-surface-2); }
+.title-struck { text-decoration: line-through; color: var(--color-text-muted); }
+
+.excluded-tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: help;
+}
+
+.exclude-title {
+  margin: 0 0 12px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
 .filter-date {
   width: 260px;
 }

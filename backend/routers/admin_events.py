@@ -180,3 +180,69 @@ def update_event_status(
             "review_comment": event.review_comment,
         }
     )
+
+
+class PostExcludePatch(BaseModel):
+    excluded: bool
+    reason: str = ""
+
+
+@router.patch("/admin/posts/{post_id}/exclude")
+def exclude_processed_post(
+    post_id: int,
+    payload: PostExcludePatch,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    """数据质量管控：把一条无关帖**剔除**出所有下游（或恢复回来）。
+
+    ## 剔除 ≠ 审核
+
+    帖子是从公开平台爬来的**客观事实**（小红书上人人可见）。审核它 = 审核别人已经
+    公开发布的话，语义上说不通；几千条逐条人审还会把整条 AI 流水线卡死（新帖审完
+    才能进聚类）。**需要人工定夺的是 AI 的主张**（事件的聚类和研判），那道闸门在
+    `public_events.status` 上，不在这里。
+
+    这里要的不是闸门，是**质量管控**：同名的台湾国立中山大学、蹭校名的地产/床垫集采
+    广告、早期乱填关键词爬回的 Python 教程帖——发现噪声，剔掉它。
+
+    ## 剔除必须切断**所有**下游
+
+    舆情分析页、事件聚类、舆情助手的检索（后两者共用 query_agent_rows）。漏掉任何
+    一条就是**假剔除**：用户以为剔掉了，它却还在影响 AI 的结论——静默的错误答案。
+
+    ## 软删除，不是 DELETE
+
+    上一次清噪声帖是直接删库（375 行 / 6 张表 / 撞了外键回滚）。剔除可恢复，
+    也留得下"谁在什么时候以什么理由剔的"（excluded_reason + admin_operations）。
+    """
+
+    post = db.query(ProcessedPost).filter(ProcessedPost.id == post_id).first()
+    if post is None:
+        raise HTTPException(status_code=404, detail="post not found")
+
+    before = {"excluded": bool(post.excluded), "excluded_reason": post.excluded_reason or ""}
+    post.excluded = payload.excluded
+    # 恢复时清掉理由：一条恢复了的帖子挂着"与本校无关"的理由，只会误导下一个看到它的人。
+    post.excluded_reason = payload.reason.strip() if payload.excluded else ""
+    after = {"excluded": bool(post.excluded), "excluded_reason": post.excluded_reason}
+
+    write_admin_operation(
+        db,
+        admin_user_id=str(admin_user.id) if admin_user is not None else "system",
+        action="exclude_processed_post" if payload.excluded else "restore_processed_post",
+        target_type="processed_post",
+        target_id=str(post.id),
+        before=before,
+        after=after,
+    )
+    db.commit()
+    db.refresh(post)
+    return ok(
+        {
+            "id": post.id,
+            "title": post.title,
+            "excluded": bool(post.excluded),
+            "excluded_reason": post.excluded_reason or "",
+        }
+    )

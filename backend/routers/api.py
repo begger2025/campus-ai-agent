@@ -374,7 +374,9 @@ def list_sentiment_posts(
     像是搜了全库。这是一个**静默**的错误答案，正是本项目最忌讳的那种 bug。
     """
 
-    query = db.query(ProcessedPost)
+    # 被管理员剔除的帖子（同名的台湾中山大学、蹭校名的广告…）不进这里。
+    # 见 admin_events.exclude_processed_post：剔除必须切断**所有**下游，漏一条就是假剔除。
+    query = db.query(ProcessedPost).filter(ProcessedPost.excluded.is_(False))
 
     keyword = (keyword or "").strip()
     if keyword:
@@ -470,11 +472,16 @@ def sentiment_stats(
     的分布。
     """
 
-    rows = db.query(
-        ProcessedPost.sentiment,
-        ProcessedPost.platform,
-        ProcessedPost.publish_time,
-    ).all()
+    # 剔除的帖子不进统计——否则「帖子总数」和左边的列表对不上（列表已经过滤了）。
+    rows = (
+        db.query(
+            ProcessedPost.sentiment,
+            ProcessedPost.platform,
+            ProcessedPost.publish_time,
+        )
+        .filter(ProcessedPost.excluded.is_(False))
+        .all()
+    )
     total = len(rows)
 
     # —— 情绪分布：四个档位一个都不能少，没有的补 0（否则图上缺一块） ——
@@ -509,6 +516,7 @@ def sentiment_stats(
 
     top_rows = (
         db.query(ProcessedPost)
+        .filter(ProcessedPost.excluded.is_(False))  # 剔除的帖子不上热度榜
         .order_by(ProcessedPost.heat_score.desc(), ProcessedPost.id.desc())
         .limit(STATS_TOP_POSTS)
         .all()
