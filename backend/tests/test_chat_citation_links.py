@@ -165,5 +165,146 @@ class ChatResponseLinkTests(unittest.TestCase):
         )
 
 
+def _three_events() -> list[OpinionEvent]:
+    """三个已发布事件，各带一条可引用的代表帖（p1/p2/p3 依 attach 顺序）。"""
+
+    return [
+        OpinionEvent(
+            event_key=f"sem:evt{i}",
+            title=title,
+            summary=f"{title}讨论。",
+            category="campus",
+            risk_level="medium",
+            sentiment="negative",
+            heat_score=1000.0 - i,
+            source_count=1,
+            representative_notes=[
+                OpinionNote(
+                    note_id=f"xhs:{i}",
+                    title=f"{title}代表帖",
+                    content="内容。",
+                    url=f"https://example.com/note/{i}",
+                )
+            ],
+            extra={"event_id": 10 + i},
+        )
+        for i, title in enumerate(["东校区宿舍搬迁", "康某论文调查", "食堂档口调整"], start=1)
+    ]
+
+
+class RelatedEventsFollowTheAnswerTests(unittest.TestCase):
+    """弹出的关联事件 = 回答实际引用到的事件（2026-07-15 实测截图）。
+
+    问「宿舍搬迁简报」却弹出康某论文调查、耿同学举报副院长——payload 里有什么
+    卡片就弹什么，与回答讲了什么无关。「回答用了哪些事件」是模型的判断，它已经
+    通过引用标注表达出来了；弹哪些用算术从引用里提取。一个引用都没有（降级摘要、
+    闲聊式回答）→ 无从判断，维持话题过滤后的原样，绝不瞎猜。
+    """
+
+    def setUp(self) -> None:
+        reset_chat_memory()
+        self.addCleanup(reset_chat_memory)
+
+    def _chat(self, intent: str, llm_answer: str) -> dict:
+        service = OpinionChatService(db=None)
+        with (
+            patch.object(OpinionChatService, "_published_events", return_value=_three_events()),
+            patch(
+                "backend.services.opinion_chat_service.generate_llm_report",
+                return_value=llm_answer,
+            ) as gen,
+            patch(
+                "backend.services.opinion_chat_service.review_report",
+                MagicMock(return_value=ReviewResult(verdict="pass", issues=[])),
+            ),
+            patch(
+                "backend.services.opinion_chat_service.route_intent",
+                return_value=IntentRoute(intent=intent, keyword="宿舍搬迁", source="llm", topic="switch"),
+            ),
+        ):
+            response = service.chat("宿舍搬迁的情况", user_id="u1")
+        self.gen = gen
+        return response
+
+    def test_a_report_only_pops_the_events_it_cites(self) -> None:
+        response = self._chat("report", "搬迁风险为中 [来源:e1]，学生诉求集中 [来源:p1]。")
+
+        self.assertEqual(
+            [event["title"] for event in response["events"]],
+            ["东校区宿舍搬迁"],
+            "简报只引用了 e1/p1，却弹出了没被引用的事件——弹出必须跟着引用走",
+        )
+
+    def test_citing_a_post_pops_its_parent_event(self) -> None:
+        response = self._chat("report", "有帖子讨论档口调整 [来源:p3]。")
+
+        self.assertEqual(
+            [event["title"] for event in response["events"]],
+            ["食堂档口调整"],
+            "引用了代表帖 p3，它所属的事件就是回答用到的事件",
+        )
+
+    def test_an_uncited_answer_keeps_the_topic_filtered_events(self) -> None:
+        response = self._chat("report", "整体情况平稳，无突出风险。")
+
+        self.assertEqual(
+            len(response["events"]),
+            3,
+            "回答一个引用都没标（降级/闲聊）——无从判断就维持话题过滤后的原样，不许清空",
+        )
+
+    def test_opinion_answers_now_carry_citations_and_follow_them(self) -> None:
+        """问答意图也挂引用：普通回答同样能溯源，弹出同样跟着引用走。"""
+
+        response = self._chat("opinion_answer", "大家主要不满通知仓促 [来源:p1]。")
+
+        self.assertEqual([event["title"] for event in response["events"]], ["东校区宿舍搬迁"])
+        self.assertEqual(
+            response["citations"]["p1"]["url"],
+            "https://example.com/note/1",
+            "问答意图的响应也要带引用映射——前端的角标和参考来源全靠它",
+        )
+        payload = self.gen.call_args.kwargs["analysis_payload"]
+        self.assertEqual(payload["events"][0]["cite_id"], "e1", "问答意图的 payload 也要编号")
+        self.assertIn(
+            "来源",
+            self.gen.call_args.kwargs["output_instruction"],
+            "指令里要教模型怎么标注引用（软要求，不强制每句都标）",
+        )
+
+    def test_a_streamed_report_filters_its_done_events_the_same_way(self) -> None:
+        """流式与阻塞必须同语义——两套实现漂移 = 同一个问题两种弹出。"""
+
+        def fake_stream(*, outcome=None, **_kwargs):
+            text = "只讲搬迁 [来源:e1]。"
+            yield text
+            if outcome is not None:
+                outcome.content = text
+
+        service = OpinionChatService(db=None)
+        with (
+            patch.object(OpinionChatService, "_published_events", return_value=_three_events()),
+            patch(
+                "backend.services.opinion_chat_service.stream_llm_report",
+                side_effect=fake_stream,
+            ),
+            patch(
+                "backend.services.opinion_chat_service.review_report",
+                MagicMock(return_value=ReviewResult(verdict="pass", issues=[])),
+            ),
+            patch(
+                "backend.services.opinion_chat_service.route_intent",
+                return_value=IntentRoute(intent="report", keyword="宿舍搬迁", source="llm", topic="switch"),
+            ),
+        ):
+            done = None
+            for kind, payload in service.chat_stream("宿舍搬迁简报", user_id="u2"):
+                if kind == "done":
+                    done = payload
+
+        self.assertIsNotNone(done)
+        self.assertEqual([event["title"] for event in done["events"]], ["东校区宿舍搬迁"])
+
+
 if __name__ == "__main__":
     unittest.main()

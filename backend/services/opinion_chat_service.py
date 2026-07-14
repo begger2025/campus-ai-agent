@@ -18,7 +18,7 @@ from backend.agent.public_opinion_core.clustering import cluster_notes, note_ran
 from backend.agent.public_opinion_core.schemas import OpinionEvent, OpinionNote
 from backend.agent.public_opinion_core.scoring import score_notes
 from backend.agent.public_opinion_core.sentiment_risk import analyze_notes_sentiment_and_risk
-from backend.services.citations import attach_citation_ids
+from backend.services.citations import CITATION_HINT, attach_citation_ids, validate_citations
 from backend.services.critic import ReviewResult, review_report
 from backend.services.event_read_model import query_published_events
 from backend.services.intent_router import is_follow_up, route_intent
@@ -92,6 +92,45 @@ def _link_event_citations(cite_map: dict[str, dict[str, Any]], events: list[Opin
         event_id = (event.extra or {}).get("event_id")
         if entry is not None and event_id is not None:
             entry["event_id"] = event_id
+
+
+def _prepare_citations(events: list[OpinionEvent]) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+    """事件集 → (编号后的 LLM payload, 带跳转信息的引用映射)。
+
+    简报和问答意图共用：两处各写一遍迟早漂移成"简报的角标能点、问答的不能"。
+    """
+
+    tagged_events, cite_map = attach_citation_ids(compact_events_for_llm(events))
+    _link_event_citations(cite_map, events)
+    return tagged_events, cite_map
+
+
+def _cited_event_subset(
+    answer: str, tagged_events: list[dict[str, Any]], events: list[OpinionEvent]
+) -> list[OpinionEvent]:
+    """回答实际引用到的事件——「关联事件」弹哪些由它决定。
+
+    实测截图（2026-07-15）：问「宿舍搬迁简报」弹出康某论文调查、耿同学举报副院长——
+    此前 payload 里有什么卡片就弹什么，与回答讲了什么无关。
+
+    「这个回答用了哪些事件」是模型的判断，它已经通过引用标注表达出来了；这里只做
+    算术提取：[来源:eN] 直接命中该事件，[来源:pN] 命中该代表帖所属的事件。
+    回答一个引用都没标（降级摘要、闲聊式回答）→ 无从判断，维持话题过滤后的原样，
+    绝不瞎猜着清空。
+    """
+
+    cited = set(validate_citations(answer, {})["cited"])
+    if not cited:
+        return list(events[: len(tagged_events)])
+    subset = [
+        event
+        for tagged, event in zip(tagged_events, events)
+        if not cited.isdisjoint(
+            {tagged.get("cite_id")}
+            | {note.get("cite_id") for note in tagged.get("representative_notes", [])}
+        )
+    ]
+    return subset or list(events[: len(tagged_events)])
 
 # 审校结论只随响应的 review 字段返回，**不追加进正文**。曾经两头都写：后端把提示
 # 拼在正文末尾（流式还作为 delta 推送），前端又用 review 字段画警告卡——同一份审校
@@ -307,6 +346,8 @@ class OpinionChatService:
 
         # 三个单步问答意图共用 _ANSWER_INTENTS（唯一事实来源）。曾经这里各自内联一份
         # 一模一样的指令文案——和流式版迟早漂移成"同一个问题两种答案"，且缓存键分裂。
+        # 问答也挂引用编号（软要求，不逐句强制、不跑审校）：用户可点角标溯源，
+        # 弹出的关联事件跟着回答实际引用到的走。
         if routed.intent in _ANSWER_INTENTS:
             spec = _ANSWER_INTENTS[routed.intent]
             events = (
@@ -314,11 +355,19 @@ class OpinionChatService:
                 if routed.intent == "risk_analysis"
                 else self._events(keyword)
             )[:8]
-            answer = self._llm_answer(
-                contextual, events, fallback_title=spec["title"], instruction=spec["instruction"]
+            tagged_events, cite_map = _prepare_citations(events)
+            answer = generate_llm_report(
+                user_task=contextual,
+                analysis_payload={"events": tagged_events},
+                fallback_text=build_event_digest(events, title=spec["title"]),
+                output_instruction=spec["instruction"] + CITATION_HINT,
             )
             _record_turn(user_id, message, answer, routed.intent)
-            return self._response(routed.intent, keyword, answer, routed, events)
+            response = self._response(
+                routed.intent, keyword, answer, routed, _cited_event_subset(answer, tagged_events, events)
+            )
+            response["citations"] = cite_map
+            return response
 
         # search 兜底。路由没认出意图 ≠ 库里没有这件事：「刘一阳的事怎么样了」这类
         # 问法（X怎么样了/X的事）不落在任何单步意图里，曾在这里只得到一句
@@ -328,11 +377,19 @@ class OpinionChatService:
         events = self._published_events(keyword)[:8] if keyword else []
         if events:
             spec = _ANSWER_INTENTS["opinion_answer"]
-            answer = self._llm_answer(
-                contextual, events, fallback_title=spec["title"], instruction=spec["instruction"]
+            tagged_events, cite_map = _prepare_citations(events)
+            answer = generate_llm_report(
+                user_task=contextual,
+                analysis_payload={"events": tagged_events},
+                fallback_text=build_event_digest(events, title=spec["title"]),
+                output_instruction=spec["instruction"] + CITATION_HINT,
             )
             _record_turn(user_id, message, answer, "search")
-            return self._response("search", keyword, answer, routed, events)
+            response = self._response(
+                "search", keyword, answer, routed, _cited_event_subset(answer, tagged_events, events)
+            )
+            response["citations"] = cite_map
+            return response
         notes = self._search_ranked_notes(keyword or message, limit=10)
         answer = f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
         _record_turn(user_id, message, answer, "search")
@@ -399,18 +456,23 @@ class OpinionChatService:
         events = self._published_events(keyword)[:8] if keyword else []
         if events:
             spec = _ANSWER_INTENTS["opinion_answer"]
+            tagged_events, cite_map = _prepare_citations(events)
             outcome = LlmCallResult()
             for delta in stream_llm_report(
                 user_task=contextual,
-                analysis_payload={"events": compact_events_for_llm(events)},
+                analysis_payload={"events": tagged_events},
                 fallback_text=build_event_digest(events, title=spec["title"]),
-                output_instruction=spec["instruction"],
+                output_instruction=spec["instruction"] + CITATION_HINT,
                 outcome=outcome,
             ):
                 yield ("delta", {"text": delta})
             answer = outcome.content or ""
             _record_turn(user_id, message, answer, "search")
-            yield ("done", self._response("search", keyword, answer, routed, events))
+            done = self._response(
+                "search", keyword, answer, routed, _cited_event_subset(answer, tagged_events, events)
+            )
+            done["citations"] = cite_map
+            yield ("done", done)
             return
         notes = self._search_ranked_notes(keyword or message, limit=10)
         answer = f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
@@ -430,27 +492,31 @@ class OpinionChatService:
         events = (
             self._risk_sorted_events(keyword) if routed.intent == "risk_analysis" else self._events(keyword)
         )[:8]
+        tagged_events, cite_map = _prepare_citations(events)
 
         outcome = LlmCallResult()
         for delta in stream_llm_report(
             user_task=contextual,
-            analysis_payload={"events": compact_events_for_llm(events)},
+            analysis_payload={"events": tagged_events},
             fallback_text=build_event_digest(events, title=spec["title"]),
-            output_instruction=spec["instruction"],
+            output_instruction=spec["instruction"] + CITATION_HINT,
             outcome=outcome,
         ):
             yield ("delta", {"text": delta})
 
         answer = outcome.content or ""
         _record_turn(user_id, message, answer, routed.intent)
-        yield ("done", self._response(routed.intent, keyword, answer, routed, events))
+        done = self._response(
+            routed.intent, keyword, answer, routed, _cited_event_subset(answer, tagged_events, events)
+        )
+        done["citations"] = cite_map
+        yield ("done", done)
 
     def _stream_report(
         self, message: str, contextual: str, keyword: str, routed: Any, user_id: str
     ) -> Iterator[tuple[str, dict[str, Any]]]:
         events = self._events(keyword)
-        tagged_events, cite_map = attach_citation_ids(compact_events_for_llm(events))
-        _link_event_citations(cite_map, events)
+        tagged_events, cite_map = _prepare_citations(events)
         payload = {"keyword": keyword, "events": tagged_events}
         fallback = build_event_digest(events, title=f"校园舆情简报：{keyword or '全部数据'}")
 
@@ -476,7 +542,9 @@ class OpinionChatService:
             verdict = review_report(report_text, payload, citations=cite_map or None)
 
         _record_turn(user_id, message, report_text, "report")
-        done = self._response("report", keyword, report_text, routed, events[:8])
+        done = self._response(
+            "report", keyword, report_text, routed, _cited_event_subset(report_text, tagged_events, events)
+        )
         done["review"] = {"verdict": verdict.verdict, "issues": verdict.issues}
         done["citations"] = cite_map
         yield ("done", done)
@@ -519,8 +587,7 @@ class OpinionChatService:
     def _chat_report(self, message: str, keyword: str, routed: Any) -> dict[str, Any]:
         events = self._events(keyword)
         # 引用强制：代表帖编号 p1..pN，简报论断必须标注 [来源:pN]，映射随响应返回供前端溯源。
-        tagged_events, cite_map = attach_citation_ids(compact_events_for_llm(events))
-        _link_event_citations(cite_map, events)
+        tagged_events, cite_map = _prepare_citations(events)
         payload = {"keyword": keyword, "events": tagged_events}
         fallback = build_event_digest(events, title=f"校园舆情简报：{keyword or '全部数据'}")
         report_text = generate_llm_report(
@@ -536,7 +603,9 @@ class OpinionChatService:
         verdict = ReviewResult()
         if not report_text.startswith(fallback):
             verdict = review_report(report_text, payload, citations=cite_map or None)
-        response = self._response("report", keyword, report_text, routed, events[:8])
+        response = self._response(
+            "report", keyword, report_text, routed, _cited_event_subset(report_text, tagged_events, events)
+        )
         response["review"] = {"verdict": verdict.verdict, "issues": verdict.issues}
         response["citations"] = cite_map
         return response
@@ -618,21 +687,6 @@ class OpinionChatService:
         }
 
     # --------------------------------------------------------------- helpers
-
-    def _llm_answer(
-        self,
-        message: str,
-        events: list[OpinionEvent],
-        *,
-        fallback_title: str,
-        instruction: str,
-    ) -> str:
-        return generate_llm_report(
-            user_task=message,
-            analysis_payload={"events": compact_events_for_llm(events)},
-            fallback_text=build_event_digest(events, title=fallback_title),
-            output_instruction=instruction,
-        )
 
     def _response(
         self,

@@ -44,6 +44,15 @@ CITATION_INSTRUCTION = (
     "只能引用数据围栏内真实存在的编号；无法溯源到具体帖子或事件字段的内容不要写进报告。"
 )
 
+# 问答意图的软版本：报告体强制逐句标注（上面那条），聊天体只要求"提到了就标"——
+# 不逐句强制、不跑审校，别把对话逼回工作汇报腔。回答里的引用有两个用途：
+# 用户可以点角标溯源；后端据此判断"这个回答实际用到了哪些事件"（弹出跟着引用走）。
+CITATION_HINT = (
+    "\n引用标注：转述某条帖子的内容时，在句末标注该帖的 cite_id（格式 [来源:pN]）；"
+    "引用某个事件的聚合结论（风险等级、热度、条数等）时，标注该事件的 cite_id（格式 [来源:eN]）。"
+    "只标注数据围栏内真实存在的编号；纯对话性的句子无需标注。"
+)
+
 
 def _extract_citation_ids(text: str) -> list[str]:
     """All cite ids in text (normalized to lowercase ASCII), in order, with repeats."""

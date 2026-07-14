@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import unittest
 
+from backend.services.intent_router import ROUTER_SYSTEM_PROMPT
 from backend.services.llm_client import SYSTEM_PROMPT
 from backend.services.opinion_chat_service import _ANSWER_INTENTS, REPORT_INSTRUCTION
 
@@ -73,6 +74,36 @@ class OpinionAnswerIsConversationalTests(unittest.TestCase):
 
         self.assertIn("答其所问", instruction, "观点问答的指令必须要求围绕用户的问题组织回答")
         self.assertNotIn("热点概括", instruction, "观点问答不许被套简报栏目")
+
+
+class RouterTopicExtractionTests(unittest.TestCase):
+    """路由提示词的话题契约（2026-07-15 真库实测）。
+
+    「请给我一份宿舍搬迁舆情简报」被 LLM 路由判成 topic=global、keyword 空——
+    因为 global 的定义里写着「或没有上一轮话题」，而新对话第一句必然没有上一轮，
+    模型就把点名了话题的句子也判成了 global。空 keyword 一路传下去：
+    payload 塞进全量 8 个事件，关联事件卡弹出一堆与提问毫无关系的内容。
+    """
+
+    def test_naming_a_topic_is_switch_even_on_the_first_turn(self):
+        self.assertIn(
+            "点名",
+            ROUTER_SYSTEM_PROMPT,
+            "提示词必须教会模型：本句点名了具体话题就是 switch，与有没有上一轮无关",
+        )
+        self.assertIn(
+            "宿舍搬迁舆情简报",
+            ROUTER_SYSTEM_PROMPT,
+            "要带上实测踩过坑的那个例句——「请给我一份宿舍搬迁舆情简报」→ switch + 宿舍搬迁",
+        )
+
+    def test_global_no_longer_hinges_on_missing_history_alone(self):
+        self.assertNotIn(
+            "或没有上一轮话题",
+            ROUTER_SYSTEM_PROMPT,
+            "「没有上一轮话题 → global」把对话第一句全部推成了 global——"
+            "点名话题的第一句也会被判 global、keyword 置空（实测）",
+        )
 
 
 if __name__ == "__main__":
