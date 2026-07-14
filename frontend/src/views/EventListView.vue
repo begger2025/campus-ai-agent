@@ -77,8 +77,12 @@
                 :style="{ '--row-i': rowIndex }"
                 @click="openWorkbench(event)"
               >
+                <!-- 标题列吃掉表格的全部弹性空间（其余列都是定宽）。只放一个 8 字标题的话，
+                     标题和风险列之间就是几百像素的空白——用户看到的正是这个。
+                     把摘要补进来：空白变成信息，检索页扫一眼就知道这条是什么事。 -->
                 <td class="title-cell">
-                  <span>{{ event.title }}</span>
+                  <span class="title-main">{{ event.title }}</span>
+                  <span v-if="event.summary" class="title-sub">{{ event.summary }}</span>
                 </td>
                 <td>
                   <span :class="['badge', riskClass(event.riskLevel)]">{{ event.riskLabel }}</span>
@@ -90,11 +94,22 @@
                   </span>
                   <span class="heat-bar"><i :style="{ width: heatBarWidth(event.heatScore) }" /></span>
                 </td>
+                <!-- 顺序由后端定（PLATFORM_DISPLAY_ORDER），全站一致——原本它跟着代表帖的
+                     热度走，同一组平台在不同事件里会排出不同顺序。
+                     也不再 slice(0,2)：截断一个只有 2~3 个值的列表毫无必要，
+                     超过 3 个才折成 +N。 -->
                 <td>
                   <div class="source-list">
-                    <span v-for="source in event.sourcePlatforms.slice(0, 2)" :key="source" :class="['source-pill', `source-${source}`]">
-                      {{ sourceLabel(source) }}
-                    </span>
+                    <span
+                      v-for="source in event.sourcePlatforms.slice(0, 3)"
+                      :key="source"
+                      :class="['source-pill', `source-${source}`]"
+                    >{{ sourceLabel(source) }}</span>
+                    <span
+                      v-if="event.sourcePlatforms.length > 3"
+                      class="source-more"
+                      :title="event.sourcePlatforms.map(sourceLabel).join('、')"
+                    >+{{ event.sourcePlatforms.length - 3 }}</span>
                   </div>
                 </td>
                 <td>{{ displayTime(event.updatedAt) }}</td>
@@ -499,29 +514,40 @@ function sourceShort(value) {
 
 .compact-table-wrap { min-height: 0; flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; border: 0; }
 
-.compact-table { width: 100%; min-width: 830px; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+/* min-width 要盖得住定宽列之和（692px）再加标题列的下限，否则窄屏下标题会被压没 */
+.compact-table { width: 100%; min-width: 940px; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
 
-/* 定宽内容的列显式定宽，弹性空间全部留给标题列，避免操作列被挤压 */
-.compact-table th:nth-child(2) { width: 76px; }   /* 风险 */
-.compact-table th:nth-child(3) { width: 122px; }  /* 热度 */
-.compact-table th:nth-child(4) { width: 104px; }  /* 来源 */
-.compact-table th:nth-child(5) { width: 96px; }   /* 发布时间 */
-.compact-table th:nth-child(6) { width: 80px; }   /* 状态 */
-.compact-table th:nth-child(7) { width: 116px; }  /* 操作 */
+/* 定宽内容的列显式定宽，弹性空间留给标题列（标题+摘要两行，正好用得上）。
+   来源列从 104px 加宽到 168px：原本装不下三个平台胶囊，只能 slice(0,2) 截断。 */
+.compact-table th:nth-child(2) { width: 80px; }   /* 风险 */
+.compact-table th:nth-child(3) { width: 128px; }  /* 热度 */
+.compact-table th:nth-child(4) { width: 168px; }  /* 来源 */
+.compact-table th:nth-child(5) { width: 100px; }  /* 发布时间 */
+.compact-table th:nth-child(6) { width: 84px; }   /* 状态 */
+.compact-table th:nth-child(7) { width: 132px; }  /* 操作 */
 
 .compact-table th, .compact-table td {
-  padding: 0 10px; border-bottom: 1px solid var(--color-border-light);
+  padding: 0 12px; border-bottom: 1px solid var(--color-border-light);
   text-align: left; vertical-align: middle; white-space: nowrap;
 }
 
 .compact-table th { height: 38px; color: var(--color-text-muted); font-weight: 600; background: var(--color-surface-2); }
-.compact-table td { height: 48px; }
+.compact-table td { height: 56px; }
 .compact-table tbody tr { cursor: pointer; transition: background var(--dur-fast) var(--ease-out); }
 .compact-table tbody tr:hover { background: var(--color-surface-2); }
-.compact-table tbody tr.row-active { background: var(--brand-50); }
 .col-title { width: auto; }
 
-.title-cell span { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--color-text); font-weight: 500; }
+/* 标题 + 摘要两行：标题列吃掉全部弹性空间，只放一个 8 字标题的话它右边就是几百像素的空白 */
+.title-cell { padding-top: 8px; padding-bottom: 8px; }
+.title-cell span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title-main { color: var(--color-text); font-weight: 600; line-height: 1.45; }
+.title-sub {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
 
 .heat-head-label { display: inline-flex; align-items: center; gap: 3px; cursor: help; }
 .heat-head-label .el-icon { color: var(--color-text-faint); }
@@ -545,10 +571,12 @@ function sourceShort(value) {
   transition: width var(--dur-slow) var(--ease-out);
 }
 
-.source-list { display: flex; gap: 5px; overflow: hidden; }
-.source-pill { height: 22px; padding: 0 6px; display: inline-flex; align-items: center; border-radius: 5px; font-size: 11px; font-weight: 800; }
+.source-list { display: flex; flex-wrap: nowrap; gap: 5px; }
+.source-pill { height: 22px; padding: 0 6px; display: inline-flex; align-items: center; border-radius: 5px; font-size: 11px; font-weight: 800; color: var(--color-text-secondary); background: var(--color-surface-2, #f5f7fa); border: 1px solid var(--color-border); white-space: nowrap; }
+.source-more { height: 22px; padding: 0 5px; display: inline-flex; align-items: center; border-radius: 5px; font-size: 11px; font-weight: 700; color: var(--color-text-muted); background: var(--color-surface-2); border: 1px solid var(--color-border-light); cursor: help; }
 .source-weibo { color: #c2410c; background: #fff7ed; border: 1px solid #fed7aa; }
 .source-xhs { color: #be123c; background: #fff1f2; border: 1px solid #fecdd3; }
+.source-ks { color: #a16207; background: #fefce8; border: 1px solid #fde68a; }
 .source-tieba { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
 .source-zhihu { color: #0369a1; background: #f0f9ff; border: 1px solid #bae6fd; }
 .source-web { color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; }
@@ -633,9 +661,10 @@ function sourceShort(value) {
 .source-breakdown { display: flex; flex-direction: column; gap: 12px; }
 .source-breakdown div { display: grid; grid-template-columns: 24px 1fr auto; gap: 8px; align-items: center; color: var(--color-text-secondary); font-size: 13px; }
 .source-breakdown strong { color: var(--color-text); font-weight: 600; }
-.source-icon { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 800; }
+.source-icon { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 800; background: #94a3b8; }
 .source-icon-weibo { background: #ef4444; }
 .source-icon-xhs { background: #f43f5e; }
+.source-icon-ks { background: #f59e0b; }
 .source-icon-tieba { background: #3b82f6; }
 .source-icon-zhihu { background: #0284c7; }
 .source-icon-web { background: #10b981; }

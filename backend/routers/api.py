@@ -60,6 +60,30 @@ def _json_value(value: str | None, default):
         return default
 
 
+# 来源平台的**展示顺序**。全站共用这一份——前端各自排一遍，迟早排出两个世界。
+#
+# 为什么需要它：`source_platforms` 原本是按**代表帖的热度排名**首次出现的顺序拼出来的，
+# 于是"哪个平台排前面"取决于"哪个平台的帖子更火"——同一组平台在不同事件里排出不同顺序，
+# 看板看起来是乱的（用户截图实证：有的事件小红书在前，有的快手在前）。那是一个**关于热度
+# 的事实**，却被摆在了一个**关于来源构成的**位置上，读者会以为顺序有含义，其实没有。
+#
+# 顺序本身按语料量级排（xhs/ks 是主力，web 是证据采集交付的，最少）。
+PLATFORM_DISPLAY_ORDER: tuple[str, ...] = ("xhs", "ks", "zhihu", "weibo", "tieba", "web")
+
+
+def _sort_platforms(platforms: list[str]) -> list[str]:
+    """按展示顺序排列、去重。没见过的平台码排到最后，但**绝不丢弃**。"""
+
+    unique = list(dict.fromkeys(platforms))
+    return sorted(
+        unique,
+        key=lambda p: (
+            PLATFORM_DISPLAY_ORDER.index(p) if p in PLATFORM_DISPLAY_ORDER else len(PLATFORM_DISPLAY_ORDER),
+            p,
+        ),
+    )
+
+
 def _normalize_platform(platform: str | None) -> str:
     text = (platform or "").strip()
     lower = text.lower()
@@ -201,6 +225,10 @@ def _event_item(
         normalized = _normalize_platform(fallback_processed.platform)
         if normalized:
             source_platforms.append(normalized)
+
+    # 按固定展示顺序排（见 PLATFORM_DISPLAY_ORDER）：拼出来的顺序跟着代表帖的热度走，
+    # 那是"哪个平台的帖子更火"，不是"这个事件有哪些来源"——摆在来源列上会被读成后者。
+    source_platforms = _sort_platforms(source_platforms)
 
     source_count = row.source_count or len(source_post_ids)
 
