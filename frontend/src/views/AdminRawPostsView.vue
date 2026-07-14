@@ -118,9 +118,12 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { fetchRawPosts } from '@/api/admin'
 import { LINK_EXPIRY_TIP, platformSearchUrl } from '@/utils/postLink'
+
+const route = useRoute()
 
 const loading = ref(false)
 const posts = ref([])
@@ -180,7 +183,13 @@ function openDetail(post) {
   detail.visible = true
 }
 
-onMounted(() => reload(1))
+// 事件审核的「站内溯源」会带着帖子标题跳过来（?keyword=…）——预填搜索框并直接查，
+// 审核员才能一步看到这条代表帖的原始采集记录（采集关键词、互动量、原始链接）。
+onMounted(() => {
+  const keyword = String(route.query.keyword || '').trim()
+  if (keyword) filters.keyword = keyword
+  reload(1)
+})
 </script>
 
 <style scoped>
@@ -202,8 +211,9 @@ onMounted(() => reload(1))
   padding: 1px 8px;
   border-radius: 999px;
   font-size: 12px;
-  background: var(--brand-50);
-  color: var(--brand-700);
+  /* 未知平台兜底：中性灰，平台专属类覆盖 */
+  background: var(--color-surface-2, #f5f7fa);
+  color: var(--color-text-secondary);
 }
 
 .source-xhs { background: #fff1f2; color: #be123c; }
