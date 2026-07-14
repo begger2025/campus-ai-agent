@@ -296,6 +296,23 @@ class OpinionChatService:
             reverse=True,
         )
 
+    def _no_result_answer(self, topic: str) -> str:
+        """查无时的出路：列出库里真实存在的话题（算术组装，零 LLM）。
+
+        「已找到 0 条」是死路——用户不知道能问什么，只能瞎猜换词再撞一次。
+        列表来自已发布事件标题（人工审核过的对外结论，不怕列出来）；引导话
+        不走 LLM：查无本来就是零成本路径，不能为一句话引入生成延迟和幻觉面。
+        """
+
+        lines = [
+            f"目前没有找到与「{topic}」相关的公开内容。" if topic else "目前没有找到相关的公开内容。"
+        ]
+        titles = [event.title for event in self._published_events("", limit=EVENT_TIER_LIMIT)]
+        if titles:
+            lines.append("当前数据里有这些话题可以问：" + "、".join(f"「{title}」" for title in titles) + "。")
+        lines.append("也可以换个更常见的说法再试，或者直接问我「最近有什么热点」「最近有什么风险」。")
+        return "\n".join(lines)
+
     def _search_ranked_notes(self, keyword: str = "", limit: int = 10) -> list[OpinionNote]:
         """检索场景挑 top-N（chat 用 10 条、ReAct 的 search_notes 用 5 条）。
 
@@ -391,7 +408,11 @@ class OpinionChatService:
             response["citations"] = cite_map
             return response
         notes = self._search_ranked_notes(keyword or message, limit=10)
-        answer = f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
+        answer = (
+            f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
+            if notes
+            else self._no_result_answer(keyword or message)
+        )
         _record_turn(user_id, message, answer, "search")
         response = self._response("search", keyword or message, answer, routed, [])
         response["notes"] = [
@@ -475,7 +496,11 @@ class OpinionChatService:
             yield ("done", done)
             return
         notes = self._search_ranked_notes(keyword or message, limit=10)
-        answer = f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
+        answer = (
+            f"已找到 {len(notes)} 条相关校园公开内容。你可以进一步询问热点、风险或生成简报。"
+            if notes
+            else self._no_result_answer(keyword or message)
+        )
         yield ("delta", {"text": answer})
         _record_turn(user_id, message, answer, "search")
         done = self._response("search", keyword or message, answer, routed, [])

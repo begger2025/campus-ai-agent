@@ -285,7 +285,8 @@ class SearchStreamTests(unittest.TestCase):
         ):
             events = _collect(service.chat_stream("宿舍", user_id="u1"))
 
-        self.assertIn("相关校园公开内容", _text(events))
+        # 空库的桩 → 零结果引导（同样是罐头文案，零 LLM——这正是本测试要钉死的性质）
+        self.assertIn("没有找到", _text(events))
         self.assertIn("notes", _payload(events, "done"))
 
 
