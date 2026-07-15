@@ -196,6 +196,10 @@ EVENT_REFINE_ENABLED = _read_bool("EVENT_REFINE_ENABLED", True)
 # 多大的簇才值得一次 LLM 调用。默认 8，理由（真实簇大小分布 + 拆分的算术下界）见 llm_refine.py。
 EVENT_REFINE_MIN_SIZE = max(_read_int("EVENT_REFINE_MIN_SIZE", DEFAULT_REFINE_MIN_SIZE), 2)
 
+# 近重簇合并裁决（灰区相似度的簇对交 LLM 判"是不是同一件事"，见 core/llm_merge.py）。
+# 关掉即回到"只拆不合"的老行为；候选筛选（灰区/时间兼容/对数封顶）与失败方向在核心包。
+EVENT_MERGE_ENABLED = _read_bool("EVENT_MERGE_ENABLED", True)
+
 # ---- 事件级 LLM 风险研判（严重性与热度解耦）----
 # 复用同一组 EVENT_LLM_*（同一个"读得懂中文校园语境"的强模型）。
 # 关掉即回到规则风险（六个电诈词 + 互动量加分，见 llm_risk.py 的缺陷说明）；

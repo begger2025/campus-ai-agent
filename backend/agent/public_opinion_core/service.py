@@ -60,6 +60,8 @@ class PublicOpinionAgentService:
         min_cluster_size: int | None = None,
         cluster_refiner: ClusterRefiner | None = None,
         refine_min_size: int | None = None,
+        # 近重簇合并裁决（llm_merge）：None = 只拆不合的老行为。
+        merge_judge: Any | None = None,
         risk_assessor: RiskAssessor | None = None,
         risk_max_texts: int | None = None,
         lifecycle_assessor: LifecycleAssessor | None = None,
@@ -124,6 +126,7 @@ class PublicOpinionAgentService:
                 cluster_refiner,
                 refine_min_size,
                 llm_concurrency,
+                merge_judge,
             )
             if semantic is not None:
                 events, centroids, suppressed_clusters, refined_clusters, ejected_notes = semantic
@@ -328,6 +331,7 @@ class PublicOpinionAgentService:
         cluster_refiner: ClusterRefiner | None = None,
         refine_min_size: int | None = None,
         llm_concurrency: int | None = None,
+        merge_judge: Any | None = None,
     ) -> tuple[list, dict[str, list[float]], int, int, int] | None:
         """Run semantic clustering if an embedder is supplied; None means fall back to rules."""
 
@@ -342,6 +346,8 @@ class PublicOpinionAgentService:
                 "min_cluster_size": min_cluster_size,
                 # None = 不精修：LLM 未配置时这一层是恒等变换（同 embedder/sentiment 的注入口径）。
                 "refiner": cluster_refiner,
+                # None = 不做近重合并裁决（只拆不合的老行为，见 llm_merge）。
+                "merge_judge": merge_judge,
                 # 每个够大的簇一次 LLM 调用，簇之间互不依赖 -> 并发跑（结果按簇序回填）。
                 "refine_concurrency": (
                     DEFAULT_LLM_CONCURRENCY if llm_concurrency is None else llm_concurrency
@@ -364,6 +370,9 @@ class PublicOpinionAgentService:
         # 精修的降级记录进 warnings（-> agent_run_logs）：LLM 挂了不影响事件产出，但必须留痕。
         # 离群剔除也在这里留痕（剔了哪几条、剔了几条）：被移出事件的帖子绝不允许无声消失。
         warnings.extend(result.refine_warnings)
+        if result.merged_clusters:
+            # 合并改变事件版图（两个事件变一个），运行日志必须能看出这轮合并了几对。
+            warnings.append(f"near-duplicate merge: {result.merged_clusters} 对近重簇经 LLM 裁决合并")
         return (
             result.events,
             result.centroids,

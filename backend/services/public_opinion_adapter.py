@@ -26,6 +26,7 @@ from backend.models import EventPostLink, ProcessedPost, PublicEvent
 from backend.services.comment_loader import fetch_top_comments
 from backend.services.embedding import get_embedder
 from backend.services.event_lifecycle import get_lifecycle_assessor
+from backend.services.event_merger import get_merge_judge
 from backend.services.event_refiner import get_cluster_refiner
 from backend.services.event_risk import get_risk_assessor
 from backend.services.llm_config import (
@@ -552,6 +553,11 @@ def run_public_opinion_analysis(
         # 未配 key / 关闭 / 调用失败时返回 None 或自动降级，事件照出，只是回到纯 embedding 结果。
         cluster_refiner=get_cluster_refiner() if use_llm else None,
         refine_min_size=EVENT_REFINE_MIN_SIZE,
+        # LLM 近重簇合并裁决：embedding 的合并阈值 0.86 之下有一片灰区（0.85 实测塌方，
+        # 调阈值治不了）——「中大招生与报考」和「中大报考与名校宣传」这类真·近重对落在
+        # 这里。灰区 + 时间兼容的簇对交 LLM 判「是不是同一件事」，拿不准保持拆分
+        # （见 core/llm_merge.py 的错误不对称论证）。未配 key / 关闭时 = 只拆不合的老行为。
+        merge_judge=get_merge_judge() if use_llm else None,
         # LLM 事件风险研判：规则风险只认识六个电诈词（诈骗/银行卡/验证码/陌生人/尾随/缴费链接），
         # 认不出「宿舍火灾」；而评论/转发/热度还在给风险加分，于是它量的是流行度不是严重性
         # （实测：宿舍火灾 low/4.0 全库最低，学生吐槽作业多 medium/64.0 全库最高）。

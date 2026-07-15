@@ -36,6 +36,7 @@ import re
 
 from .clustering import build_event_from_group, note_rank_key, sort_events
 from .concurrency import DEFAULT_LLM_CONCURRENCY
+from .llm_merge import MergePairJudge, merge_adjudicated_clusters
 from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner, refine_clusters
 from .recency import note_time
 from .schemas import MemorySnapshot, OpinionEvent, OpinionNote
@@ -109,6 +110,8 @@ class SemanticClusterResult:
     # 被 LLM 判为"哪个话题都不属于"而移出事件的帖子数（离群剔除）。帖子本身不删，
     # 只是不再充当事件证据；它们各自单独成簇后由 min_cluster_size 压制掉。
     ejected_notes: int = 0
+    # 被 LLM 裁决为"同一件事"而合并的近重簇对数（见 llm_merge）。0 = 未配置或没有灰区对。
+    merged_clusters: int = 0
     # 精修过程中的降级记录（超时、幻觉编号、漏帖……），由调用方并进 warnings。
     refine_warnings: list[str] = field(default_factory=list)
 
@@ -126,6 +129,7 @@ def cluster_notes_semantic(
     refine_min_size: int = DEFAULT_REFINE_MIN_SIZE,
     refine_concurrency: int | None = DEFAULT_LLM_CONCURRENCY,
     max_span_days: float = DEFAULT_MAX_SPAN_DAYS,
+    merge_judge: MergePairJudge | None = None,
 ) -> SemanticClusterResult:
     if len(notes) != len(vectors):
         raise ValueError(f"notes/vectors length mismatch: {len(notes)} != {len(vectors)}")
@@ -155,6 +159,20 @@ def cluster_notes_semantic(
         # 「零散杂项帖」（94 天）出去。模型看不见日期，拦不住——只能在这里用减法拦。
         max_span_days=max_span_days,
     )
+
+    # LLM 近重合并裁决（见 llm_merge）：灰区相似度 + 时间兼容的簇对，「是不是一件事」
+    # 交给判断。放在精修**之后**（裁的是精修定稿的簇）、压制**之前**（两个 size-1 的
+    # 同事件簇合并成 size-2 就能活过 min_cluster_size——碎片正是这么产生的）。
+    merged_clusters = 0
+    if merge_judge is not None:
+        clusters, merged_clusters = merge_adjudicated_clusters(
+            clusters,
+            merge_judge,
+            merge_threshold=merge_threshold,
+            make_cluster=_make_cluster,
+            max_span_days=max_span_days,
+            warnings=refine_warnings,
+        )
 
     # 压制发生在"建事件"之前：不够大的簇不进对齐、不产出事件、也不留簇中心——
     # 否则它会被写进快照，下一轮再被对齐成"老事件"复活。
@@ -201,6 +219,7 @@ def cluster_notes_semantic(
         refined_clusters=refined,
         refine_warnings=refine_warnings,
         ejected_notes=ejected,
+        merged_clusters=merged_clusters,
     )
 
 
