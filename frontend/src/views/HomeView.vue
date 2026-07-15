@@ -4,16 +4,31 @@
     <div class="welcome-banner">
       <div class="welcome-content">
         <div class="welcome-title">{{ greeting }}，{{ displayName }}</div>
+        <!-- 结论必须等数据：加载中/失败时绝不显示「0 个事件」和「态势平稳」。
+             此前空数组被当真实结论渲染，首屏先亮几秒绿色「平稳」，数据到了
+             才翻成「5 条高风险预警」（用户实测截图）——不知道 ≠ 平稳。 -->
         <div class="welcome-sub">
-          今天是{{ todayText }}。当前共
-          <strong>{{ publishedEvents.length }}</strong> 个已发布事件，其中
-          <strong>{{ highRiskEvents.length }}</strong> 条高风险预警、
-          <strong>{{ mediumRiskEvents.length }}</strong> 条中风险事件。
+          <template v-if="eventsLoading">今天是{{ todayText }}。事件数据加载中…</template>
+          <template v-else-if="eventsError">今天是{{ todayText }}。事件数据加载失败，请刷新重试。</template>
+          <template v-else>
+            今天是{{ todayText }}。当前共
+            <strong>{{ publishedEvents.length }}</strong> 个已发布事件，其中
+            <strong>{{ highRiskEvents.length }}</strong> 条高风险预警、
+            <strong>{{ mediumRiskEvents.length }}</strong> 条中风险事件。
+          </template>
         </div>
       </div>
       <div class="welcome-meta">
+        <span v-if="eventsLoading" class="calm-flag calm-flag--pending">
+          <el-icon :size="14" class="is-loading"><Loading /></el-icon>
+          数据加载中…
+        </span>
+        <span v-else-if="eventsError" class="calm-flag calm-flag--pending">
+          <el-icon :size="14"><WarningFilled /></el-icon>
+          数据加载失败
+        </span>
         <button
-          v-if="highRiskEvents.length > 0"
+          v-else-if="highRiskEvents.length > 0"
           class="risk-flag"
           type="button"
           @click="$router.push('/events')"
@@ -141,7 +156,7 @@
           <div v-else-if="posts.length === 0" class="empty-state">
             <el-icon :size="28"><FolderOpened /></el-icon>
             <p>暂无帖子数据</p>
-            <span>后端未启动时将展示样本数据，可运行 dev.bat 连接真实数据源</span>
+            <span>请确认后端已启动（运行 dev.bat）后刷新重试</span>
           </div>
           <table v-else class="data-table">
             <thead>
@@ -213,6 +228,7 @@ import {
   Connection,
   FolderOpened,
   InfoFilled,
+  Loading,
   Warning,
   WarningFilled,
 } from '@element-plus/icons-vue'
@@ -244,17 +260,30 @@ const todayText = `${now.getMonth() + 1}月${now.getDate()}日 周${'日一二�
 
 // ——— 后端状态 ———
 const backendOk = ref(false)
+const healthChecking = ref(true)
 const backendDesc = ref('检测中…')
-const backendStatus = computed(() => (backendOk.value ? '正常' : '未连接'))
+// 没检测完就显示「未连接」也是抢答——三态：检测中 / 正常 / 未连接
+const backendStatus = computed(() => {
+  if (healthChecking.value) return '检测中'
+  return backendOk.value ? '正常' : '未连接'
+})
 
-onMounted(async () => {
+async function checkBackendHealth() {
   try {
     const data = await checkHealth()
     backendOk.value = data.pong === true
     backendDesc.value = backendOk.value ? '后端响应正常' : '响应异常'
   } catch {
     backendDesc.value = '后端未启动'
+  } finally {
+    healthChecking.value = false
   }
+}
+
+onMounted(() => {
+  // 四个请求并行：健康检查此前被 await 在最前面，后端冷启动时它一慢，
+  // 帖子/事件/趋势全被拖着不发，「平稳假象」的窗口被拉得更长。
+  checkBackendHealth()
   loadPosts()
   loadEvents()
   loadPostTrend()
@@ -300,13 +329,16 @@ async function loadPosts() {
 // ——— 事件数据（加载失败就空列表，不再由 api 层降级假数据） ———
 const events = ref([])
 const eventsLoading = ref(true)
+const eventsError = ref(false) // 失败和「真的没有事件」不许长一样
 
 async function loadEvents() {
+  eventsError.value = false
   try {
     events.value = await fetchPublishedEvents()
   } catch (error) {
     console.warn('[home] 事件加载失败', error)
     events.value = []
+    eventsError.value = true
   } finally {
     eventsLoading.value = false
   }
@@ -332,7 +364,11 @@ const watchEvents = computed(() =>
 )
 
 function parseTime(value) {
-  const ts = new Date(value).getTime()
+  // 与事件列表页同口径：后端时间是 "2026-05-24 12:00" 带空格格式，
+  // 不换成 T 的话部分浏览器解析为 Invalid Date，「最近新增」会算错
+  const text = String(value || '').trim()
+  if (!text) return null
+  const ts = new Date(text.replace(' ', 'T')).getTime()
   return Number.isFinite(ts) ? ts : null
 }
 
@@ -526,6 +562,13 @@ function platformLabel(platform) {
   color: var(--color-success-text);
   font-size: 13px;
   font-weight: 600;
+}
+
+/* 加载中/失败的中性徽章：灰色，不许长得像任何结论 */
+.calm-flag--pending {
+  background: var(--color-surface-2, #f5f7fa);
+  border-color: var(--color-border-light);
+  color: var(--color-text-muted);
 }
 
 /* 统计卡片网格 */
