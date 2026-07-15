@@ -288,6 +288,9 @@ def _event_item(
         "reviewed_by": row.reviewed_by,
         "reviewed_at": row.reviewed_at,
         "review_comment": row.review_comment,
+        # 人工修正锁：前端据此打「人工修正」徽章（审核员要知道哪些是人改过的、
+        # 机器不再更新的），也决定详情抽屉是否显示编辑操作。
+        "curated": bool(row.curated),
         "tags": [row.topic] if row.topic else [],
         "trend": [],
         "updatedAt": _format_datetime(row.updated_at or row.created_at),

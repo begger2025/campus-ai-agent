@@ -14,6 +14,15 @@ from backend.models import EventPostLink, ProcessedPost, PublicEvent
 from backend.routers.api import _event_detail_item, _event_item
 from backend.schemas import ok
 from backend.services.auth_service import require_admin
+from backend.services.event_curation import (
+    CurationError,
+    add_post,
+    create_event,
+    delete_event,
+    merge_events,
+    remove_post,
+    rename_event,
+)
 from backend.services.log_service import write_admin_operation, write_event_review_log
 
 router = APIRouter(tags=["admin-events"])
@@ -180,6 +189,172 @@ def update_event_status(
             "review_comment": event.review_comment,
         }
     )
+
+
+# ---------------------------------------------------------------- 人工事件修正
+# AI 提议（聚类/研判）、人工裁决（status）之后的最后一块：人工修正。
+# 语义（人工编辑=锁 curated、再生成只读、成员帖退出聚类池）见
+# backend/services/event_curation.py 与 docs/superpowers/plans/2026-07-16-manual-event-curation.md。
+
+
+def _load_event(db: Session, event_id: int) -> PublicEvent:
+    event = db.query(PublicEvent).filter(PublicEvent.id == event_id).first()
+    if event is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    return event
+
+
+def _audit(db: Session, admin_user, action: str, target_id: str, before: dict, after: dict) -> None:
+    write_admin_operation(
+        db,
+        admin_user_id=str(admin_user.id) if isinstance(admin_user, User) else "admin",
+        action=action,
+        target_type="public_event",
+        target_id=target_id,
+        before=before,
+        after=after,
+    )
+
+
+def _run_curation(db: Session, operation):
+    """统一事务边界：业务违规 → 4xx；成功才 commit（audit 与数据同事务）。"""
+
+    try:
+        result = operation()
+    except CurationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    db.commit()
+    return result
+
+
+class EventRenamePatch(BaseModel):
+    title: str
+
+
+@router.patch("/admin/events/{event_id}")
+def rename_admin_event(
+    event_id: int,
+    payload: EventRenamePatch,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    event = _load_event(db, event_id)
+
+    def _do():
+        before = {"title": event.title, "curated": bool(event.curated)}
+        rename_event(db, event, payload.title)
+        _audit(db, admin_user, "rename_event", str(event.id), before,
+               {"title": event.title, "curated": True})
+        return {"id": event.id, "title": event.title, "curated": True}
+
+    return ok(_run_curation(db, _do))
+
+
+class EventCreateBody(BaseModel):
+    title: str
+    post_ids: list[int]
+
+
+@router.post("/admin/events")
+def create_admin_event(
+    payload: EventCreateBody,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    def _do():
+        event = create_event(db, payload.title, payload.post_ids)
+        _audit(db, admin_user, "create_event", str(event.id), {},
+               {"title": event.title, "post_ids": payload.post_ids, "event_key": event.event_key})
+        return {"id": event.id, "event_key": event.event_key, "title": event.title,
+                "status": event.status, "source_count": event.source_count}
+
+    return ok(_run_curation(db, _do))
+
+
+@router.delete("/admin/events/{event_id}")
+def delete_admin_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    event = _load_event(db, event_id)
+
+    def _do():
+        snapshot = delete_event(db, event)
+        # 硬删的事件只活在审计里——快照必须够还原"删掉的是什么"
+        _audit(db, admin_user, "delete_event", str(snapshot["id"]), snapshot, {})
+        return {"deleted": snapshot}
+
+    return ok(_run_curation(db, _do))
+
+
+class EventMergeBody(BaseModel):
+    source_id: int
+
+
+@router.post("/admin/events/{event_id}/merge")
+def merge_admin_events(
+    event_id: int,
+    payload: EventMergeBody,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    target = _load_event(db, event_id)
+    source = _load_event(db, payload.source_id)
+    actor = admin_user.username if isinstance(admin_user, User) else "admin"
+
+    def _do():
+        before = {"target_count": target.source_count, "source_status": source.status}
+        merge_events(db, target, source, actor)
+        _audit(db, admin_user, "merge_events", str(target.id), before,
+               {"target_count": target.source_count, "source_id": source.id, "source_status": source.status})
+        return {"id": target.id, "source_count": target.source_count,
+                "merged_from": source.id, "curated": True}
+
+    return ok(_run_curation(db, _do))
+
+
+class EventPostBody(BaseModel):
+    processed_post_id: int
+
+
+@router.post("/admin/events/{event_id}/posts")
+def add_event_post(
+    event_id: int,
+    payload: EventPostBody,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    event = _load_event(db, event_id)
+
+    def _do():
+        before = {"source_count": event.source_count}
+        add_post(db, event, payload.processed_post_id)
+        _audit(db, admin_user, "add_event_post", str(event.id), before,
+               {"source_count": event.source_count, "processed_post_id": payload.processed_post_id})
+        return {"id": event.id, "source_count": event.source_count, "curated": True}
+
+    return ok(_run_curation(db, _do))
+
+
+@router.delete("/admin/events/{event_id}/posts/{processed_post_id}")
+def remove_event_post(
+    event_id: int,
+    processed_post_id: int,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(require_admin),
+):
+    event = _load_event(db, event_id)
+
+    def _do():
+        before = {"source_count": event.source_count}
+        remove_post(db, event, processed_post_id)
+        _audit(db, admin_user, "remove_event_post", str(event.id), before,
+               {"source_count": event.source_count, "processed_post_id": processed_post_id})
+        return {"id": event.id, "source_count": event.source_count, "curated": True}
+
+    return ok(_run_curation(db, _do))
 
 
 class PostExcludePatch(BaseModel):

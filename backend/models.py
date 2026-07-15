@@ -158,6 +158,10 @@ class PublicEvent(Base):
     risk_reasons_json: Mapped[str] = mapped_column(Text, default="")
     # status/created_at 有索引：公开接口按 status 过滤 + created_at 排序是最高频查询
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
+    # 人工修正锁（重命名/合并/增删成员/人工创建 → True）：再生成管线对 curated 行只读，
+    # 其成员帖退出聚类池——机器绝不覆盖人的决定。语义与实施计划见
+    # docs/superpowers/plans/2026-07-16-manual-event-curation.md。
+    curated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     reviewed_by: Mapped[str] = mapped_column(String(64), default="")
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     review_comment: Mapped[str] = mapped_column(Text, default="")

@@ -259,6 +259,40 @@ def load_opinion_notes_from_db(
     return processed_posts_to_notes(rows)
 
 
+def exclude_curated_member_rows(
+    db: Session, rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], str | None]:
+    """把 curated 事件的成员帖从聚类输入里剔掉；返回（保留行, 留痕文案|None）。
+
+    人工修正锁的第三道闸：这些帖子已经被人划定了归属，再进聚类池，下一轮就会
+    围绕同一批帖聚出一个**重复事件**——人工合并等于白做。只影响事件生成的输入，
+    舆情分析页和聊天检索照常能搜到这些帖子（它们仍是语料）。
+
+    db 为 None（不落库的纯分析调用，如消融/并发测试）时无库可查，直接原样返回。
+    """
+
+    if db is None:
+        return rows, None
+    curated_ids = {
+        link.processed_post_id
+        for link in (
+            db.query(EventPostLink.processed_post_id)
+            .join(PublicEvent, PublicEvent.id == EventPostLink.event_id)
+            .filter(PublicEvent.curated.is_(True))
+        )
+    }
+    if not curated_ids:
+        return rows, None
+    kept = [row for row in rows if row.get("processed_post_id") not in curated_ids]
+    removed = len(rows) - len(kept)
+    if not removed:
+        return rows, None
+    return kept, (
+        f"{removed} 条帖子因属于人工修正（curated）事件而退出本轮聚类"
+        f"——它们的归属已由管理员划定，机器不重聚"
+    )
+
+
 def _is_system_auto_archived(event: PublicEvent) -> bool:
     """这条 archived 是**机器自己**（陈旧草稿自动归档）定的，而不是人定的？
 
@@ -284,6 +318,12 @@ def upsert_public_events(
     for payload in event_payloads:
         event_key = str(payload.get("event_key") or "").strip()
         event = db.query(PublicEvent).filter(PublicEvent.event_key == event_key).first()
+
+        if event is not None and event.curated:
+            # 人工修正锁：机器不许覆盖人的编辑（标题/成员/聚合）。不进 id 映射——
+            # replace_event_post_links 只重写映射里的事件，人工调整的链接因此原样保留。
+            logger.info("skip curated event on upsert: %s (%s)", event_key, event.title)
+            continue
 
         if event is None:
             event = PublicEvent(**payload)
@@ -390,7 +430,11 @@ def archive_stale_draft_events(db: Session, active_event_keys: set[str]) -> int:
     的事件被重新检出时会退回 draft，人工归档的永远锁定。
     """
 
-    query = db.query(PublicEvent).filter(PublicEvent.status == "draft")
+    # curated 草稿不算"幽灵"：人碰过的事件（改名/合并/调成员）机器不许自动归档——
+    # 它的成员帖已退出聚类池，本次分析当然"不再出现"，那不是失活，是被人接管了。
+    query = db.query(PublicEvent).filter(
+        PublicEvent.status == "draft", PublicEvent.curated.is_(False)
+    )
     if active_event_keys:
         query = query.filter(~PublicEvent.event_key.in_(active_event_keys))
     stale_events = query.all()
@@ -519,6 +563,12 @@ def run_public_opinion_analysis(
             f"想跑全量请传 limit=0（脚本默认即全量）。"
         )
         logger.warning(truncation_warnings[-1])
+
+    # 人工修正锁的第三道闸：curated 事件的成员帖退出聚类池（归属已由管理员划定）。
+    rows, curated_note = exclude_curated_member_rows(db, rows)
+    if curated_note:
+        truncation_warnings.append(curated_note)
+        logger.info(curated_note)
 
     request = AnalyzeRequest(
         keyword=keyword or "",

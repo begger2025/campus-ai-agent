@@ -16,6 +16,7 @@
       </el-select>
       <el-button type="primary" @click="reload(1)">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
+      <el-button type="success" plain @click="openCreate">＋ 手工建事件</el-button>
     </div>
 
     <div class="panel-card">
@@ -49,7 +50,10 @@
               @click="openDetail(event)"
             >
               <td>{{ event.raw_id }}</td>
-              <td class="title-cell" :title="event.title">{{ event.title }}</td>
+              <td class="title-cell" :title="event.title">
+                {{ event.title }}
+                <span v-if="event.curated" class="curated-badge" title="管理员已人工修正，机器不再更新">人工修正</span>
+              </td>
               <td><span :class="['badge', riskClass(event.riskLevel)]">{{ event.riskLabel || '低风险' }}</span></td>
               <td>{{ sentimentLabel(event.sentiment) }}</td>
               <td>{{ Math.round(event.heatScore || 0) }}</td>
@@ -104,6 +108,7 @@
           <div class="detail-head">
             <span :class="['badge', riskClass(detailRisk)]">{{ riskLabel(detailRisk) }}</span>
             <span :class="['status-tag', `status-${detail.data.status}`]">{{ statusLabel(detail.data.status) }}</span>
+            <span v-if="detail.data.curated" class="curated-badge">人工修正</span>
             <span class="detail-meta">
               {{ detail.data.source_count ?? 0 }} 条来源 · 热度 {{ Math.round(detail.data.heatScore || 0) }}
               <template v-if="detail.data.age_days != null"> · {{ formatAge(detail.data.age_days) }}</template>
@@ -142,6 +147,52 @@
             </div>
           </section>
 
+          <!-- 人工修正：AI 提议、人裁决之后，让管理员直接改。任何一项都会给事件上「人工修正」锁。 -->
+          <section class="detail-block curation-block">
+            <h4>人工修正 <em>改动会锁定事件，机器不再更新它</em></h4>
+            <div class="curation-row">
+              <el-input v-model="curation.title" size="small" placeholder="重命名事件" maxlength="200" />
+              <el-button size="small" type="primary" :loading="curation.busy" @click="doRename">重命名</el-button>
+            </div>
+            <div class="curation-row">
+              <el-select
+                v-model="curation.mergeSourceId"
+                size="small"
+                filterable
+                remote
+                :remote-method="searchMergeSource"
+                :loading="curation.mergeSearching"
+                placeholder="选择要并入本事件的另一个事件"
+                class="curation-merge-select"
+              >
+                <el-option
+                  v-for="opt in curation.mergeOptions"
+                  :key="opt.raw_id"
+                  :label="`#${opt.raw_id} ${opt.title}`"
+                  :value="opt.raw_id"
+                  :disabled="opt.raw_id === detail.event?.raw_id"
+                />
+              </el-select>
+              <el-button size="small" :loading="curation.busy" @click="doMerge">合并</el-button>
+            </div>
+            <div class="curation-row">
+              <el-input v-model="curation.addKeyword" size="small" placeholder="按标题搜帖子加入事件" @keyup.enter="searchAddPost" />
+              <el-button size="small" :loading="curation.addSearching" @click="searchAddPost">搜索</el-button>
+            </div>
+            <div v-if="curation.addResults.length" class="curation-add-results">
+              <div v-for="p in curation.addResults" :key="p.id" class="curation-add-item">
+                <span class="curation-add-title" :title="p.title">{{ p.title || '（无标题）' }}</span>
+                <el-button size="small" link type="success" @click="doAddPost(p.id)">加入</el-button>
+              </div>
+            </div>
+            <div class="curation-row curation-danger">
+              <el-button size="small" type="danger" plain :loading="curation.busy" @click="doDelete">
+                删除事件
+              </el-button>
+              <span class="curation-hint">已发布事件需先归档才能删除</span>
+            </div>
+          </section>
+
           <!-- 代表帖：**这是审核员真正要看的东西**。原帖可点，也可回站内数据管理页溯源。 -->
           <section class="detail-block">
             <h4>
@@ -165,6 +216,12 @@
                 <a v-else-if="isSafeUrl(post.raw_url)" :href="post.raw_url" target="_blank" rel="noopener">查看原帖 →</a>
                 <span v-else class="post-nolink">原帖链接缺失</span>
                 <button type="button" class="post-search" @click="searchInSite(post)">站内溯源 →</button>
+                <button
+                  v-if="post.processed_post_id"
+                  type="button"
+                  class="post-remove"
+                  @click="doRemovePost(post.processed_post_id)"
+                >移出事件 ✕</button>
               </div>
             </article>
           </section>
@@ -212,6 +269,27 @@
       </template>
     </el-dialog>
 
+    <!-- 手工建事件对话框：从帖子搜索结果里勾选证据 -->
+    <el-dialog v-model="create.visible" title="手工创建事件" width="560px">
+      <el-input v-model="create.title" placeholder="事件标题（必填）" maxlength="200" show-word-limit />
+      <div class="create-search">
+        <el-input v-model="create.keyword" placeholder="按标题搜索帖子作为证据" @keyup.enter="searchCreatePosts" />
+        <el-button :loading="create.searching" @click="searchCreatePosts">搜索</el-button>
+      </div>
+      <p class="create-hint">已选 {{ create.selected.length }} 条证据</p>
+      <div class="create-results">
+        <label v-for="p in create.results" :key="p.id" class="create-item">
+          <el-checkbox :model-value="create.selected.includes(p.id)" @change="toggleCreatePost(p.id)" />
+          <span class="create-item-title" :title="p.title">{{ p.title || '（无标题）' }}</span>
+        </label>
+        <div v-if="!create.results.length" class="empty-hint">搜索帖子并勾选，至少选一条</div>
+      </div>
+      <template #footer>
+        <el-button @click="create.visible = false">取消</el-button>
+        <el-button type="primary" :loading="create.busy" @click="doCreate">创建（草稿）</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 审核历史抽屉 -->
     <el-drawer v-model="history.visible" :title="`审核历史 — ${history.event?.title || ''}`" size="420px">
       <div v-loading="history.loading">
@@ -239,12 +317,20 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { ElMessageBox } from 'element-plus'
 import {
+  addEventPost,
+  createEvent,
+  deleteEvent,
   fetchAdminEventDetail,
   fetchAdminEvents,
   fetchEventReviewLogs,
+  mergeEvents,
+  removeEventPost,
+  renameEvent,
   updateEventStatus,
 } from '@/api/admin'
+import { fetchSentimentPosts } from '@/api/posts'
 import { formatAge } from '@/utils/age'
 import { hasLifecycle, lifecycleLabel } from '@/utils/lifecycle'
 
@@ -271,6 +357,16 @@ const ACTION_LABELS = { published: '通过', rejected: '驳回', archived: '归�
 const review = reactive({ visible: false, event: null, target: '', comment: '', submitting: false })
 const history = reactive({ visible: false, event: null, items: [], loading: false })
 
+// —— 人工修正：改名/合并/成员管理/删除，任何一项都会把事件上 curated 锁 ——
+const curation = reactive({
+  title: '', busy: false,
+  mergeSourceId: null, mergeOptions: [], mergeSearching: false,
+  addKeyword: '', addResults: [], addSearching: false,
+})
+const create = reactive({
+  visible: false, title: '', keyword: '', results: [], selected: [], searching: false, busy: false,
+})
+
 // —— 事件详情：审核员定夺前要看的一切 ——
 //
 // 后端 /admin/events/{id} 早就返回完整的 AI 研判（风险依据、关注点、四轴、生命周期理由）
@@ -291,15 +387,183 @@ async function openDetail(event) {
   detail.data = null
   detail.visible = true
   detail.loading = true
+  // 每次打开重置人工修正面板（预填当前标题，方便微调而非从零输入）
+  curation.title = event.title || ''
+  curation.mergeSourceId = null
+  curation.mergeOptions = []
+  curation.addKeyword = ''
+  curation.addResults = []
   const wanted = event.raw_id
   try {
     const data = await fetchAdminEventDetail(event.raw_id)
     // 用户可能在请求飞行途中点了别的事件——晚到的响应不许覆盖当前打开的那个
-    if (detail.event?.raw_id === wanted) detail.data = data
+    if (detail.event?.raw_id === wanted) {
+      detail.data = data
+      curation.title = data.title || event.title || ''
+    }
   } catch (error) {
     ElMessage.error(error.message || '事件详情加载失败')
   } finally {
     if (detail.event?.raw_id === wanted) detail.loading = false
+  }
+}
+
+// 修正成功后刷新抽屉内容 + 列表（curated 徽章、聚合数都会变）
+async function afterCuration(message) {
+  ElMessage.success(message)
+  if (detail.event) await openDetail({ ...detail.event })
+  reload()
+}
+
+async function doRename() {
+  const title = curation.title.trim()
+  if (!title) return ElMessage.warning('标题不能为空')
+  curation.busy = true
+  try {
+    await renameEvent(detail.event.raw_id, title)
+    await afterCuration('已重命名')
+  } catch (error) {
+    ElMessage.error(error.message || '重命名失败')
+  } finally {
+    curation.busy = false
+  }
+}
+
+async function searchMergeSource(keyword) {
+  const q = (keyword || '').trim()
+  if (!q) { curation.mergeOptions = []; return }
+  curation.mergeSearching = true
+  try {
+    const data = await fetchAdminEvents({ keyword: q, page: 1, page_size: 20 })
+    curation.mergeOptions = data.items || []
+  } catch {
+    curation.mergeOptions = []
+  } finally {
+    curation.mergeSearching = false
+  }
+}
+
+async function doMerge() {
+  if (!curation.mergeSourceId) return ElMessage.warning('请选择要并入的事件')
+  await ElMessageBox.confirm(
+    '合并后，被并入的事件会被归档，它的帖子迁到当前事件。确认合并？',
+    '确认合并', { type: 'warning' },
+  ).catch(() => 'cancel').then(async (r) => {
+    if (r === 'cancel') return
+    curation.busy = true
+    try {
+      await mergeEvents(detail.event.raw_id, curation.mergeSourceId)
+      curation.mergeSourceId = null
+      await afterCuration('已合并')
+    } catch (error) {
+      ElMessage.error(error.message || '合并失败')
+    } finally {
+      curation.busy = false
+    }
+  })
+}
+
+async function searchAddPost() {
+  const q = curation.addKeyword.trim()
+  if (!q) return
+  curation.addSearching = true
+  try {
+    const data = await fetchSentimentPosts({ keyword: q, page: 1, pageSize: 10 })
+    curation.addResults = data.items || []
+  } catch (error) {
+    ElMessage.error(error.message || '搜索帖子失败')
+  } finally {
+    curation.addSearching = false
+  }
+}
+
+async function doAddPost(postId) {
+  curation.busy = true
+  try {
+    await addEventPost(detail.event.raw_id, postId)
+    curation.addResults = curation.addResults.filter((p) => p.id !== postId)
+    await afterCuration('已加入事件')
+  } catch (error) {
+    ElMessage.error(error.message || '加入失败')
+  } finally {
+    curation.busy = false
+  }
+}
+
+async function doRemovePost(postId) {
+  curation.busy = true
+  try {
+    await removeEventPost(detail.event.raw_id, postId)
+    await afterCuration('已移出事件')
+  } catch (error) {
+    ElMessage.error(error.message || '移出失败')
+  } finally {
+    curation.busy = false
+  }
+}
+
+async function doDelete() {
+  await ElMessageBox.confirm(
+    '删除后不可恢复（已发布事件需先归档）。确认删除该事件？',
+    '确认删除', { type: 'warning', confirmButtonText: '删除', confirmButtonClass: 'el-button--danger' },
+  ).catch(() => 'cancel').then(async (r) => {
+    if (r === 'cancel') return
+    curation.busy = true
+    try {
+      await deleteEvent(detail.event.raw_id)
+      ElMessage.success('已删除事件')
+      detail.visible = false
+      reload()
+    } catch (error) {
+      ElMessage.error(error.message || '删除失败')
+    } finally {
+      curation.busy = false
+    }
+  })
+}
+
+// —— 手工建事件 ——
+function openCreate() {
+  create.title = ''
+  create.keyword = ''
+  create.results = []
+  create.selected = []
+  create.visible = true
+}
+
+async function searchCreatePosts() {
+  const q = create.keyword.trim()
+  if (!q) return
+  create.searching = true
+  try {
+    const data = await fetchSentimentPosts({ keyword: q, page: 1, pageSize: 15 })
+    create.results = data.items || []
+  } catch (error) {
+    ElMessage.error(error.message || '搜索帖子失败')
+  } finally {
+    create.searching = false
+  }
+}
+
+function toggleCreatePost(postId) {
+  const at = create.selected.indexOf(postId)
+  if (at >= 0) create.selected.splice(at, 1)
+  else create.selected.push(postId)
+}
+
+async function doCreate() {
+  if (!create.title.trim()) return ElMessage.warning('请填写事件标题')
+  if (!create.selected.length) return ElMessage.warning('至少选择一条帖子作为证据')
+  create.busy = true
+  try {
+    await createEvent({ title: create.title.trim(), post_ids: create.selected })
+    ElMessage.success('事件已创建（草稿，待审核发布）')
+    create.visible = false
+    reload(1)
+  } catch (error) {
+    ElMessage.error(error.message || '创建失败')
+  } finally {
+    create.busy = false
   }
 }
 
@@ -443,6 +707,100 @@ onMounted(() => reload(1))
 <style scoped>
 .title-cell {
   max-width: 320px;
+}
+
+.curated-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.curation-block {
+  border: 1px dashed var(--color-border, #dcdfe6);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--color-surface-2, #fafbfc);
+}
+
+.curation-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.curation-row:last-child { margin-bottom: 0; }
+.curation-row .el-input,
+.curation-merge-select { flex: 1; }
+
+.curation-danger {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-border-light, #ebeef5);
+}
+
+.curation-hint {
+  font-size: 12px;
+  color: var(--color-text-muted, #909399);
+}
+
+.curation-add-results {
+  margin: -4px 0 10px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.curation-add-item,
+.create-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.curation-add-title,
+.create-item-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-remove {
+  border: none;
+  background: none;
+  color: #dc2626;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.post-remove:hover { text-decoration: underline; }
+
+.create-search {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 6px;
+}
+
+.create-hint {
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--color-text-muted, #909399);
+}
+
+.create-results {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-light, #ebeef5);
+  border-radius: 6px;
+  padding: 6px 10px;
 }
 
 .ops-cell .el-button {

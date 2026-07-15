@@ -28,6 +28,31 @@ export function fetchEventReviewLogs(eventId, params = {}) {
   return http.get(`/admin/events/${eventId}/review-logs`, { params })
 }
 
+// —— 人工事件修正（任何一项都会把事件上锁 curated：再生成管线对它只读） ——
+export function renameEvent(eventId, title) {
+  return http.patch(`/admin/events/${eventId}`, { title })
+}
+
+export function createEvent({ title, post_ids }) {
+  return http.post('/admin/events', { title, post_ids })
+}
+
+export function deleteEvent(eventId) {
+  return http.delete(`/admin/events/${eventId}`)
+}
+
+export function mergeEvents(targetId, sourceId) {
+  return http.post(`/admin/events/${targetId}/merge`, { source_id: sourceId })
+}
+
+export function addEventPost(eventId, processedPostId) {
+  return http.post(`/admin/events/${eventId}/posts`, { processed_post_id: processedPostId })
+}
+
+export function removeEventPost(eventId, processedPostId) {
+  return http.delete(`/admin/events/${eventId}/posts/${processedPostId}`)
+}
+
 // —— 数据管理 ——
 /**
  * 数据质量管控：把一条无关帖剔除出所有下游（或恢复回来）。
