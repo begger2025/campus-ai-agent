@@ -124,12 +124,17 @@ onBeforeUnmount(() => cancelAnimationFrame(rafId))
   white-space: nowrap;
 }
 
-/* 数值统一墨色，语义色由图标块承载（避免满屏彩色数字） */
+/* 数值统一墨色，语义色由图标块承载（避免满屏彩色数字）。
+   柔化：字重 600（不再是硬邦邦的 700）、冷调软墨（比纯黑 #262626 更柔）、
+   等宽数字对齐、微负字距，让 KPI 更精致耐看。 */
 .stat-value {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 23px;
+  font-weight: 600;
   line-height: 1.2;
-  color: var(--color-text);
+  letter-spacing: -0.02em;
+  color: var(--color-ink-num);
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -164,7 +164,7 @@ onMounted(async () => {
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
 }
 .todo-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-card); border-color: var(--brand-300); }
-.todo-card strong { font-size: 26px; color: var(--brand-600); line-height: 1.2; }
+.todo-card strong { font-size: 26px; color: var(--brand-600); line-height: 1.2; font-family: var(--font-numeric); letter-spacing: -0.02em; }
 .todo-card span { font-size: 13px; color: var(--color-text); font-weight: 600; }
 .todo-card em { font-size: 11.5px; color: var(--brand-500); font-style: normal; }
 .todo-card--idle strong { color: var(--color-text-faint, #c0c4cc); }
@@ -180,10 +180,10 @@ onMounted(async () => {
 
 .health-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .health-item { padding: 10px 12px; border-radius: 8px; background: var(--color-surface-2, #fafbfc); display: flex; flex-direction: column; gap: 2px; }
-.health-item strong { font-size: 20px; }
+.health-item strong { font-size: 20px; color: var(--color-ink-num); font-family: var(--font-numeric); letter-spacing: -0.02em; }
 .h-label { font-size: 12px; color: var(--color-text-muted); }
 .health-item em { font-size: 11.5px; color: var(--color-text-faint, #a8abb2); font-style: normal; }
-.h-warn strong { color: #b45309; }
+.h-warn strong { color: var(--color-data-accent-text); }
 
 .dist-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 4px; border: none; background: none; cursor: pointer; font-family: inherit; border-radius: 6px; }
 .dist-row:hover { background: var(--color-surface-2, #f5f7fa); }
@@ -194,7 +194,7 @@ onMounted(async () => {
 .dist-published { background: #2f9e44; }
 .dist-rejected { background: #e03131; }
 .dist-archived { background: #868e96; }
-.dist-value { width: 40px; text-align: right; font-weight: 600; font-size: 13px; }
+.dist-value { width: 40px; text-align: right; font-weight: 600; font-size: 13px; font-family: var(--font-numeric); }
 .curated-line { margin: 8px 0 0; font-size: 12px; color: var(--color-text-muted); }
 
 .op-item { padding: 8px 6px; border-radius: 6px; cursor: pointer; }

@@ -28,6 +28,17 @@
   --color-primary-active: var(--brand-700);
   --color-primary-light: var(--brand-50);
 
+  /* ---- 数据强调色（琥珀）：只用于数据高亮（峰值柱、焦点读数、低于目标的 KPI），
+     绝不用于状态语义（警告徽章走 --color-warning）。与 warning 同色族是刻意的——
+     全站只保留一种琥珀（单强调色纪律），场景靠"图表里 vs 徽章上"区分。 ---- */
+  --color-data-accent: #d97706;
+  --color-data-accent-text: #b45309;
+  --color-data-accent-bg: #fdf3e3;
+
+  /* ---- 数字排版：KPI 墨色（比正文软一档的冷调深蓝灰）+ 密集读数等宽字体 ---- */
+  --color-ink-num: #334155;
+  --font-numeric: ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', 'Menlo', monospace;
+
   /* ---- 语义色（降饱和一档，与主色同明度层） ---- */
   --color-danger: #d23f45;
   --color-danger-bg: #fdeeef;

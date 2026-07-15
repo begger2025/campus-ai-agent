@@ -76,12 +76,12 @@ onMounted(load)
 .c-item { padding: 10px 0; border-top: 1px solid var(--color-border-light); }
 .c-head { display: flex; align-items: center; gap: 10px; font-size: 13px; flex-wrap: wrap; }
 .c-meta { color: var(--color-text-muted); font-size: 12px; }
-.c-report { color: #b45309; background: #fffbeb; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.c-report { color: var(--color-data-accent-text); background: var(--color-data-accent-bg); padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600; }
 .c-status { font-size: 11px; padding: 1px 8px; border-radius: 9px; }
-.c-hidden { background: #fef2f2; color: #b91c1c; }
-.c-visible { background: #f0fdf4; color: #15803d; }
+.c-hidden { background: var(--color-danger-bg); color: var(--color-danger-text); }
+.c-visible { background: var(--color-success-bg); color: var(--color-success-text); }
 .c-body { margin: 4px 0; font-size: 13.5px; }
-.c-reason { font-size: 12px; color: #b91c1c; margin: 2px 0; }
+.c-reason { font-size: 12px; color: var(--color-danger-text); margin: 2px 0; }
 .c-ops { margin-top: 4px; }
 .empty-hint { color: var(--color-text-muted); font-size: 13px; padding: 12px 0; }
 </style>

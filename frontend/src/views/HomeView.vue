@@ -128,7 +128,8 @@
                   class="chart-value"
                   :class="{ 'chart-value--pinned': index === maxTrendIndex }"
                 >{{ item.value }}</span>
-                <div class="chart-bar"></div>
+                <!-- 峰值柱用数据强调色（琥珀）：图上唯一的焦点，其余柱保持品牌蓝 -->
+                <div class="chart-bar" :class="{ 'chart-bar--peak': index === maxTrendIndex }"></div>
               </div>
               <!-- 30 根柱子放不下 30 个日期标签——每 5 天一个 + 收尾那天 -->
               <div class="chart-label">{{ showLabel(index) ? item.name : '' }}</div>
@@ -710,7 +711,16 @@ function platformLabel(platform) {
   background: var(--brand-600);
 }
 
+.chart-bar--peak {
+  background: var(--color-data-accent);
+}
+
+.chart-bar-wrap:hover .chart-bar--peak {
+  background: var(--color-data-accent-text);
+}
+
 .chart-value {
+  font-family: var(--font-numeric);
   position: absolute;
   left: 50%;
   bottom: calc(var(--bar-h, 0%) + 5px);
@@ -730,8 +740,10 @@ function platformLabel(platform) {
   opacity: 1;
 }
 
-/* 峰值标签等柱子生长完再浮现，避免动画期间数字悬空 */
+/* 峰值标签等柱子生长完再浮现，避免动画期间数字悬空；颜色与峰值柱同为琥珀 */
 .chart-value--pinned {
+  color: var(--color-data-accent-text);
+  font-weight: 700;
   animation: value-in 0.3s var(--ease-out) 0.55s backwards;
 }
 
