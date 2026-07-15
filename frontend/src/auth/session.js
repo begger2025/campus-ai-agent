@@ -41,7 +41,9 @@ export function hasRole(roles = []) {
 }
 
 export function getDefaultPathForRole(role = getCurrentRole()) {
-  return role === 'admin' ? '/admin' : '/opinion'
+  // 管理员落「今日工作台」（今天要处理什么）；普通用户落首页仪表盘（先总览再深入）。
+  // 工作台 /opinion 是深度研判工具，从事件列表点「研判」带着目标进入才合适。
+  return role === 'admin' ? '/admin' : '/'
 }
 
 /**
