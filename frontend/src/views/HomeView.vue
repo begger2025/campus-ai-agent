@@ -12,7 +12,6 @@
         </div>
       </div>
       <div class="welcome-meta">
-        <DataSourceBadge v-if="healthChecked && !backendOk" source="mock" />
         <button
           v-if="highRiskEvents.length > 0"
           class="risk-flag"
@@ -83,7 +82,7 @@
     <!-- 内容区：趋势图 + 最新帖子 + 中高风险预警快览 -->
     <div class="content-grid">
       <!-- 舆情趋势 -->
-      <div class="section-card">
+      <div class="section-card chart-card">
         <div class="section-header">
           <span class="section-title">
             近{{ trendDays }}天发帖趋势
@@ -219,11 +218,9 @@ import {
 } from '@element-plus/icons-vue'
 import { formatHeat } from '@/utils/heat'
 import StatCard from '@/components/StatCard.vue'
-import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { checkHealth, fetchPosts, fetchSentimentStats } from '@/api/posts'
 import { fetchPublishedEvents } from '@/api/events'
 import { getCurrentUser, getCurrentRole } from '@/auth/session'
-import { mockPosts } from '@/mock/data'
 
 // ——— 当前用户 ———
 const user = getCurrentUser()
@@ -247,7 +244,6 @@ const todayText = `${now.getMonth() + 1}月${now.getDate()}日 周${'日一二�
 
 // ——— 后端状态 ———
 const backendOk = ref(false)
-const healthChecked = ref(false)
 const backendDesc = ref('检测中…')
 const backendStatus = computed(() => (backendOk.value ? '正常' : '未连接'))
 
@@ -257,9 +253,8 @@ onMounted(async () => {
     backendOk.value = data.pong === true
     backendDesc.value = backendOk.value ? '后端响应正常' : '响应异常'
   } catch {
-    backendDesc.value = '后端未启动，展示样本数据'
+    backendDesc.value = '后端未启动'
   }
-  healthChecked.value = true
   loadPosts()
   loadEvents()
   loadPostTrend()
@@ -292,21 +287,26 @@ async function loadPosts() {
     const data = await fetchPosts(1, 10)
     posts.value = data.items
     postsTotal.value = data.total ?? data.items.length
-  } catch {
-    posts.value = mockPosts
-    postsTotal.value = mockPosts.length
+  } catch (error) {
+    // 不垫 mock 假数据：失败就空列表。顶栏徽标会同步显示「后端未连接」。
+    console.warn('[home] 帖子加载失败', error)
+    posts.value = []
+    postsTotal.value = 0
   } finally {
     postsLoading.value = false
   }
 }
 
-// ——— 事件数据（真实接口，后端不可用时 api 层自动降级样本） ———
+// ——— 事件数据（加载失败就空列表，不再由 api 层降级假数据） ———
 const events = ref([])
 const eventsLoading = ref(true)
 
 async function loadEvents() {
   try {
     events.value = await fetchPublishedEvents()
+  } catch (error) {
+    console.warn('[home] 事件加载失败', error)
+    events.value = []
   } finally {
     eventsLoading.value = false
   }
@@ -601,17 +601,41 @@ function platformLabel(platform) {
   padding: 14px 18px 16px;
 }
 
-/* 迷你柱状图 */
+/* 趋势卡按内容高度收缩、顶部对齐——不被右侧「最新帖子」强行撑高，
+   这样卡片内部没有多余空白，柱子直接锚在固定高度图表的底部 */
+.chart-card {
+  align-self: start;
+}
+
+/* 迷你柱状图：固定高度，柱子锚在底部；30 根柱子放不下时横向滚动 */
 .mini-chart {
+  height: 210px;
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  height: 132px;
+  gap: 5px;
   padding-top: 20px;
+  /* 底部留出一条独立空隙给横向滚动条，避免它压在日期标签上 */
+  padding-bottom: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 仅趋势图的横向滚动条稍作弱化，避免抢镜 */
+.mini-chart::-webkit-scrollbar {
+  height: 6px;
+}
+.mini-chart::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+.mini-chart::-webkit-scrollbar-thumb:hover {
+  background: #cbd5e1;
 }
 
 .chart-bar-wrap {
-  flex: 1;
+  /* 可增长填满宽屏，但不缩小到 16px 以下——窄屏/放大时溢出触发横向滚动 */
+  flex: 1 0 16px;
+  min-width: 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -672,18 +696,25 @@ function platformLabel(platform) {
   from { opacity: 0; }
 }
 
+/* 日期标签：单行不换行，居中；只在每 5 天显示一个，稀疏所以横向溢出到相邻空标签格无碰撞。
+   它在柱子基线下方 8px，与柱子分属两层，不会再和柱子混叠。 */
 .chart-label {
+  height: 14px;
+  line-height: 14px;
+  margin-top: 8px;
   font-size: 11px;
   color: var(--color-text-faint);
-  margin-top: 6px;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .chart-skeleton {
+  height: 210px;
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  height: 132px;
   padding-top: 20px;
+  padding-bottom: 14px;
 }
 
 .chart-skeleton span {

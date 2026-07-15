@@ -5,24 +5,20 @@
  * 1. 请求自动注入 token
  * 2. 响应统一解包 { code, data, message }
  * 3. 401/403 自动处理
- * 4. 全局 dataSource 标记（供 DataSourceBadge 使用）
+ * 4. 全局后端连接状态（供 MainLayout 顶栏徽标使用）
  */
+import { ref } from 'vue'
 import axios from 'axios'
 import { getSession, logout } from '@/auth/session'
 
 // ---------------------------------------------------------------------------
-// 全局数据来源标记（供 DataSourceBadge 组件读取）
-// 'real' | 'mock' | 'demo'
+// 后端连接状态（响应式，MainLayout 顶栏徽标直接绑定）
+// 'pending'：本次会话还没有任何请求返回；'real'：后端有响应（哪怕是业务错误，
+// 说明连接是通的）；'down'：请求发出去但没有任何响应（后端没启动/超时）。
+// 此前这里是个非响应式字符串，顶栏「真实接口」徽标则是写死的静态文本——
+// 前端 mock 兜底 + 假徽标曾组合出「假数据配真徽标」的双重误导（用户实测截图）。
 // ---------------------------------------------------------------------------
-let _dataSource = 'mock'
-
-export function getDataSource() {
-  return _dataSource
-}
-
-export function setDataSource(source) {
-  _dataSource = source
-}
+export const backendState = ref('pending')
 
 // ---------------------------------------------------------------------------
 // axios 实例
@@ -50,11 +46,11 @@ http.interceptors.response.use(
   (response) => {
     const body = response.data
 
+    backendState.value = 'real'
+
     // 标准 { code: 0, data: ..., message: "..." } 格式
     if (body && typeof body.code === 'number') {
       if (body.code === 0) {
-        // 标记为真实接口数据
-        _dataSource = 'real'
         return body.data !== undefined ? body.data : body
       }
       // 业务错误
@@ -63,11 +59,12 @@ http.interceptors.response.use(
       return Promise.reject(err)
     }
 
-    // 非标准响应 — 视为真实接口
-    _dataSource = 'real'
+    // 非标准响应 — 原样返回
     return body
   },
   (error) => {
+    // 有响应体的错误（4xx/5xx）说明后端是通的；完全无响应才是「未连接」
+    backendState.value = error.response ? 'real' : 'down'
     // 登录请求本身的 401/403 是"账号密码错误/被禁用"，要把错误交还登录页展示，
     // 而不是触发全局登出跳转（否则错误提示被页面刷新吞掉）。
     const isLoginRequest = (error.config?.url || '').includes('/auth/login')

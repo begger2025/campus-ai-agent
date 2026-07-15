@@ -70,9 +70,11 @@
           </div>
         </div>
         <div class="topbar-right">
-          <span class="topbar-chip topbar-chip--success">
+          <!-- 连接状态由 http.js 的响应式标记驱动。此前这里写死「真实接口」，
+               后端没启动时它照样亮绿灯——假数据配真徽标，双重误导。 -->
+          <span :class="['topbar-chip', 'topbar-chip--state', backendChip.cls]">
             <span class="status-dot"></span>
-            真实接口
+            {{ backendChip.label }}
           </span>
           <span class="topbar-chip topbar-chip--role">
             <el-icon :size="14"><UserFilled /></el-icon>
@@ -100,11 +102,19 @@ import { useRoute, useRouter } from 'vue-router'
 import { Expand, Fold, Menu, UserFilled } from '@element-plus/icons-vue'
 import { getCurrentRole, getCurrentUser, logout } from '@/auth/session'
 import { getNavGroups } from '@/config/nav'
+import { backendState } from '@/api/http'
 import BrandLogo from '@/components/BrandLogo.vue'
 
 const route = useRoute()
 const router = useRouter()
 const role = ref(getCurrentRole())
+
+/* ---- 后端连接徽标：只报告事实（有响应/无响应/还没请求过） ---- */
+const backendChip = computed(() => {
+  if (backendState.value === 'real') return { label: '真实接口', cls: 'topbar-chip--success' }
+  if (backendState.value === 'down') return { label: '后端未连接', cls: 'topbar-chip--danger' }
+  return { label: '连接中…', cls: 'topbar-chip--pending' }
+})
 
 function syncRole() {
   role.value = getCurrentRole()
@@ -455,12 +465,33 @@ function handleLogout() {
   border-color: #c8e5d0;
 }
 
+.topbar-chip--danger {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.topbar-chip--pending {
+  color: var(--color-text-muted);
+  background: var(--color-surface-2, #f5f7fa);
+}
+
 .status-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--color-success);
   box-shadow: 0 0 0 3px rgba(52, 146, 75, 0.15);
+}
+
+.topbar-chip--danger .status-dot {
+  background: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+}
+
+.topbar-chip--pending .status-dot {
+  background: #94a3b8;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.18);
 }
 
 .topbar-chip--role .el-icon {
@@ -494,7 +525,7 @@ function handleLogout() {
     display: none;
   }
 
-  .topbar-chip--success {
+  .topbar-chip--state {
     display: none;
   }
 }

@@ -52,7 +52,14 @@
     <div class="events-layout">
       <section class="panel-card event-list-card">
         <div class="compact-panel-title">公开事件</div>
-        <div v-if="!loading && !pagedEvents.length" class="list-empty">
+        <!-- 加载失败态：宁可让用户看到失败并重试，绝不静默垫一版假数据 -->
+        <div v-if="!loading && loadError" class="list-empty">
+          <el-icon :size="30"><WarningFilled /></el-icon>
+          <p>事件列表加载失败</p>
+          <span>{{ loadError }}</span>
+          <el-button size="small" type="primary" @click="loadEvents">重新加载</el-button>
+        </div>
+        <div v-else-if="!loading && !pagedEvents.length" class="list-empty">
           <el-icon :size="30"><Search /></el-icon>
           <p>没有符合条件的公开事件</p>
           <span>试试放宽风险等级或时间范围</span>
@@ -180,7 +187,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { InfoFilled, Search } from '@element-plus/icons-vue'
+import { InfoFilled, Search, WarningFilled } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { formatAge, formatEventDateTime, isStale } from '@/utils/age'
 
@@ -194,11 +201,12 @@ import { Flip } from 'gsap/Flip'
 gsap.registerPlugin(Flip)
 import EventFeedbackDialog from '@/components/EventFeedbackDialog.vue'
 import { fetchPublishedEvents } from '@/api/events'
-import { riskOptions, sourceOptions } from '@/mock/events'
+import { riskOptions, sourceOptions } from '@/constants/eventOptions'
 
 const router = useRouter()
 
 const loading = ref(false)
+const loadError = ref('')
 const events = ref([])
 const feedbackVisible = ref(false)
 const feedbackEvent = ref(null)
@@ -339,9 +347,11 @@ onBeforeUnmount(() => flipAnim?.kill())
 
 async function loadEvents() {
   loading.value = true
+  loadError.value = ''
   try {
     events.value = await fetchPublishedEvents()
   } catch (error) {
+    loadError.value = error.message || '请确认后端已启动后重试'
     ElMessage.error(error.message || '事件列表加载失败')
   } finally {
     loading.value = false

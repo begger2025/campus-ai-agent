@@ -260,7 +260,7 @@ import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { formatAge, formatEventTime, isStale } from '@/utils/age'
 import { growthEvidence, hasLifecycle, lifecycleLabel, lifecycleTitle } from '@/utils/lifecycle'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
-import { sourceOptions } from '@/mock/events'
+import { sourceOptions } from '@/constants/eventOptions'
 import { fetchEventDetail, fetchPublishedEvents } from '@/api/events'
 
 const router = useRouter()
@@ -548,11 +548,13 @@ function isSafeUrl(url) {
   color: var(--color-text-muted);
 }
 
+/* 定高（不是 min-height）：把三栏锁进视口高度，各栏内部滚动、底部持平，
+   而不是让最长的左栏把整页撑成长长一条 */
 .opinion-page {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 100%;
+  height: 100%;
 }
 
 /* ——— 工具栏 ——— */
