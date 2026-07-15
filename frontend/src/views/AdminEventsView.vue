@@ -315,7 +315,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ElMessageBox } from 'element-plus'
 import {
@@ -341,7 +341,13 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = 10
 
-const filters = reactive({ status: 'all', keyword: '', risk: '' })
+// 概览页的待办卡/状态分布带 ?status= 跳过来——按它初始化筛选 tab
+const initialStatus = ['draft', 'published', 'rejected', 'archived'].includes(
+  String(useRoute().query.status || '')
+)
+  ? String(useRoute().query.status)
+  : 'all'
+const filters = reactive({ status: initialStatus, keyword: '', risk: '' })
 
 const statusTabs = [
   { value: 'all', label: '全部' },

@@ -17,7 +17,7 @@ from backend.admin_models import (
     User,
     UserFeedback,
 )
-from backend.models import ProcessedPost, PublicEvent, RawPost
+from backend.models import EventComment, ProcessedPost, PublicEvent, RawPost, UserSubmission
 from backend.services.log_service import write_admin_operation
 
 
@@ -56,7 +56,76 @@ def overview_data(db: Session) -> dict[str, Any]:
         "pending_feedback_count": db.query(UserFeedback).filter(UserFeedback.status == "pending").count(),
         "recent_system_errors_count": recent_error_count,
         "draft_events_count": db.query(PublicEvent).filter(PublicEvent.status == "draft").count(),
+        # —— 今日工作台扩展（全部实时查询，零 LLM）——
+        "pending_submissions_count": (
+            db.query(UserSubmission).filter(UserSubmission.status == "pending").count()
+        ),
+        # 被举报评论：有举报计数的都值得复核（含自动隐藏的）
+        "reported_comments_count": (
+            db.query(EventComment).filter(EventComment.report_count > 0).count()
+        ),
+        "curated_events_count": (
+            db.query(PublicEvent).filter(PublicEvent.curated.is_(True)).count()
+        ),
+        # 语料体检：新鲜度是播种计划的验收 KPI，直接上墙
+        "corpus": _corpus_health(db),
+        # 最近一次事件生成 run：比「最近采集任务」信息量高（事件数/状态/耗时/警告）
+        "last_agent_run": _last_agent_run(db),
+        # LLM 用量（进程内计数器，服务启动以来）
+        "llm_usage": _llm_usage(),
     }
+
+
+def _corpus_health(db: Session) -> dict[str, Any]:
+    from datetime import timedelta
+
+    query = db.query(ProcessedPost).filter(ProcessedPost.excluded.is_(False))
+    total = query.count()
+    recent = query.filter(
+        ProcessedPost.publish_time >= datetime.utcnow() - timedelta(days=30)
+    ).count()
+    return {
+        "total": total,
+        "recent_30d": recent,
+        "recent_ratio": round(recent / total, 3) if total else 0.0,
+        "excluded": db.query(ProcessedPost).filter(ProcessedPost.excluded.is_(True)).count(),
+    }
+
+
+def _last_agent_run(db: Session) -> dict[str, Any] | None:
+    from backend.admin_models import AgentRunLog
+
+    row = db.query(AgentRunLog).order_by(AgentRunLog.id.desc()).first()
+    if row is None:
+        return None
+    # warnings 藏在 output_summary 的 JSON 里（insert_agent_run_log 写入的形状）；
+    # 解析不动就当 0——概览是速览，不为一个计数抛错。
+    warnings_count = 0
+    try:
+        summary = json.loads(row.output_summary or "{}")
+        warnings = summary.get("warnings")
+        if isinstance(warnings, list):
+            warnings_count = len(warnings)
+    except (ValueError, AttributeError):
+        pass
+    return {
+        "id": row.id,
+        "status": row.status or "",
+        "event_count": int(row.output_count or 0),
+        "input_count": int(row.input_count or 0),
+        "duration_ms": int(row.duration_ms or 0),
+        "finished_at": _format_datetime(getattr(row, "created_at", None)),
+        "warnings_count": warnings_count,
+    }
+
+
+def _llm_usage() -> dict[str, Any]:
+    try:
+        from backend.services.llm_client import get_llm_usage
+
+        return dict(get_llm_usage())
+    except Exception:
+        return {}
 
 
 def raw_post_item(row: RawPost, processed: "ProcessedPost | None" = None) -> dict[str, Any]:

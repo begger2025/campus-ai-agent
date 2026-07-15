@@ -20,6 +20,7 @@ import AdminEvidenceView from '@/views/AdminEvidenceView.vue'
 import AdminOpsView from '@/views/AdminOpsView.vue'
 import SubmissionView from '@/views/SubmissionView.vue'
 import AdminSubmissionsView from '@/views/AdminSubmissionsView.vue'
+import AdminCommentsView from '@/views/AdminCommentsView.vue'
 
 const routes = [
   // 登录页 — 独立布局，无侧边栏
@@ -90,6 +91,12 @@ const routes = [
         name: 'AdminSubmissions',
         component: AdminSubmissionsView,
         meta: { title: '投稿审核', subtitle: '用户投稿前置审核（通过即进数据管线）', roles: ['admin'] },
+      },
+      {
+        path: 'admin/comments',
+        name: 'AdminComments',
+        component: AdminCommentsView,
+        meta: { title: '评论管控', subtitle: '被举报评论复核（隐藏/恢复留审计）', roles: ['admin'] },
       },
       {
         path: 'admin',
