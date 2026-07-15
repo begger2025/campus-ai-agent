@@ -97,6 +97,12 @@ class RouterTopicExtractionTests(unittest.TestCase):
             "要带上实测踩过坑的那个例句——「请给我一份宿舍搬迁舆情简报」→ switch + 宿舍搬迁",
         )
 
+    def test_explicit_web_requests_are_taught_to_route_to_complex(self):
+        """「联网查X」必须进 complex_analysis——web_search 工具只在 ReAct 循环里，
+        路由错了用户的显式联网请求就石沉大海。"""
+
+        self.assertIn("联网", ROUTER_SYSTEM_PROMPT)
+
     def test_global_no_longer_hinges_on_missing_history_alone(self):
         self.assertNotIn(
             "或没有上一轮话题",

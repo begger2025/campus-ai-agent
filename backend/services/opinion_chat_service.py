@@ -28,6 +28,7 @@ from backend.services.opinion_report import build_event_digest, compact_events_f
 from backend.services.public_opinion_adapter import processed_posts_to_notes, query_agent_rows
 from backend.services.react_loop import ReactResult, ReactStep, ReactTool, iter_react, run_react
 from backend.services.semantic_posts import semantic_post_ids
+from backend.services.web_evidence import search_web, web_search_available
 
 
 CHAT_NOTE_LIMIT = 200
@@ -277,6 +278,8 @@ class OpinionChatService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self._notes_cache: dict[str, list[OpinionNote]] = {}
+        # 本次对话已联网检索的次数：按次计费 + 外部延迟不可控，每轮对话最多一次。
+        self._web_calls = 0
 
     # ------------------------------------------------------------------ data
 
@@ -376,6 +379,8 @@ class OpinionChatService:
         if titles:
             lines.append("当前数据里有这些话题可以问：" + "、".join(f"「{title}」" for title in titles) + "。")
         lines.append("也可以换个更常见的说法再试，或者直接问我「最近有什么热点」「最近有什么风险」。")
+        if web_search_available():
+            lines.append(f"如果需要，我也可以联网检索公开信息（站外内容，未经入库审核）——对我说「联网查{topic}」即可。")
         return "\n".join(lines)
 
     def _search_ranked_notes(self, keyword: str = "", limit: int = 10) -> list[OpinionNote]:
@@ -837,7 +842,30 @@ class OpinionChatService:
                 distribution[note.sentiment] = distribution.get(note.sentiment, 0) + 1
             return {"keyword": keyword, "total": len(notes), "distribution": distribution}
 
-        return {
+        def run_web_search(action_input: dict[str, Any]) -> dict[str, Any]:
+            """联网检索（站外信息）。限次一道闸在这里：按次计费 + 外部延迟不可控。"""
+
+            if self._web_calls >= 1:
+                return {"error": "本轮对话已联网检索过，请基于已获得的结果作答", "results": []}
+            self._web_calls += 1
+            query = str(action_input.get("keyword") or action_input.get("query") or "")
+            return search_web(query)
+
+        tools: dict[str, ReactTool] = {}
+        if web_search_available():
+            # key 未配置时不注册——模型根本看不见这个工具，不会引导去撞墙
+            tools["web_search"] = ReactTool(
+                name="web_search",
+                description=(
+                    "联网检索公开网页（结果是**站外信息，未经入库审核**）。仅当库内检索"
+                    "不到、或用户明确要求联网/查最新公开信息时使用，每轮对话最多一次。"
+                    "引用其结果时必须在回答中注明「站外信息，未经入库审核」，"
+                    "并列出来源标题与链接。"
+                ),
+                run=run_web_search,
+            )
+
+        tools.update({
             "search_notes": ReactTool(
                 name="search_notes",
                 description="按关键词检索原始帖子，返回标题、情绪和热度（keyword 为空时返回全部热门帖）",
@@ -877,7 +905,8 @@ class OpinionChatService:
                 description="全局概览：帖子总数、事件总数、情绪分布、风险分布（不需要 keyword）",
                 run=run_overview,
             ),
-        }
+        })
+        return tools
 
     # --------------------------------------------------------------- helpers
 
