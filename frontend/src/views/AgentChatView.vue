@@ -684,6 +684,14 @@ async function send(preset) {
   font-size: 12px;
 }
 
+.md-body :deep(a) {
+  color: var(--brand-600);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.md-body :deep(a:hover) { text-decoration: underline; }
+
 .md-body :deep(hr) {
   border: 0;
   border-top: 1px solid var(--color-border-light);
