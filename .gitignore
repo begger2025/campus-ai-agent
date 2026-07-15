@@ -30,3 +30,6 @@ data/post_vectors.npz
 
 # 会话记忆本地库（运行时状态，chat_memory_store 自建）
 data/chat_memory.sqlite3
+
+# 用户投稿图片（本地上传产物）
+uploads/

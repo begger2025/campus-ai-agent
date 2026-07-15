@@ -13,3 +13,4 @@ pymysql
 openai
 # 可选：语义事件聚类（含 torch 约 500MB），不装自动退回规则聚类
 # sentence-transformers
+python-multipart>=0.0.9

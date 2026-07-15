@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="admin-page admin-events">
     <div class="panel-card filter-bar">
       <el-input
@@ -585,7 +585,7 @@ function isSafeUrl(url) {
 }
 
 const PLATFORM_LABELS = {
-  xhs: '小红书', ks: '快手', zhihu: '知乎', weibo: '微博', tieba: '贴吧', web: '网页',
+  xhs: '小红书', ks: '快手', zhihu: '知乎', weibo: '微博', tieba: '贴吧', web: '网页', campus: '校园投稿',
 }
 
 function platformLabel(platform) {

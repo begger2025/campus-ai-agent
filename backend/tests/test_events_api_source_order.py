@@ -32,7 +32,9 @@ class PlatformOrderTest(unittest.TestCase):
         self.assertEqual(_sort_platforms(["ks", "xhs"]), _sort_platforms(["xhs", "ks"]))
 
     def test_the_order_follows_the_declared_display_order(self):
-        shuffled = ["web", "tieba", "weibo", "zhihu", "ks", "xhs"]
+        # 从声明本身反推乱序输入：新平台（web/campus…）加入展示顺序时测试自动跟上，
+        # 不用每次手改这里的清单。
+        shuffled = list(reversed(PLATFORM_DISPLAY_ORDER))
 
         self.assertEqual(_sort_platforms(shuffled), list(PLATFORM_DISPLAY_ORDER))
 

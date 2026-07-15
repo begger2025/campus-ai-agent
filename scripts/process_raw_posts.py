@@ -1,4 +1,4 @@
-"""Clean raw_posts into processed_posts for the public opinion agent."""
+﻿"""Clean raw_posts into processed_posts for the public opinion agent."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from scripts.ensure_wp4_schema import ensure_wp4_schema  # noqa: E402
 
 # 可定向处理的平台码。五个爬虫平台之外，"web" 是证据采集交付写入 raw_posts 的
 # 平台码：不加进来的话 --platform web 会被 argparse 直接拒掉，证据行就无法定向入库。
-PLATFORM_CHOICES = ["xhs", "weibo", "tieba", "zhihu", "ks", "web"]
+PLATFORM_CHOICES = ["xhs", "weibo", "tieba", "zhihu", "ks", "web", "campus"]
 
 
 @dataclass

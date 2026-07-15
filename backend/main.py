@@ -27,6 +27,7 @@ from backend.routers.agent_public import router as agent_public_router  # noqa: 
 from backend.routers.api import router as api_router  # noqa: E402
 from backend.routers.auth import router as auth_router  # noqa: E402
 from backend.routers.comments import router as comments_router  # noqa: E402
+from backend.routers.submissions import router as submissions_router  # noqa: E402
 from backend.routers.feedback import router as feedback_router  # noqa: E402
 from backend.seed import seed_if_empty  # noqa: E402
 from backend.services.auth_service import ensure_default_admin, ensure_default_demo_user  # noqa: E402
@@ -109,7 +110,14 @@ app.include_router(admin_events_router, prefix="/api")
 app.include_router(admin_evidence_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
 app.include_router(comments_router, prefix="/api")
+app.include_router(submissions_router, prefix="/api")
 app.include_router(api_router, prefix="/api")
+
+# 投稿图片：本地 uploads/ 目录静态服务（库里只存相对路径，不进共享 DB）。
+# 上传侧已做扩展名白名单+魔数嗅探+UUID 重命名，这里只读不列目录。
+_UPLOADS = ROOT / "uploads"
+_UPLOADS.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(_UPLOADS)), name="uploads")
 
 
 @app.api_route(

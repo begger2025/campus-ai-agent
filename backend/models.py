@@ -236,5 +236,41 @@ class EventComment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class UserSubmission(Base):
+    """用户投稿（参与感 V2）：**线索**，不是事件。
+
+    定位与数据流（与证据采集同一模式——第三个数据入口，同一条下游管线）：
+
+        投稿（文字必填+图片可选）→ 前置审核（第一方发布有诽谤/虚假风险，
+        与爬取的"搬运"性质不同，必须先审）→ 通过写 raw_posts(platform='campus',
+        external_id='sub:<id>'，唯一约束天然幂等) → 下轮 process/聚类自然吸收
+        ——绝不直接造事件，也不默认挂进事件（那会触发 curated 锁）。
+
+    图片是给人看的证据附件（uploads/ 本地目录，库存相对路径）；LLM 只吃文字
+    描述——当前管线纯文本，多模态留 V3。suggested_event_id 仅是给管理员的提示。
+    """
+
+    __tablename__ = "user_submissions"
+    __table_args__ = (Index("idx_user_submissions_status", "status"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # 相对路径列表（uploads/submissions/...），审核通过后原样带进 raw_posts.images_json
+    images_json: Mapped[str] = mapped_column(Text, default="")
+    # 投稿人认为相关的事件——仅作为给管理员的提示，不自动挂链接
+    suggested_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # pending / approved / rejected
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    review_comment: Mapped[str] = mapped_column(String(500), default="")
+    reviewed_by: Mapped[str] = mapped_column(String(64), default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 通过后写入 raw_posts 的回执 id（投稿人可见"已进入数据管线"）
+    raw_post_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 # 已废弃：week-1 的 user_tasks / user_schedules 表（个人事项现走前端本地存储）。
 # 模型已移除，共享库中的空表保留不 drop（团队库谨慎），见 docs/database.md。

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="admin-page admin-raw-posts">
     <div class="panel-card filter-bar">
       <el-input
@@ -224,7 +224,7 @@ async function restore(post) {
   }
 }
 
-const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
+const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据', campus: '校园投稿' }
 
 function platformLabel(platform) {
   return PLATFORM_LABELS[platform] || platform || '—'

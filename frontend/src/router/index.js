@@ -18,6 +18,8 @@ import AdminRawPostsView from '@/views/AdminRawPostsView.vue'
 import AdminKeywordsView from '@/views/AdminKeywordsView.vue'
 import AdminEvidenceView from '@/views/AdminEvidenceView.vue'
 import AdminOpsView from '@/views/AdminOpsView.vue'
+import SubmissionView from '@/views/SubmissionView.vue'
+import AdminSubmissionsView from '@/views/AdminSubmissionsView.vue'
 
 const routes = [
   // 登录页 — 独立布局，无侧边栏
@@ -76,6 +78,18 @@ const routes = [
         name: 'Personal',
         component: PersonalView,
         meta: { title: '舆情关注', subtitle: '中高风险事件关注与影响评估', roles: ['user', 'admin'] },
+      },
+      {
+        path: 'submissions',
+        name: 'Submissions',
+        component: SubmissionView,
+        meta: { title: '我要投稿', subtitle: '投稿线索，审核通过后进入数据管线', roles: ['user', 'admin'] },
+      },
+      {
+        path: 'admin/submissions',
+        name: 'AdminSubmissions',
+        component: AdminSubmissionsView,
+        meta: { title: '投稿审核', subtitle: '用户投稿前置审核（通过即进数据管线）', roles: ['admin'] },
       },
       {
         path: 'admin',

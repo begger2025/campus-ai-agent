@@ -4,6 +4,8 @@ import {
   Coin,
   DataAnalysis,
   DocumentChecked,
+  EditPen,
+  Files,
   House,
   List,
   MagicStick,
@@ -21,12 +23,14 @@ const publicOpinionItems = [
   { path: '/events', label: '事件列表', icon: markRaw(List), roles: ['guest', 'user', 'admin'] },
   { path: '/sentiment', label: '舆情分析', icon: markRaw(TrendCharts), roles: ['user', 'admin'] },
   { path: '/personal', label: '舆情关注', icon: markRaw(View), roles: ['user', 'admin'] },
+  { path: '/submissions', label: '我要投稿', icon: markRaw(EditPen), roles: ['user', 'admin'] },
 ]
 
 const adminItems = [
   { path: '/admin', label: '后台概览', icon: markRaw(Odometer), roles: ['admin'] },
   { path: '/admin/events', label: '事件审核', icon: markRaw(DocumentChecked), roles: ['admin'] },
   { path: '/admin/raw-posts', label: '数据管理', icon: markRaw(Coin), roles: ['admin'] },
+  { path: '/admin/submissions', label: '投稿审核', icon: markRaw(Files), roles: ['admin'] },
   { path: '/admin/keywords', label: '智能选题', icon: markRaw(MagicStick), roles: ['admin'] },
   { path: '/admin/evidence', label: '证据采集', icon: markRaw(Search), roles: ['admin'] },
   { path: '/admin/ops', label: '运维反馈', icon: markRaw(Operation), roles: ['admin'] },

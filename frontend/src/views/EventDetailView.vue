@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="detail-page" v-loading="loading">
     <template v-if="event">
       <!-- 头部 -->
@@ -377,7 +377,7 @@ function navigateToImpact() {
 }
 
 function sourceLabel(val) {
-  const map = { weibo: '微博', xhs: '小红书', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
+  const map = { weibo: '微博', xhs: '小红书', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据', campus: '校园投稿' }
   return map[val] || val
 }
 

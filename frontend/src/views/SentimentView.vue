@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="sentiment-page">
     <!-- 统计摘要：**全部是帖子层的数字**。
          改造前这四张卡是「帖子总数 + 高/中/低风险事件」——一张卡属于帖子层、三张属于
@@ -309,7 +309,7 @@ function sentimentLabel(sentiment) {
   return SENTIMENT_LABELS[sentiment] || '—'
 }
 
-const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据' }
+const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据', campus: '校园投稿' }
 function platformLabel(platform) {
   return PLATFORM_LABELS[platform] || platform || '未知'
 }

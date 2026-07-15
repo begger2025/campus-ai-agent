@@ -68,7 +68,7 @@ def _json_value(value: str | None, default):
 # 的事实**，却被摆在了一个**关于来源构成的**位置上，读者会以为顺序有含义，其实没有。
 #
 # 顺序本身按语料量级排（xhs/ks 是主力，web 是证据采集交付的，最少）。
-PLATFORM_DISPLAY_ORDER: tuple[str, ...] = ("xhs", "ks", "zhihu", "weibo", "tieba", "web")
+PLATFORM_DISPLAY_ORDER: tuple[str, ...] = ("xhs", "ks", "zhihu", "weibo", "tieba", "web", "campus")
 
 
 def _sort_platforms(platforms: list[str]) -> list[str]:
@@ -101,6 +101,9 @@ def _normalize_platform(platform: str | None) -> str:
     # "web" 是 "weibo" 的前缀，子串匹配会把微博错判成 web。
     if lower == "web" or "网页" in text:
         return "web"
+    # 用户投稿（审核通过后写入的第三个数据入口，见 submission_service）
+    if lower == "campus" or "投稿" in text:
+        return "campus"
     return lower or text
 
 
