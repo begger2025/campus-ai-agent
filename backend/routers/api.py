@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.admin_models import User
 from backend.database import DATABASE_URL, get_db
@@ -578,6 +578,12 @@ def list_events(
     if event_ids:
         links = (
             db.query(EventPostLink)
+            # 预加载：_event_item 逐条摸 link.raw_post/processed_post，不预加载的话
+            # 每条 link 一次懒加载 SELECT（117 条 link × 远程 RDS ~30ms ≈ 4 秒实测）
+            .options(
+                selectinload(EventPostLink.raw_post),
+                selectinload(EventPostLink.processed_post),
+            )
             .filter(EventPostLink.event_id.in_(event_ids))
             .order_by(EventPostLink.event_id.asc(), EventPostLink.rank.asc())
             .all()
@@ -617,6 +623,11 @@ def get_event_detail(event_id: int, db: Session = Depends(get_db)):
 
     links = (
         db.query(EventPostLink)
+        # 预加载同 list_events：代表帖装配（_link_post_payload）每条 link 摸两个关系
+        .options(
+            selectinload(EventPostLink.raw_post),
+            selectinload(EventPostLink.processed_post),
+        )
         .filter(EventPostLink.event_id == event.id)
         .order_by(EventPostLink.rank.asc())
         .all()

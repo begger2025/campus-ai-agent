@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.admin_models import User
 from backend.database import get_db
@@ -42,6 +42,12 @@ def _links_by_event(db: Session, event_ids: list[int]) -> dict[int, list[EventPo
         return result
     rows = (
         db.query(EventPostLink)
+        # 预加载：下游 _event_item 逐条摸 link.raw_post/processed_post（懒加载 N+1，
+        # 远程 RDS 下每条 link 一次往返——见 test_events_api_query_count）
+        .options(
+            selectinload(EventPostLink.raw_post),
+            selectinload(EventPostLink.processed_post),
+        )
         .filter(EventPostLink.event_id.in_(event_ids))
         .order_by(EventPostLink.event_id.asc(), EventPostLink.rank.asc())
         .all()
