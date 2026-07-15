@@ -160,6 +160,64 @@
         </div>
       </div>
 
+      <!-- 站内讨论（参与感 V1）：登录可写、游客可读。评论是平台自己的 UGC，
+           与爬取帖分开呈现；「站内声音」是写入时算好的规则情绪聚合（纯算术） -->
+      <div class="panel-card comments-card">
+        <h3>
+          站内讨论
+          <span class="voice-chips" v-if="comments.voice.total">
+            <span v-for="(count, key) in comments.voice.distribution" :key="key"
+                  :class="['voice-chip', `voice-${key}`]">
+              {{ voiceLabel(key) }} {{ count }}
+            </span>
+          </span>
+        </h3>
+
+        <div v-if="loggedIn" class="comment-form">
+          <el-input
+            v-model="commentDraft"
+            type="textarea"
+            :rows="2"
+            maxlength="300"
+            show-word-limit
+            placeholder="聊聊你对这个事件的看法…（理性讨论，举报满 5 条会自动隐藏）"
+          />
+          <el-button type="primary" :loading="commentBusy" @click="submitComment()">发表</el-button>
+        </div>
+        <div v-else class="comment-login-hint">
+          <el-button link type="primary" @click="router.push({ name: 'Login', query: { redirect: route.fullPath } })">
+            登录后参与讨论 →
+          </el-button>
+        </div>
+
+        <div v-if="!comments.items.length" class="comment-empty">还没有讨论，来说第一句</div>
+        <article v-for="c in comments.items" :key="c.id" class="comment">
+          <div class="comment-head">
+            <b>{{ c.username }}</b>
+            <span class="comment-time">{{ (c.created_at || '').slice(0, 16).replace('T', ' ') }}</span>
+            <span class="comment-ops">
+              <button v-if="loggedIn" type="button" @click="replyTo = replyTo === c.id ? null : c.id">回复</button>
+              <button v-if="loggedIn" type="button" @click="doReport(c.id)">举报</button>
+            </span>
+          </div>
+          <p class="comment-body">{{ c.content }}</p>
+          <div v-for="r in c.replies" :key="r.id" class="comment-reply">
+            <div class="comment-head">
+              <b>{{ r.username }}</b>
+              <span class="comment-time">{{ (r.created_at || '').slice(0, 16).replace('T', ' ') }}</span>
+              <span class="comment-ops">
+                <button v-if="loggedIn" type="button" @click="doReport(r.id)">举报</button>
+              </span>
+            </div>
+            <p class="comment-body">{{ r.content }}</p>
+          </div>
+          <div v-if="replyTo === c.id" class="comment-form comment-reply-form">
+            <el-input v-model="replyDraft" type="textarea" :rows="2" maxlength="300" placeholder="回复这条评论…" />
+            <el-button size="small" type="primary" :loading="commentBusy" @click="submitComment(c.id)">回复</el-button>
+          </div>
+        </article>
+      </div>
+
       <!-- 操作 -->
       <div class="detail-actions-bar">
         <el-button type="primary" size="large" @click="navigateToImpact">
@@ -189,6 +247,8 @@ import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { formatAge, formatEventTime, isStale } from '@/utils/age'
 import { LINK_EXPIRY_TIP, platformSearchUrl } from '@/utils/postLink'
 import { fetchEventDetail } from '@/api/events'
+import { fetchEventComments, postEventComment, reportComment } from '@/api/comments'
+import { isAuthenticated } from '@/auth/session'
 
 const route = useRoute()
 const router = useRouter()
@@ -244,6 +304,57 @@ const trendDots = computed(() => {
 
 const trendLine = computed(() => trendDots.value.map(p => `${p.x},${p.y}`).join(' '))
 
+// —— 站内讨论 ——
+const loggedIn = ref(isAuthenticated())
+const comments = ref({ items: [], total: 0, voice: { total: 0, distribution: {} } })
+const commentDraft = ref('')
+const replyDraft = ref('')
+const replyTo = ref(null)
+const commentBusy = ref(false)
+
+const VOICE_LABELS = { positive: '正面', negative: '负面', neutral: '中性', controversial: '争议' }
+function voiceLabel(key) {
+  return VOICE_LABELS[key] || key
+}
+
+async function loadComments() {
+  try {
+    comments.value = await fetchEventComments(eventId.value)
+  } catch {
+    /* 评论加载失败不影响事件详情本身 */
+  }
+}
+
+async function submitComment(parentId = null) {
+  const content = (parentId ? replyDraft.value : commentDraft.value).trim()
+  if (!content) return ElMessage.warning('先写点内容')
+  commentBusy.value = true
+  try {
+    await postEventComment(eventId.value, { content, parent_id: parentId })
+    if (parentId) {
+      replyDraft.value = ''
+      replyTo.value = null
+    } else {
+      commentDraft.value = ''
+    }
+    await loadComments()
+  } catch (error) {
+    ElMessage.error(error.message || '发表失败')
+  } finally {
+    commentBusy.value = false
+  }
+}
+
+async function doReport(commentId) {
+  try {
+    const data = await reportComment(commentId)
+    ElMessage.success(data.status === 'hidden' ? '已举报，该评论已自动隐藏待复核' : '已举报')
+    if (data.status === 'hidden') await loadComments()
+  } catch (error) {
+    ElMessage.error(error.message || '举报失败')
+  }
+}
+
 onMounted(async () => {
   try {
     event.value = await fetchEventDetail(eventId.value)
@@ -256,6 +367,7 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  if (event.value) loadComments()
 })
 
 function navigateToImpact() {
@@ -273,6 +385,7 @@ function sourceLabel(val) {
 function postSearchUrl(post) {
   return platformSearchUrl(post.platform, post.title || post.content)
 }
+
 </script>
 
 <style scoped>
@@ -282,6 +395,86 @@ function postSearchUrl(post) {
   gap: 14px;
   max-width: 960px;
 }
+
+/* ——— 站内讨论 ——— */
+.comments-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.voice-chips { display: inline-flex; gap: 6px; }
+
+.voice-chip {
+  padding: 1px 8px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-surface-2, #f5f7fa);
+  color: var(--color-text-muted, #909399);
+}
+
+.voice-negative { background: #fef2f2; color: #b91c1c; }
+.voice-positive { background: #f0fdf4; color: #15803d; }
+.voice-controversial { background: #fffbeb; color: #b45309; }
+
+.comment-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin: 10px 0 14px;
+}
+
+.comment-form .el-input { flex: 1; }
+
+.comment-login-hint { margin: 8px 0 12px; }
+
+.comment-empty {
+  padding: 14px 0;
+  color: var(--color-text-muted, #909399);
+  font-size: 13px;
+}
+
+.comment { padding: 10px 0; border-top: 1px solid var(--color-border-light, #ebeef5); }
+
+.comment-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.comment-time { color: var(--color-text-faint, #c0c4cc); font-size: 12px; }
+
+.comment-ops { margin-left: auto; display: inline-flex; gap: 10px; }
+
+.comment-ops button {
+  border: none;
+  background: none;
+  color: var(--color-text-muted, #909399);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.comment-ops button:hover { color: var(--brand-600, #3b5bdb); }
+
+.comment-body {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.comment-reply {
+  margin: 8px 0 0 18px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--color-border-light, #ebeef5);
+  background: var(--color-surface-2, #fafbfc);
+  border-radius: 0 6px 6px 0;
+}
+
+.comment-reply-form { margin: 8px 0 0 18px; }
 
 .panel-card {
   background: var(--color-surface);
@@ -442,10 +635,15 @@ function postSearchUrl(post) {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
+  /* 未知平台兜底：中性框 + 底色，平台专属类会覆盖它，避免像快手之前那样裸奔 */
+  color: var(--color-text-secondary);
+  background: var(--color-surface-2, #f5f7fa);
+  border: 1px solid var(--color-border);
 }
 
 .source-weibo { color: #c2410c; background: #fff7ed; border: 1px solid #fed7aa; }
 .source-xhs { color: #be123c; background: #fff1f2; border: 1px solid #fecdd3; }
+.source-ks { color: #a16207; background: #fefce8; border: 1px solid #fde68a; }
 .source-tieba { color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; }
 .source-zhihu { color: #0369a1; background: #f0f9ff; border: 1px solid #bae6fd; }
 .source-web { color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; }

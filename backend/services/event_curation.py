@@ -28,7 +28,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from backend.models import EventPostLink, ProcessedPost, PublicEvent
+from backend.models import EventComment, EventPostLink, ProcessedPost, PublicEvent
 
 
 class CurationError(Exception):
@@ -143,6 +143,8 @@ def delete_event(db: Session, event: PublicEvent) -> dict:
         "heat_score": event.heat_score,
     }
     db.query(EventPostLink).filter(EventPostLink.event_id == event.id).delete()
+    # 站内评论随事件一起删（不留孤儿行）：评论的语境就是这个事件，事件没了它无处安放
+    db.query(EventComment).filter(EventComment.event_id == event.id).delete()
     db.delete(event)
     return snapshot
 

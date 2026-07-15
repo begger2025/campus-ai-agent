@@ -26,6 +26,7 @@ from backend.routers.admin_evidence import router as admin_evidence_router  # no
 from backend.routers.agent_public import router as agent_public_router  # noqa: E402
 from backend.routers.api import router as api_router  # noqa: E402
 from backend.routers.auth import router as auth_router  # noqa: E402
+from backend.routers.comments import router as comments_router  # noqa: E402
 from backend.routers.feedback import router as feedback_router  # noqa: E402
 from backend.seed import seed_if_empty  # noqa: E402
 from backend.services.auth_service import ensure_default_admin, ensure_default_demo_user  # noqa: E402
@@ -107,6 +108,7 @@ app.include_router(agent_public_router, prefix="/api")
 app.include_router(admin_events_router, prefix="/api")
 app.include_router(admin_evidence_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")
+app.include_router(comments_router, prefix="/api")
 app.include_router(api_router, prefix="/api")
 
 

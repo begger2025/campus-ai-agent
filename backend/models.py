@@ -203,5 +203,38 @@ class EventPostLink(Base):
     raw_post: Mapped["RawPost | None"] = relationship(back_populates="event_links")
 
 
+class EventComment(Base):
+    """站内评论：登录用户对**已发布事件**的讨论（第一方 UGC，参与感功能 V1）。
+
+    身份定位：它不是爬来的客观事实（不进 raw/processed），也不是 AI 主张——
+    是平台自己的用户内容，平台对它负责。管控口径 = 前置自动挡（注入清洗 +
+    长度/频率限制）+ 后置管控（举报计数自动隐藏 + 管理员隐藏/恢复，留审计）。
+    V1 刻意不进聚类/LLM 语料（防"自产自销"回路：站内讨论影响事件热度，事件
+    展示又引导讨论）；只做展示 + 「站内声音」规则情绪统计（算术）。
+    """
+
+    __tablename__ = "event_comments"
+    __table_args__ = (
+        Index("idx_event_comments_event_id", "event_id"),
+        Index("idx_event_comments_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("public_events.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 展示名冗余存储：用户改名/删号不影响历史评论的显示
+    username: Mapped[str] = mapped_column(String(64), default="")
+    # 一层回复：parent 必须是顶层评论（回复的回复挂到同一个 parent 下）
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # 规则情绪（写入时算好）：事件页「站内声音」统计用，纯算术不走 LLM
+    sentiment: Mapped[str] = mapped_column(String(20), default="neutral")
+    # visible / hidden（软隐藏，不硬删——与帖子剔除同一哲学：可恢复、留痕）
+    status: Mapped[str] = mapped_column(String(20), default="visible")
+    report_count: Mapped[int] = mapped_column(Integer, default=0)
+    hidden_reason: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 # 已废弃：week-1 的 user_tasks / user_schedules 表（个人事项现走前端本地存储）。
 # 模型已移除，共享库中的空表保留不 drop（团队库谨慎），见 docs/database.md。
