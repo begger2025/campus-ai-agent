@@ -1,10 +1,20 @@
 <template>
   <main ref="pageEl" class="login-page">
+    <!-- 校园声音星座：动态背景，垫在所有内容下层 -->
+    <LoginConstellation />
+
+    <!-- 极光光晕层：两团缓慢漂移的模糊色斑（品牌靛 + 雾松绿），
+         压在星座上、内容下，给纯深底加纵深。reduced-motion 时静止。 -->
+    <div class="aurora" aria-hidden="true">
+      <span class="aurora__blob aurora__blob--indigo"></span>
+      <span class="aurora__blob aurora__blob--green"></span>
+    </div>
+
     <header class="login-top">
       <router-link class="brand" to="/">
         <BrandLogo :size="40" />
         <span>
-          <strong>校声智枢</strong>
+          <strong><GradientText :speed="9" :colors="BRAND_FLOW">校声智枢</GradientText></strong>
           <small>Campus AI Agent</small>
         </span>
       </router-link>
@@ -42,54 +52,16 @@
           </div>
         </div>
 
-        <div class="login-preview login-dashboard">
-          <div class="preview-header">
-            <strong>舆情工作台 · 概览</strong>
-          </div>
-
-          <div class="preview-kpis">
-            <div v-for="item in dashboardKpis" :key="item.label" class="preview-kpi">
-              <span class="preview-kpi-icon" :class="item.className">
-                <el-icon><component :is="item.icon" /></el-icon>
-              </span>
-              <span>
-                <small>{{ item.label }}</small>
-                <strong>{{ item.value }}</strong>
-              </span>
-            </div>
-          </div>
-
-          <div class="preview-table-wrap">
-            <div class="preview-table-head">
-              <strong>热点事件（示例）</strong>
-              <button type="button" @click="$router.push('/events')">查看更多 ›</button>
-            </div>
-            <table class="preview-table">
-              <thead>
-                <tr>
-                  <th>事件标题</th>
-                  <th>热度</th>
-                  <th>来源平台</th>
-                  <th>风险等级</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="event in previewEvents" :key="event.rank">
-                  <td>
-                    <span class="rank-badge">{{ event.rank }}</span>
-                    {{ event.title }}
-                  </td>
-                  <td>{{ event.heat }}</td>
-                  <td>{{ event.source }}</td>
-                  <td><span :class="['risk-pill', event.riskClass]">{{ event.risk }}</span></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <!-- 底部信任条：一句能力概述 + 数据口径，取代原先的假仪表盘预览 -->
+        <div class="login-assurance">
+          <span class="assurance-dot"></span>
+          多平台聚合采集 · AI 事件聚类与风险研判 · 真实接口驱动
         </div>
       </section>
 
-      <section class="login-card" aria-label="登录账号">
+      <section v-spotlight="'rgba(160, 190, 250, 0.10)'" class="login-card" aria-label="登录账号">
+        <!-- ClickSpark：卡内点击迸发雾松绿火花；canvas 覆层不拦截事件 -->
+        <ClickSpark class="card-spark" spark-color="#8dbaab" :spark-radius="18">
         <div class="login-card-header">
           <h2>登录账号</h2>
           <p>请选择身份后继续访问系统</p>
@@ -154,6 +126,7 @@
             <span>管理员登录后可进入事件审核、数据管理、爬虫任务与系统日志。</span>
           </div>
         </el-form>
+        </ClickSpark>
       </section>
     </section>
 
@@ -202,7 +175,6 @@ import {
   InfoFilled,
   Lock,
   Management,
-  Promotion,
   Right,
   TrendCharts,
   User,
@@ -210,6 +182,12 @@ import {
 import { login, register as registerApi } from '@/api/auth'
 import { getDefaultPathForRole, setSession } from '@/auth/session'
 import BrandLogo from '@/components/BrandLogo.vue'
+import LoginConstellation from '@/components/LoginConstellation.vue'
+import GradientText from '@/components/effects/GradientText.vue'
+import ClickSpark from '@/components/effects/ClickSpark.vue'
+
+// 品牌字的流动渐变：浅靛 → 雪白 → 雾松绿，呼应卡内主色
+const BRAND_FLOW = ['#9db8f0', '#e8f0ff', '#8dbaab', '#e8f0ff', '#9db8f0']
 
 const router = useRouter()
 const route = useRoute()
@@ -230,12 +208,12 @@ onMounted(() => {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
   gsapCtx = gsap.context(() => {
     const tl = gsap.timeline({ defaults: { ease: 'power3.out' } })
-    tl.from('.login-top', { y: -10, autoAlpha: 0, duration: 0.4 })
+    tl.from('.aurora', { autoAlpha: 0, duration: 1.4, ease: 'power1.out' }, 0)
+      .from('.login-top', { y: -10, autoAlpha: 0, duration: 0.4 }, 0)
       .from('.title-char', { y: 14, autoAlpha: 0, filter: 'blur(6px)', duration: 0.45, stagger: 0.035 }, 0.08)
-      // 副标题带静态 translateY 偏移，用相对值从"当前位置 +12px"滑回
-      .from('.intro-subtitle', { y: '+=12', autoAlpha: 0, duration: 0.4 }, '-=0.3')
+      .from('.intro-subtitle', { y: 12, autoAlpha: 0, duration: 0.4 }, '-=0.3')
       .from('.feature-row', { y: 14, autoAlpha: 0, duration: 0.4, stagger: 0.09 }, '-=0.15')
-      .from('.login-preview', { y: 18, autoAlpha: 0, duration: 0.45 }, '-=0.2')
+      .from('.login-assurance', { y: 12, autoAlpha: 0, duration: 0.4 }, '-=0.2')
       .from('.login-card', { y: 18, autoAlpha: 0, duration: 0.5 }, 0.22)
       .from('.login-footer', { autoAlpha: 0, duration: 0.4 }, '-=0.2')
   }, pageEl.value)
@@ -279,18 +257,6 @@ const features = [
     desc: '管理员可进行事件审核、数据管理、任务调度与系统配置。',
     icon: Management,
   },
-]
-
-const dashboardKpis = [
-  { label: '今日新增', value: '63', icon: TrendCharts, className: 'kpi-blue' },
-  { label: '中高风险', value: '7', icon: Management, className: 'kpi-red' },
-  { label: '已发布', value: '18', icon: Promotion, className: 'kpi-green' },
-]
-
-const previewEvents = [
-  { rank: 1, title: '校园餐饮排队与价格争议升温', heat: 86, source: 3, risk: '中风险', riskClass: 'risk-mid' },
-  { rank: 2, title: '宿舍热水供应不足问题集中反馈', heat: 58, source: 2, risk: '低风险', riskClass: 'risk-low' },
-  { rank: 3, title: '二教新开轻食窗口价格偏高争议', heat: 54, source: 2, risk: '中风险', riskClass: 'risk-mid' },
 ]
 
 watch(role, (nextRole) => {
@@ -384,12 +350,69 @@ async function handleRegister() {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  background:
-    radial-gradient(circle at 8% 12%, rgba(59, 91, 219, 0.07), transparent 30%),
-    radial-gradient(circle at 92% 88%, rgba(59, 91, 219, 0.05), transparent 32%),
-    linear-gradient(180deg, #fbfcfe 0%, #f2f4f9 100%);
+  /* 深藏青兜底色（Canvas 星座会覆盖在上层提供渐变） */
+  background: #081733;
   padding: 22px 46px 24px;
-  color: var(--color-text);
+  color: #eaf0fb;
+}
+
+/* 所有直接内容层抬到星座（z-index:0）之上 */
+.login-top,
+.login-shell,
+.login-footer {
+  position: relative;
+  z-index: 1;
+}
+
+/* ===== 极光光晕层：星座之上、内容之下 ===== */
+.aurora {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.aurora__blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  will-change: transform;
+  animation: aurora-drift 22s ease-in-out infinite alternate;
+}
+
+.aurora__blob--indigo {
+  width: 48vw;
+  height: 48vw;
+  top: -18vw;
+  left: -10vw;
+  background: radial-gradient(circle, rgba(78, 108, 214, 0.34), transparent 65%);
+}
+
+.aurora__blob--green {
+  width: 40vw;
+  height: 40vw;
+  right: -12vw;
+  bottom: -16vw;
+  background: radial-gradient(circle, rgba(76, 143, 116, 0.26), transparent 65%);
+  animation-delay: -11s;
+  animation-duration: 26s;
+}
+
+@keyframes aurora-drift {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(6vw, 4vh) scale(1.12); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora__blob { animation: none; }
+}
+
+/* ClickSpark 包裹层要接管登录卡原本的纵向 flex 布局（login-form 依赖 flex:1） */
+.card-spark {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 .login-page *,
@@ -469,14 +492,9 @@ async function handleRegister() {
   --intro-copy-offset: clamp(36px, 5.8vh, 72px);
   display: flex;
   flex-direction: column;
-  padding-top: 0;
+  /* 用真实 padding 下移内容（不用 transform，避免与 GSAP 的 y 动画互相覆盖导致重叠） */
+  padding-top: var(--intro-copy-offset);
   min-height: 0;
-}
-
-.login-intro h1,
-.intro-subtitle,
-.feature-list {
-  transform: translateY(var(--intro-copy-offset));
 }
 
 .login-intro h1 {
@@ -1050,4 +1068,143 @@ async function handleRegister() {
     margin-top: 12px;
   }
 }
+
+/* ================= 深色主题覆盖（星座背景之上） =================
+   登录卡保持浅色浮层不动；仅把外围文字/图标改为深底可读的浅色。 */
+.login-intro h1 { color: #f4f8ff; }
+.intro-subtitle { color: rgba(210, 222, 245, 0.85); }
+.feature-row strong { color: #eef3fc; }
+.feature-row small { color: rgba(190, 205, 234, 0.78); }
+.feature-icon {
+  background: rgba(90, 130, 210, 0.14);
+  border-color: rgba(120, 160, 235, 0.28);
+  color: #9db8f0;
+}
+
+/* 顶栏 */
+.brand strong { color: #f4f8ff; }
+.brand small { color: rgba(190, 205, 234, 0.7); }
+.home-link { color: rgba(210, 222, 245, 0.85); }
+.home-link:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+
+/* 底部信任条（取代原假仪表盘预览） */
+.login-assurance {
+  margin-top: auto;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 15px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(140, 175, 240, 0.18);
+  color: rgba(214, 226, 248, 0.9);
+  font-size: 13px;
+  font-weight: 500;
+  backdrop-filter: blur(4px);
+}
+.assurance-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #6ba58d;
+  box-shadow: 0 0 0 4px rgba(107, 165, 141, 0.16);
+}
+
+/* 页脚 */
+.login-footer { color: rgba(190, 205, 234, 0.7); }
+.login-footer button { color: #86a7f5; }
+
+/* 登录卡：深底上加深投影，浮层感更强（本体仍是浅色卡） */
+.login-card {
+  box-shadow: 0 24px 60px rgba(3, 10, 28, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-assurance { backdrop-filter: none; }
+}
+
+/* ================= 登录卡：深色玻璃浮层 + 中大绿强调 =================
+   不再是白板压在深色上，而是从星野里"浮"出的半透明深色面板；
+   卡内 Element Plus 控件的主色统一切成中大绿，彻底脱离 AI 蓝白。 */
+.login-card {
+  /* 一处改主色，卡内输入焦点/勾选/主按钮全部跟随。
+     柔化：降饱和的雾松绿，不再是电光翡翠 */
+  --el-color-primary: #4c8f74;
+  --el-color-primary-light-3: #6ba590;
+  --el-color-primary-light-5: #8dbaab;
+  --el-color-primary-light-7: #b3d1c6;
+  --el-color-primary-light-8: #cbe0d9;
+  --el-color-primary-light-9: #e6f1ec;
+  background: linear-gradient(158deg, rgba(30, 52, 96, 0.66), rgba(15, 30, 60, 0.6));
+  border: 1px solid rgba(150, 180, 235, 0.16);
+  box-shadow: 0 24px 60px rgba(3, 10, 28, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(16px) saturate(1.08);
+}
+
+.login-card-header h2 { color: #f2f6ff; }
+.login-card-header p { color: rgba(200, 214, 240, 0.66); }
+
+/* 角色切换：深槽 + 浅色激活块 */
+.role-tabs { background: rgba(0, 0, 0, 0.22); }
+.role-tab { color: rgba(200, 214, 240, 0.7); }
+.role-tab:hover { color: #eef4ff; }
+.role-tab--active {
+  color: #eafaf3;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* 表单标签 */
+.login-form :deep(.el-form-item__label) { color: rgba(200, 214, 240, 0.75); }
+
+/* 输入框：深色浅描边字段（不再是白框） */
+.login-form :deep(.el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.13) inset;
+}
+.login-form :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.26) inset;
+}
+.login-form :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px #4c8f74 inset, 0 0 0 3px rgba(76, 143, 116, 0.18);
+}
+.login-form :deep(.el-input__inner) { color: #eaf0fb; }
+.login-form :deep(.el-input__inner::placeholder) { color: rgba(190, 205, 234, 0.5); }
+.login-form :deep(.el-input__prefix),
+.login-form :deep(.el-input__suffix) { color: rgba(190, 205, 234, 0.6); }
+
+/* 记住我 */
+.login-form :deep(.el-checkbox__label) { color: rgba(200, 214, 240, 0.8); }
+
+/* 链接：柔和绿调 */
+.text-link { color: #7bb49f; }
+
+/* 主按钮（type=primary 自动取上面的雾松绿），阴影也压柔和 */
+.login-btn { box-shadow: 0 2px 12px rgba(40, 100, 78, 0.22); }
+.login-btn:hover { box-shadow: 0 6px 16px rgba(40, 100, 78, 0.28); }
+
+/* 游客按钮：浅描边幽灵按钮（显式盖掉原来的蓝色 border-color） */
+.guest-btn {
+  color: rgba(220, 232, 250, 0.9);
+  border-color: rgba(255, 255, 255, 0.22);
+  background: transparent;
+}
+.guest-btn:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.36);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 注册引导 */
+.apply-row { color: rgba(190, 205, 234, 0.66); }
+
+/* 信息条：柔和绿调深色 */
+.login-info-box {
+  border-color: rgba(110, 165, 140, 0.24);
+  background: rgba(90, 150, 125, 0.08);
+  color: rgba(210, 232, 222, 0.88);
+}
+.login-info-box .el-icon { color: #6ba58d; }
 </style>
