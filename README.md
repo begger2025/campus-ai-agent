@@ -47,12 +47,13 @@
 | `demo.bat` | **离线演示**：共享 MySQL 不可用时用本地 SQLite 快照跑全功能（快照先跑 `scripts\make_demo_snapshot.py` 生成） |
 | `stop.bat` | 释放 9000 端口 |
 
-采集真实数据（可选，共享库已有 182 条历史数据）：
+采集真实数据（可选，共享库已有 800+ 条语料；完整 SOP 见 `docs/keyword-seeding-plan.md`）：
 
 ```text
 # 主链路（推荐）：MediaCrawler 直接写共享库原生表，再映射进 raw_posts
-cd MediaCrawler && .venv\Scripts\python.exe main.py        # 按 config/base_config.py 的关键词采集
-cd .. && .venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --platform xhs
+cd MediaCrawler && .venv\Scripts\python.exe main.py --keywords "宿舍 空调" --get_comment yes --fresh yes
+cd .. && .venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --limit 0 --refresh
+# --limit 0 必须写：默认只同步最新 100 条/平台，超出部分会被静默跳过！
 # 首次或新平台建议先加 --dry-run 验证字段映射，再正式入库
 
 # 备用链路（微博/贴吧简化爬虫，输出 JSON）
@@ -99,8 +100,9 @@ import_latest.bat                             # 导入 raw_posts（按 external_
 
 ## 测试与质量
 
-- 后端 54 个单元/接口测试，零网络依赖：
+- 后端 1100+ 个单元/接口测试，零网络依赖：
   `.venv\Scripts\python.exe -m unittest discover -s backend/tests -t .`
+- 爬虫定制层另有 170+ 个 pytest：`cd MediaCrawler && .venv\Scripts\python.exe -m pytest tests`
 - 全局异常处理（统一 JSON 500 + `system_logs` 落库，后台可视）、
   Python 日志（`data/logs/app.log` 轮转）
 - 舆情 Agent 核心的**唯一源是本仓** `backend/agent/public_opinion_core/`；

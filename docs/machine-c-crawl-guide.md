@@ -32,7 +32,7 @@
 |---|---|
 | 项目代码 | 完整项目目录（含 `MediaCrawler/` 子目录），从团队仓库拉取或直接拷贝压缩包 |
 | `.env` 文件 | 放在项目根目录。含共享数据库连接与 API key（键名如 `DB_HOST/DB_USER/DB_PASSWORD/...`）。**私下传输，绝不进群聊/文档/截图** |
-| `MediaCrawler/config/base_config.py` | 该文件不进 git（各机本地调参），直接要机器 A 的当前版本 |
+| `MediaCrawler/config/base_config.py` | **在 git 里有基线版本**，但各机的本地调参（关键词残值/风控 sleep 等）**绝不提交**——直接要机器 A 的当前版本才能拿到未提交的本地调整，别指望 git pull |
 
 ### 2.2 机器 C 本机要求
 

@@ -33,3 +33,6 @@ data/chat_memory.sqlite3
 
 # 用户投稿图片（本地上传产物）
 uploads/
+
+# 清理脚本的删除回滚备份（运行产物，purge_offtopic_posts.py 生成）
+data/backup_offtopic_posts.json
