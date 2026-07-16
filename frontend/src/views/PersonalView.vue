@@ -49,7 +49,7 @@
 
     <div class="watch-grid">
       <!-- ========== 左：处置队列（按四轴优先级排，不是按热度） ========== -->
-      <div class="section-card">
+      <div class="section-card queue-card">
         <div class="section-header">
           <span class="section-title">
             处置队列
@@ -276,7 +276,7 @@ const watchEvents = computed(() =>
 )
 
 // —— 队列分页（客户端切页）：左栏与右栏大致持平，不再一根长柱拖到底 ——
-const QUEUE_PAGE_SIZE = 5
+const QUEUE_PAGE_SIZE = 6
 const queuePage = ref(1)
 
 const pagedWatchEvents = computed(() =>
@@ -441,7 +441,8 @@ watch(
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr);
   gap: 16px;
-  align-items: start;
+  /* 不设 align-items:start：两栏拉伸到同一行高，左卡高度**跟随右栏**——
+     固定 max-height 猜不准（600px 时右栏 1000px，还是不持平），跟随才持平 */
 }
 
 .insight-col {
@@ -453,9 +454,17 @@ watch(
 .title-info { margin-left: 4px; color: var(--color-text-faint); cursor: help; vertical-align: -1px; }
 .section-count { font-size: 12px; color: var(--color-text-muted); }
 
-/* —— 队列滚动区（与舆情分析页帖子列表同配方）：单页内容再高也不越界 —— */
+/* —— 左卡纵向 flex：队列区弹性吃满（高度由右栏决定），页脚钉在卡底 —— */
+.queue-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 队列滚动区：填满剩余高度，内容超出才出滚动条 */
 .queue-body {
-  max-height: 600px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
