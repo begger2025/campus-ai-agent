@@ -154,11 +154,11 @@
               <span class="sk sk-meta" />
             </div>
           </div>
-          <div v-else-if="posts.length === 0" class="empty-state">
-            <el-icon :size="28"><FolderOpened /></el-icon>
-            <p>暂无帖子数据</p>
-            <span>请确认后端已启动（运行 dev.bat）后刷新重试</span>
-          </div>
+          <EmptyState
+            v-else-if="posts.length === 0"
+            title="暂无帖子数据"
+            hint="请确认后端已启动（运行 dev.bat）后刷新重试"
+          />
           <table v-else class="data-table">
             <thead>
               <tr>
@@ -171,7 +171,10 @@
             <tbody>
               <tr v-for="post in posts.slice(0, 6)" :key="post.id">
                 <td><span :class="['plat-pill', `plat-${post.platform}`]">{{ platformLabel(post.platform) }}</span></td>
-                <td class="post-title">{{ post.title }}</td>
+                <td class="post-title">
+                  <CoverThumb :seed="post.title" :size="26" />
+                  <span class="post-title-text">{{ post.title }}</span>
+                </td>
                 <td class="text-muted">{{ post.author || '匿名' }}</td>
                 <td class="text-muted">{{ formatTime(post.publish_time) }}</td>
               </tr>
@@ -228,7 +231,6 @@ import {
   Clock,
   Collection,
   Connection,
-  FolderOpened,
   InfoFilled,
   Loading,
   Warning,
@@ -236,6 +238,8 @@ import {
 } from '@element-plus/icons-vue'
 import { formatHeat } from '@/utils/heat'
 import StatCard from '@/components/StatCard.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import CoverThumb from '@/components/effects/CoverThumb.vue'
 import { checkHealth, fetchPosts, fetchSentimentStats } from '@/api/posts'
 import { fetchPublishedEvents } from '@/api/events'
 import { getCurrentUser, getCurrentRole } from '@/auth/session'
@@ -702,7 +706,8 @@ function platformLabel(platform) {
 .chart-bar {
   width: 100%;
   height: var(--bar-h, 0%);
-  background: var(--brand-400);
+  /* 顶浅底深的纵向渐变：柱体有了"受光面"，比平涂多一层材质 */
+  background: linear-gradient(180deg, var(--brand-300), var(--brand-500));
   border-radius: 4px 4px 0 0;
   min-height: 3px;
   transition: background var(--dur-fast) var(--ease-out), height var(--dur-slow) var(--ease-out);
@@ -713,7 +718,7 @@ function platformLabel(platform) {
 }
 
 .chart-bar--peak {
-  background: var(--color-data-accent);
+  background: linear-gradient(180deg, #f2a950, var(--color-data-accent));
 }
 
 .chart-bar-wrap:hover .chart-bar--peak {
@@ -821,6 +826,15 @@ function platformLabel(platform) {
 .post-title {
   max-width: 320px;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.post-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .text-muted { color: var(--color-text-muted); }

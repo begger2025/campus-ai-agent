@@ -59,12 +59,13 @@
           <span>{{ loadError }}</span>
           <el-button size="small" type="primary" @click="loadEvents">重新加载</el-button>
         </div>
-        <div v-else-if="!loading && !pagedEvents.length" class="list-empty">
-          <el-icon :size="30"><Search /></el-icon>
-          <p>没有符合条件的公开事件</p>
-          <span>试试放宽风险等级或时间范围</span>
+        <EmptyState
+          v-else-if="!loading && !pagedEvents.length"
+          title="没有符合条件的公开事件"
+          hint="试试放宽风险等级或时间范围"
+        >
           <el-button size="small" @click="resetFilters">重置筛选</el-button>
-        </div>
+        </EmptyState>
         <div v-else ref="tableShell" class="table-shell compact-table-wrap" v-loading="loading">
           <table class="compact-table">
             <thead>
@@ -187,7 +188,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { InfoFilled, Search, WarningFilled } from '@element-plus/icons-vue'
+import { InfoFilled, WarningFilled } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { formatAge, formatEventDateTime, isStale } from '@/utils/age'
 
@@ -200,6 +201,7 @@ import { Flip } from 'gsap/Flip'
 
 gsap.registerPlugin(Flip)
 import EventFeedbackDialog from '@/components/EventFeedbackDialog.vue'
+import EmptyState from '@/components/EmptyState.vue'
 import { fetchPublishedEvents } from '@/api/events'
 import { riskOptions, sourceOptions } from '@/constants/eventOptions'
 
