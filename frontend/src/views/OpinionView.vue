@@ -13,7 +13,6 @@
       </el-select>
       <el-button @click="resetFilters">重置</el-button>
       <el-button type="primary" @click="goAgentChat()">用舆情助手深入分析 →</el-button>
-      <DataSourceBadge source="real" />
     </div>
 
     <!-- 三栏主体 -->
@@ -259,7 +258,6 @@ import { Pointer } from '@element-plus/icons-vue'
 import { formatHeat, heatLevel, HEAT_TOOLTIP } from '@/utils/heat'
 import { formatAge, formatEventTime, isStale } from '@/utils/age'
 import { growthEvidence, hasLifecycle, lifecycleLabel, lifecycleTitle } from '@/utils/lifecycle'
-import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { sourceOptions } from '@/constants/eventOptions'
 import { fetchEventDetail, fetchPublishedEvents } from '@/api/events'
 
@@ -379,12 +377,6 @@ function navigateToImpact(event) {
 function riskLabel(level) {
   const map = { high: '高风险', medium: '中风险', low: '低风险' }
   return map[level] || level
-}
-
-function riskClass(level) {
-  if (level === 'high') return 'badge-high'
-  if (level === 'medium') return 'badge-mid'
-  return 'badge-low'
 }
 
 function rankClass(idx) {
@@ -726,20 +718,6 @@ function isSafeUrl(url) {
 .lifecycle-tag--escalating { color: var(--color-danger-text); background: var(--color-danger-bg); border: 1px solid #f4c2c4; }
 .lifecycle-tag--not_applicable { color: var(--color-text-muted); background: transparent; border: 1px dashed #dcdfe6; font-weight: 500; }
 
-.detail-lifecycle {
-  margin: 0 0 12px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-/* 「持续发酵」的算术证据：等宽字体，因为它是一组**可以复核的数字**，不是一句判词。 */
-.detail-growth {
-  margin: -6px 0 12px;
-  font-size: 12px;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  color: var(--color-text-muted);
-}
-
 /* ——— 中栏：事件详情 ——— */
 .detail-header {
   display: flex;
@@ -812,34 +790,6 @@ function isSafeUrl(url) {
   font-weight: 600;
   color: var(--color-text-muted);
   margin: 0 0 6px;
-}
-
-.sentiment-tag {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.sentiment--negative { color: var(--color-danger-text); background: var(--color-danger-bg); }
-.sentiment--positive { color: var(--color-success-text); background: var(--color-success-bg); }
-.sentiment--neutral { color: var(--color-text-muted); background: #eef1f7; }
-.sentiment--controversial { color: var(--color-warning-text); background: var(--color-warning-bg); }
-
-.source-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.source-pid {
-  padding: 2px 8px;
-  background: var(--brand-50);
-  color: var(--brand-700);
-  border-radius: 4px;
-  font-size: 11px;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
-}
-.source-more {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  line-height: 22px;
 }
 
 .detail-actions {
@@ -916,58 +866,7 @@ function isSafeUrl(url) {
   color: var(--color-text-muted);
 }
 
-/* ——— 右栏：Agent 聊天 ——— */
-.chat-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 10px;
-  max-height: 420px;
-}
-
-.chat-bubble { max-width: 86%; }
-.chat-left { align-self: flex-start; }
-.chat-right { align-self: flex-end; }
-
-.chat-role {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-text-muted);
-  margin-bottom: 2px;
-}
-
-.chat-text {
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.chat-left .chat-text { background: var(--color-surface-2); color: var(--color-text-secondary); }
-.chat-right .chat-text { background: var(--brand-600); color: #fff; }
-
-.chat-suggest {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.suggest-label { font-size: 11px; color: var(--color-text-muted); }
-
-.chat-input-row {
-  display: flex;
-  gap: 8px;
-}
+/* 旧「页内聊天面板」的 chat-* 家族样式已随功能删除（右栏现为 .guide-* 引导，审计清扫） */
 
 .chat-input-row :deep(.el-input__wrapper) { border-radius: 6px; }
 

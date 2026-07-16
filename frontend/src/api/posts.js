@@ -60,7 +60,3 @@ export async function fetchSentimentStats() {
   }
   throw new Error('Invalid sentiment stats API response')
 }
-
-export async function checkHealth() {
-  return http.get('/ping')
-}

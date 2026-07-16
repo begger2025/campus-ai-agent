@@ -13,7 +13,6 @@
 
     <!-- 搜索 + 筛选（只筛帖子——这一页没有事件了） -->
     <div class="filter-bar">
-      <DataSourceBadge source="real" style="margin-right:8px" />
       <el-input
         v-model="keyword"
         placeholder="搜索标题、平台、作者…"
@@ -187,7 +186,6 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Bell, ChatLineSquare, DataAnalysis, Loading, Warning } from '@element-plus/icons-vue'
 import StatCard from '@/components/StatCard.vue'
-import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { fetchSentimentPosts, fetchSentimentStats } from '@/api/posts'
 
 // ——— 页面职责 ———

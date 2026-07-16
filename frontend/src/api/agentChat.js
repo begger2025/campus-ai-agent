@@ -1,24 +1,14 @@
 /**
- * api/agentChat.js — 舆情助手对话接口
- *
- * 两条路径：
- *   streamAgentChat  流式（默认）。2.7 秒开始出字，全程可见 Agent 在做什么。
- *   postAgentChat    非流式。流式失败时的回退，也留给不支持流的调用方。
+ * api/agentChat.js — 舆情助手对话接口（流式）
  *
  * 为什么值得做流式（实测 gpt-5.4）：一份舆情简报要 3 次串行 LLM 调用
  * （路由 4.2s + 生成 19.4s + AI 审校 19.4s）≈ 43 秒。非流式下用户全程盯着
  * 一个空转圈；流式下 2.7 秒就开始读到正文。总耗时一样，感知差 8 倍。
+ *
+ * 非流式的 postAgentChat 已删（审计清扫）：注释声称"流式失败时的回退"，
+ * 但回退从未接线、零调用——后端 POST /agent/public/chat 仍在，要接随时能接。
  */
 import { getSession, logout } from '@/auth/session'
-import http from './http'
-
-export async function postAgentChat(message, { reset = false } = {}) {
-  return http.post(
-    '/agent/public/chat',
-    { message, reset },
-    { timeout: 180000 },
-  )
-}
 
 /**
  * 流式对话。onEvent(name, payload) 会被依次回调：

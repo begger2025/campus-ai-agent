@@ -430,15 +430,6 @@ function sourceLabel(value) {
   return sourceOptions.find((item) => item.value === value)?.label || value
 }
 
-function sourceShort(value) {
-  if (value === 'weibo') return '微'
-  if (value === 'xhs') return '红'
-  if (value === 'zhihu') return '知'
-  if (value === 'ks') return '快'
-  if (value === 'web') return '网'
-  if (value === 'tieba') return '贴'
-  return '源'
-}
 </script>
 
 <style scoped>
@@ -649,55 +640,8 @@ function sourceShort(value) {
 .table-footer :deep(.el-pagination) { justify-content: center; }
 .page-size-select { width: 100px; }
 
-.preview-content { min-height: 0; flex: 1 1 auto; padding: 16px 16px 14px; display: flex; flex-direction: column; overflow: hidden; }
-.preview-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.preview-title-row h2 { margin: 0; color: var(--color-text); font-size: 16px; font-weight: 600; line-height: 1.45; }
-.preview-summary { min-height: 66px; margin: 10px 0 14px; color: var(--color-text-secondary); font-size: 13px; line-height: 1.7; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
-
-.preview-stats { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); overflow: hidden; background: var(--color-surface-2); }
-.preview-stats div { min-height: 62px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 3px; border-right: 1px solid var(--color-border-light); }
-.preview-stats div:last-child { border-right: 0; }
-.preview-stats strong { color: var(--color-text); font-size: 18px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
-/* 最近更新是文本不是量值，降一档字号，不与数字争夺权重 */
-.preview-stats div:last-child strong { font-size: 13px; font-weight: 600; color: var(--color-text-secondary); }
-.preview-stats span { color: var(--color-text-muted); font-size: 12px; }
-.preview-tags { margin-top: 14px; }
-.preview-label { display: block; margin-bottom: 6px; color: var(--color-text-muted); font-size: 12px; font-weight: 600; }
-.tag-blue { margin-right: 6px; color: var(--brand-700); background: var(--brand-50); border: 1px solid var(--brand-200); }
-.preview-actions { margin-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-
-.preview-bottom { min-height: 182px; margin-top: auto; display: grid; grid-template-columns: minmax(0, 1fr) 164px; gap: 10px; }
-.preview-bottom section { min-height: 182px; padding: 12px; border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); background: #fff; }
-.preview-bottom h3 { margin: 0 0 8px; color: var(--color-text-secondary); font-size: 13px; font-weight: 600; }
-.mini-chart { width: 100%; height: 134px; }
-.axis-line { stroke: var(--color-border); stroke-width: 1; }
-
-.trend-line {
-  fill: none;
-  stroke: var(--color-primary);
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: draw-line 0.8s var(--ease-out) 0.1s forwards;
-}
-
-@keyframes draw-line {
-  to { stroke-dashoffset: 0; }
-}
-
-.trend-point {
-  fill: #fff;
-  stroke: var(--color-primary);
-  stroke-width: 2;
-  opacity: 0;
-  animation: point-in 0.3s var(--ease-out) 0.7s forwards;
-}
-
-@keyframes point-in {
-  to { opacity: 1; }
-}
+/* 「事件预览侧栏」的整套样式已随功能删除（审计清扫）：preview 系列、mini-chart、
+   trend-line、trend-point、source-breakdown 家族约 100 行孤儿 CSS 一并清掉 */
 
 /* 表格行级联入场（加载/翻页/筛选时作为内容变化反馈） */
 .rows-enter-active {
@@ -713,16 +657,6 @@ function sourceShort(value) {
 .rows-leave-active {
   display: none;
 }
-.source-breakdown { display: flex; flex-direction: column; gap: 12px; }
-.source-breakdown div { display: grid; grid-template-columns: 24px 1fr auto; gap: 8px; align-items: center; color: var(--color-text-secondary); font-size: 13px; }
-.source-breakdown strong { color: var(--color-text); font-weight: 600; }
-.source-icon { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: #fff; font-size: 12px; font-weight: 800; background: #94a3b8; }
-.source-icon-weibo { background: #ef4444; }
-.source-icon-xhs { background: #f43f5e; }
-.source-icon-ks { background: #f59e0b; }
-.source-icon-tieba { background: #3b82f6; }
-.source-icon-zhihu { background: #0284c7; }
-.source-icon-web { background: #10b981; }
 
 .event-footnote { height: 34px; display: flex; align-items: center; justify-content: center; color: var(--color-text-secondary); font-size: 13px; }
 .event-footnote button { border: 0; background: transparent; color: var(--color-primary); font-weight: 600; font-family: inherit; cursor: pointer; padding: 0 2px; }
@@ -743,22 +677,6 @@ function sourceShort(value) {
 .list-empty p { margin: 0; font-weight: 600; font-size: 14px; color: var(--color-text-secondary); }
 .list-empty span { font-size: 12px; color: var(--color-text-faint); }
 .list-empty .el-button { margin-top: 6px; }
-
-.preview-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 48px 24px;
-  text-align: center;
-  color: var(--color-text-muted);
-}
-
-.preview-empty .el-icon { color: var(--color-text-faint); }
-.preview-empty p { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-secondary); }
-.preview-empty span { font-size: 12px; color: var(--color-text-faint); }
 
 @media (max-width: 1380px) {
   .event-filter { grid-template-columns: minmax(200px, 1fr) repeat(4, minmax(98px, 0.42fr)) 56px 56px 118px; gap: 8px; }

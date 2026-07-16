@@ -145,20 +145,9 @@
         </div>
       </div>
 
-      <!-- 热度趋势：仅有数据时展示 -->
-      <div v-if="trendList.length" class="panel-card trend-card">
-        <h3>热度趋势（近 7 天）</h3>
-        <div class="trend-chart">
-          <svg viewBox="0 0 640 200" class="trend-svg">
-            <line x1="40" y1="170" x2="620" y2="170" stroke="#e2e7f0" stroke-width="1" />
-            <polyline :points="trendLine" class="trend-polyline" pathLength="1" />
-            <circle v-for="pt in trendDots" :key="pt.label" :cx="pt.x" :cy="pt.y" r="4" class="trend-dot">
-              <title>{{ pt.label }}</title>
-            </circle>
-            <text v-for="pt in trendDots" :key="'lbl-' + pt.label" :x="pt.x" y="192" text-anchor="middle" font-size="11" fill="#8a95ab">{{ pt.label }}</text>
-          </svg>
-        </div>
-      </div>
+      <!-- 「热度趋势（近7天）」已删（审计清扫）：它读的 event.trend 后端恒返回 []
+           （api.py "trend": []），永远靠 v-if 静默隐藏——事件列表页当时删了同款
+           假图，这页漏了。 -->
 
       <!-- 站内讨论（参与感 V1）：登录可写、游客可读。评论是平台自己的 UGC，
            与爬取帖分开呈现；「站内声音」是写入时算好的规则情绪聚合（纯算术） -->
@@ -261,7 +250,7 @@ const eventId = computed(() => route.params.id)
 const loading = ref(true)
 const event = ref(null)
 
-// —— 兼容两种 mock 数据字段名 ——
+// —— 兼容驼峰/下划线两种字段名（列表接口与详情接口的历史差异）——
 const riskLabel = computed(() => {
   const r = event.value?.riskLevel ?? event.value?.risk_level
   return r === 'high' ? '高风险' : r === 'medium' ? '中风险' : '低风险'
@@ -291,22 +280,6 @@ const concerns = computed(() => event.value?.concerns ?? [])
 const riskReasons = computed(() => event.value?.risk_reasons ?? [])
 const representativePosts = computed(() => event.value?.representative_posts ?? [])
 const sourceKeywords = computed(() => event.value?.source_keywords ?? [])
-
-const trendList = computed(() => event.value?.trend ?? [])
-
-const trendDots = computed(() => {
-  const t = trendList.value
-  if (!t.length) return []
-  const maxH = Math.max(...t.map(d => d.heat), 1)
-  const step = 580 / Math.max(t.length - 1, 1)
-  return t.map((d, i) => ({
-    label: d.label,
-    x: 40 + i * step,
-    y: 170 - (d.heat / maxH) * 140,
-  }))
-})
-
-const trendLine = computed(() => trendDots.value.map(p => `${p.x},${p.y}`).join(' '))
 
 // —— 站内讨论 ——
 const loggedIn = ref(isAuthenticated())
@@ -778,38 +751,6 @@ function postSearchUrl(post) {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-}
-
-/* ——— 趋势 ——— */
-.trend-card { padding-bottom: 8px; }
-
-.trend-svg { width: 100%; height: auto; display: block; }
-
-.trend-polyline {
-  fill: none;
-  stroke: var(--color-primary);
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: draw-line 0.9s var(--ease-out) 0.15s forwards;
-}
-
-@keyframes draw-line {
-  to { stroke-dashoffset: 0; }
-}
-
-.trend-dot {
-  fill: #fff;
-  stroke: var(--color-primary);
-  stroke-width: 2;
-  opacity: 0;
-  animation: dot-in 0.3s var(--ease-out) 0.85s forwards;
-}
-
-@keyframes dot-in {
-  to { opacity: 1; }
 }
 
 /* ——— 操作栏 ——— */

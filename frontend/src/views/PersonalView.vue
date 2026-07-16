@@ -57,7 +57,6 @@
               <el-icon class="title-info" :size="13"><InfoFilled /></el-icon>
             </el-tooltip>
           </span>
-          <DataSourceBadge source="real" />
         </div>
         <!-- 滚动区 + 分页（与舆情分析页的帖子列表同配方）：左栏不再无限长，
              与右栏大致持平；序号是**全局排名**（翻页不归零，否则排名失去意义） -->
@@ -209,7 +208,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ChatDotRound, CircleCheckFilled, InfoFilled } from '@element-plus/icons-vue'
-import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { fetchPublishedEvents } from '@/api/events'
 import { formatHeat } from '@/utils/heat'
 import { formatAge, isStale } from '@/utils/age'
@@ -697,41 +695,7 @@ watch(
   gap: 10px;
 }
 
-/* —— 舆情关注 —— */
-.watch-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius);
-  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
-}
-
-.watch-row:hover {
-  border-color: var(--color-border);
-  box-shadow: var(--shadow-xs);
-}
-
-.watch-title {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.watch-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--color-text-muted);
-  margin-top: 4px;
-}
-
-.watch-actions {
-  display: flex;
-  align-items: center;
-}
+/* 旧版 .watch-row 家族样式已删（模板早改用 .queue-row，审计清扫） */
 
 .agent-cta {
   margin-top: 0;

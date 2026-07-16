@@ -19,8 +19,3 @@ export function login(username, password) {
 export function register({ username, password, display_name = '' }) {
   return http.post('/auth/register', { username, password, display_name })
 }
-
-/** GET /api/auth/me — 校验当前 token 并返回用户信息 */
-export function fetchMe() {
-  return http.get('/auth/me')
-}
