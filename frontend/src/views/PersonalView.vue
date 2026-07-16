@@ -59,15 +59,17 @@
           </span>
           <DataSourceBadge source="real" />
         </div>
-        <div class="section-body" v-loading="eventsLoading">
+        <!-- 滚动区 + 分页（与舆情分析页的帖子列表同配方）：左栏不再无限长，
+             与右栏大致持平；序号是**全局排名**（翻页不归零，否则排名失去意义） -->
+        <div class="section-body queue-body" v-loading="eventsLoading">
           <div v-if="!watchEvents.length && !eventsLoading" class="calm-empty">
             <el-icon :size="26"><CircleCheckFilled /></el-icon>
             <p>当前没有中高风险的已发布事件</p>
             <span>校园舆情态势平稳</span>
           </div>
 
-          <div v-for="(event, index) in watchEvents" :key="eventKey(event)" class="queue-row">
-            <span :class="['queue-rank', { 'queue-rank--done': isSettled(event) }]">{{ index + 1 }}</span>
+          <div v-for="(event, index) in pagedWatchEvents" :key="eventKey(event)" class="queue-row">
+            <span :class="['queue-rank', { 'queue-rank--done': isSettled(event) }]">{{ queueRank(index) }}</span>
 
             <div class="queue-info">
               <div class="queue-title">{{ event.title }}</div>
@@ -105,6 +107,20 @@
             </div>
           </div>
 
+        </div>
+
+        <!-- 页脚固定在卡底：分页和 CTA 不随列表滚动跑掉 -->
+        <div class="queue-footer">
+          <el-pagination
+            v-if="watchEvents.length > QUEUE_PAGE_SIZE"
+            v-model:current-page="queuePage"
+            :page-size="QUEUE_PAGE_SIZE"
+            :total="watchEvents.length"
+            layout="prev, pager, next"
+            background
+            small
+            class="queue-pagination"
+          />
           <el-button class="agent-cta" @click="goAgentChat('最近有哪些高风险事件？对学生有什么影响？')">
             <el-icon style="margin-right: 6px"><ChatDotRound /></el-icon>
             让舆情助手分析校园风险 →
@@ -258,6 +274,25 @@ const watchEvents = computed(() =>
     .slice()
     .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0)),
 )
+
+// —— 队列分页（客户端切页）：左栏与右栏大致持平，不再一根长柱拖到底 ——
+const QUEUE_PAGE_SIZE = 5
+const queuePage = ref(1)
+
+const pagedWatchEvents = computed(() =>
+  watchEvents.value.slice((queuePage.value - 1) * QUEUE_PAGE_SIZE, queuePage.value * QUEUE_PAGE_SIZE),
+)
+
+// 序号 = 全局优先级排名（翻页接着数，第 2 页从 6 开始——排名归零就没意义了）
+function queueRank(index) {
+  return (queuePage.value - 1) * QUEUE_PAGE_SIZE + index + 1
+}
+
+// 数据刷新后事件变少时，把停在越界页码的用户拉回最后一页
+watch(watchEvents, (rows) => {
+  const pages = Math.max(1, Math.ceil(rows.length / QUEUE_PAGE_SIZE))
+  if (queuePage.value > pages) queuePage.value = pages
+})
 
 // —— 处置状态看板：哪些口子还开着 ——
 const LIFECYCLE_BUCKETS = [
@@ -417,6 +452,26 @@ watch(
 
 .title-info { margin-left: 4px; color: var(--color-text-faint); cursor: help; vertical-align: -1px; }
 .section-count { font-size: 12px; color: var(--color-text-muted); }
+
+/* —— 队列滚动区（与舆情分析页帖子列表同配方）：单页内容再高也不越界 —— */
+.queue-body {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.queue-body::-webkit-scrollbar { width: 6px; }
+.queue-body::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+.queue-body::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+
+.queue-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 18px 14px;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.queue-pagination { align-self: center; }
 
 /* —— 处置队列 —— */
 .queue-row {
@@ -664,7 +719,7 @@ watch(
 }
 
 .agent-cta {
-  margin-top: 6px;
+  margin-top: 0;
 }
 
 .calm-empty {
