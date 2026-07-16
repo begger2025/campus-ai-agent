@@ -64,6 +64,29 @@ def warm_up() -> None:
     threading.Thread(target=_warm, name="embedding-warmup", daemon=True).start()
 
 
+def _resolve_local_snapshot(probe: Callable[[], object] | None = None) -> str | None:
+    """模型缓存完整时返回本地快照目录路径；缺失/异常返回 None。
+
+    为什么要它：按模型名加载时 hub 会为一堆**可选**配置文件逐个发 HEAD 校验
+    更新——代理关闭的网络下每个文件 5 次退避重试，26 秒的加载被拖成分钟级
+    挂死（2026-07-16 实测：关 Clash 跑 build_post_vectors 卡死在
+    adapter_config.json）。从本地目录加载天然零网络请求；不用 HF_HUB_OFFLINE
+    环境变量是因为 hub 在 import 时就固化了该标志，事后设置不保证生效。
+    """
+    try:
+        if probe is None:
+            from huggingface_hub import snapshot_download
+
+            def probe():
+                # local_files_only=True：只查本地缓存，不发任何网络请求
+                return snapshot_download(EMBEDDING_MODEL_NAME, local_files_only=True)
+
+        path = probe()
+        return str(path) if path else None
+    except Exception:
+        return None  # 缓存缺失（新机器首跑）→ 回退在线加载，允许首次下载
+
+
 def _load_model():
     global _model
     if _model is None:
@@ -71,5 +94,6 @@ def _load_model():
             if _model is None:  # 双检：拿到锁之后别再加载一遍
                 from sentence_transformers import SentenceTransformer
 
-                _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+                source = _resolve_local_snapshot() or EMBEDDING_MODEL_NAME
+                _model = SentenceTransformer(source)
     return _model
