@@ -19,6 +19,8 @@
         </div>
       </div>
       <div class="welcome-meta">
+        <!-- 语料不是实时的：明确标注数据口径（最近数据日），首页早该有这个 -->
+        <span v-if="!eventsLoading && !eventsError" class="asof-tag">数据截至 {{ latestDayLabel }}</span>
         <span v-if="eventsLoading" class="calm-flag calm-flag--pending">
           <el-icon :size="14" class="is-loading"><Loading /></el-icon>
           数据加载中…
@@ -77,21 +79,7 @@
         color="purple"
         :loading="postsLoading"
       />
-      <StatCard
-        title="中风险事件"
-        :value="mediumRiskEvents.length"
-        :icon="Bell"
-        desc="持续跟踪观察"
-        color="warning"
-        :loading="eventsLoading"
-      />
-      <StatCard
-        title="后端状态"
-        :value="backendStatus"
-        :icon="Connection"
-        :desc="backendDesc"
-        :color="backendOk ? 'success' : 'muted'"
-      />
+      <!-- 中风险数字挪进下方「风险结构」；「后端状态」卡删除——顶栏徽标已实时显示连接状态 -->
     </div>
 
     <!-- 内容区：趋势图 + 最新帖子 + 中高风险预警快览 -->
@@ -113,105 +101,120 @@
           <div v-if="trendLoading" class="chart-skeleton">
             <span v-for="i in 7" :key="i" :style="{ height: 18 + ((i * 37) % 60) + '%' }" />
           </div>
-          <div v-else class="mini-chart" role="img" :aria-label="`近${trendDays}天每日发帖数量柱状图`">
+          <!-- 手绘 SVG 折线（维持全站零图表库路线）：面积渐变 + 描线入场 +
+               峰值琥珀常显 + 末点常显；逐日数值走纯 CSS 悬停提示 -->
+          <div v-else class="trend-chart" role="img" :aria-label="`近${trendDays}天每日发帖数量折线图`">
+            <svg class="trend-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#5a74dd" stop-opacity="0.22" />
+                  <stop offset="1" stop-color="#5a74dd" stop-opacity="0.02" />
+                </linearGradient>
+              </defs>
+              <path class="trend-area" :d="trendAreaPath" fill="url(#trendFill)" />
+              <polyline class="trend-line" :points="trendLinePoints" pathLength="1" />
+            </svg>
             <div
-              v-for="(item, index) in trendData"
-              :key="item.name"
-              class="chart-bar-wrap"
-            >
-              <!-- --bar-h 同时驱动柱高和数字标签的锚定位置，数字始终悬在柱顶上方 -->
-              <div
-                class="chart-bar-area"
-                :style="{ '--bar-h': (maxTrend ? (item.value / maxTrend) * 100 : 0) + '%' }"
-              >
-                <span
-                  class="chart-value"
-                  :class="{ 'chart-value--pinned': index === maxTrendIndex }"
-                >{{ item.value }}</span>
-                <!-- 峰值柱用数据强调色（琥珀）：图上唯一的焦点，其余柱保持品牌蓝 -->
-                <div class="chart-bar" :class="{ 'chart-bar--peak': index === maxTrendIndex }"></div>
-              </div>
-              <!-- 30 根柱子放不下 30 个日期标签——每 5 天一个 + 收尾那天 -->
-              <div class="chart-label">{{ showLabel(index) ? item.name : '' }}</div>
+              v-for="(point, index) in chartPoints"
+              :key="point.name"
+              class="trend-hit"
+              :style="{ left: `${point.x - 50 / chartPoints.length}%`, width: `${100 / chartPoints.length}%`, '--dot-y': `${point.y}%` }"
+              :data-tip="`${point.name} · ${point.value} 条`"
+            />
+            <span
+              class="trend-mark trend-mark--peak"
+              :style="{ left: `${peakPoint.x}%`, top: `${peakPoint.y}%` }"
+            >{{ peakPoint.value }}</span>
+            <span
+              v-if="peakPoint !== lastPoint"
+              class="trend-mark trend-mark--last"
+              :style="{ left: `${lastPoint.x}%`, top: `${lastPoint.y}%` }"
+            >{{ lastPoint.value }}</span>
+            <div class="trend-labels">
+              <span v-for="(point, index) in chartPoints" :key="`l-${point.name}`">
+                {{ showLabel(index) ? point.name : '' }}
+              </span>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- 最新帖子列表 -->
-      <div class="section-card span-2">
+      <!-- 风险结构：已发布事件按风险分层（全部由已加载的事件现算，无造假环比） -->
+      <div class="section-card">
         <div class="section-header">
-          <span class="section-title">最新校园帖子</span>
-          <el-button size="small" type="primary" text @click="$router.push('/sentiment')">
-            查看全部 →
+          <span class="section-title">风险结构</span>
+          <span class="section-hint">已发布事件按风险分层</span>
+        </div>
+        <div class="section-body risk-structure" v-loading="eventsLoading">
+          <div v-for="row in riskStructure" :key="row.key" class="risk-row">
+            <span :class="['risk-dot', `risk-dot--${row.key}`]"></span>
+            <span class="risk-name">{{ row.label }}</span>
+            <span class="risk-track">
+              <span :class="['risk-fill', `risk-fill--${row.key}`]" :style="{ width: `${row.pct}%` }" />
+            </span>
+            <span class="risk-num">{{ row.count }}</span>
+            <span class="risk-pct">{{ row.pct }}%</span>
+          </div>
+          <p class="risk-total">
+            总计 <b>{{ publishedEvents.length }}</b> 个已发布事件 ·
+            风险等级由 LLM 研判、发布前经人工审核
+          </p>
+        </div>
+      </div>
+
+      <!-- 需要关注：按四轴优先级取前 5（复用舆情关注页的口径——热度是"多少人在看"，
+           不是"该先动哪个"），行可点进详情 -->
+      <div class="section-card span-3">
+        <div class="section-header">
+          <span class="section-title">
+            需要关注
+            <span class="section-hint">按处置优先级排序 · 前 5 条</span>
+          </span>
+          <el-button size="small" type="primary" text @click="$router.push('/personal')">
+            查看更多 →
           </el-button>
         </div>
         <div class="section-body">
-          <div v-if="postsLoading" class="table-skeleton">
-            <div v-for="i in 5" :key="i" class="skeleton-row">
-              <span class="sk sk-tag" />
-              <span class="sk sk-title" />
-              <span class="sk sk-meta" />
-            </div>
-          </div>
-          <EmptyState
-            v-else-if="posts.length === 0"
-            title="暂无帖子数据"
-            hint="请确认后端已启动（运行 dev.bat）后刷新重试"
-          />
-          <table v-else class="data-table">
+          <table v-if="focusEvents.length" class="data-table focus-table">
             <thead>
               <tr>
-                <th>平台</th>
-                <th>标题</th>
-                <th>作者</th>
-                <th>发布时间</th>
+                <th>事件</th>
+                <th>风险等级</th>
+                <th>热度</th>
+                <th>事件年龄</th>
+                <th>处置状态</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="post in posts.slice(0, 6)" :key="post.id">
-                <td><span :class="['plat-pill', `plat-${post.platform}`]">{{ platformLabel(post.platform) }}</span></td>
-                <td class="post-title">
-                  <CoverThumb :seed="post.title" :size="26" />
-                  <span class="post-title-text">{{ post.title }}</span>
+              <tr
+                v-for="event in focusEvents"
+                :key="eventKey(event)"
+                class="focus-row"
+                @click="$router.push(`/events/${eventKey(event)}`)"
+              >
+                <td class="focus-title">
+                  <CoverThumb :seed="event.title" :size="28" />
+                  <span class="focus-title-text">{{ event.title }}</span>
                 </td>
-                <td class="text-muted">{{ post.author || '匿名' }}</td>
-                <td class="text-muted">{{ formatTime(post.publish_time) }}</td>
+                <td>
+                  <span :class="['risk-tag', `risk-tag--${event.riskLevel}`]">
+                    {{ event.riskLevel === 'high' ? '高风险' : '中风险' }}
+                  </span>
+                </td>
+                <td class="text-num" :title="`精确值 ${event.heatScore}`">{{ formatHeat(event.heatScore) }}</td>
+                <td class="text-muted">{{ formatAge(event.age_days) }}</td>
+                <td>
+                  <span
+                    v-if="hasLifecycle(event.lifecycle)"
+                    :class="['lifecycle-tag', `lifecycle-tag--${event.lifecycle}`]"
+                    :title="event.lifecycle_reason || ''"
+                  >{{ lifecycleLabel(event.lifecycle) }}</span>
+                  <span v-else class="text-muted">—</span>
+                </td>
               </tr>
             </tbody>
           </table>
-        </div>
-      </div>
-
-      <!-- 中高风险预警快览：整行横排 -->
-      <div class="section-card span-3">
-        <div class="section-header">
-          <span class="section-title">中高风险预警快览</span>
-          <el-button size="small" type="primary" text @click="$router.push('/personal')">
-            舆情关注 →
-          </el-button>
-        </div>
-        <div class="section-body">
-          <div v-if="watchEvents.length" class="alert-grid">
-            <button
-              v-for="event in watchEvents.slice(0, 3)"
-              :key="event.id"
-              v-spotlight
-              class="alert-card"
-              type="button"
-              @click="$router.push(`/events/${event.id}`)"
-            >
-              <div class="alert-top">
-                <span :class="['badge', event.riskLevel === 'high' ? 'badge-high' : 'badge-mid']">
-                  {{ event.riskLevel === 'high' ? '高风险' : '中风险' }}
-                </span>
-                <span class="alert-heat" :title="`精确值 ${event.heatScore}`">热度 {{ formatHeat(event.heatScore) }}</span>
-              </div>
-              <div class="alert-title">{{ event.title }}</div>
-              <div class="alert-desc">{{ event.summary || event.riskReason }}</div>
-            </button>
-          </div>
-          <div v-if="!eventsLoading && watchEvents.length === 0" class="empty-state empty-state--calm">
+          <div v-if="!eventsLoading && !focusEvents.length" class="empty-state empty-state--calm">
             <el-icon :size="24"><CircleCheckFilled /></el-icon>
             <p>当前暂无中高风险预警</p>
             <span>校园舆情态势平稳</span>
@@ -225,22 +228,21 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import {
-  Bell,
   ChatLineSquare,
   CircleCheckFilled,
   Clock,
   Collection,
-  Connection,
   InfoFilled,
   Loading,
   Warning,
   WarningFilled,
 } from '@element-plus/icons-vue'
 import { formatHeat } from '@/utils/heat'
+import { formatAge } from '@/utils/age'
+import { hasLifecycle, lifecycleLabel } from '@/utils/lifecycle'
 import StatCard from '@/components/StatCard.vue'
-import EmptyState from '@/components/EmptyState.vue'
 import CoverThumb from '@/components/effects/CoverThumb.vue'
-import { checkHealth, fetchPosts, fetchSentimentStats } from '@/api/posts'
+import { fetchPosts, fetchSentimentStats } from '@/api/posts'
 import { fetchPublishedEvents } from '@/api/events'
 import { getCurrentUser, getCurrentRole } from '@/auth/session'
 
@@ -264,32 +266,9 @@ const greeting = computed(() => {
 })
 const todayText = `${now.getMonth() + 1}月${now.getDate()}日 周${'日一二三四五六'[now.getDay()]}`
 
-// ——— 后端状态 ———
-const backendOk = ref(false)
-const healthChecking = ref(true)
-const backendDesc = ref('检测中…')
-// 没检测完就显示「未连接」也是抢答——三态：检测中 / 正常 / 未连接
-const backendStatus = computed(() => {
-  if (healthChecking.value) return '检测中'
-  return backendOk.value ? '正常' : '未连接'
-})
-
-async function checkBackendHealth() {
-  try {
-    const data = await checkHealth()
-    backendOk.value = data.pong === true
-    backendDesc.value = backendOk.value ? '后端响应正常' : '响应异常'
-  } catch {
-    backendDesc.value = '后端未启动'
-  } finally {
-    healthChecking.value = false
-  }
-}
-
+// 「后端状态」卡已删（顶栏徽标实时显示连接状态），健康检查随之退场
 onMounted(() => {
-  // 四个请求并行：健康检查此前被 await 在最前面，后端冷启动时它一慢，
-  // 帖子/事件/趋势全被拖着不发，「平稳假象」的窗口被拉得更长。
-  checkBackendHealth()
+  // 三个请求并行发出，互不阻塞
   loadPosts()
   loadEvents()
   loadPostTrend()
@@ -312,20 +291,17 @@ async function loadPostTrend() {
   }
 }
 
-// ——— 帖子数据 ———
-const posts = ref([])
+// ——— 采集帖子总数（帖子列表已删——帖子层是舆情分析页的职责，这里只要计数） ———
 const postsTotal = ref(0)
 const postsLoading = ref(true)
 
 async function loadPosts() {
   try {
-    const data = await fetchPosts(1, 10)
-    posts.value = data.items
-    postsTotal.value = data.total ?? data.items.length
+    const data = await fetchPosts(1, 1)
+    postsTotal.value = data.total ?? 0
   } catch (error) {
-    // 不垫 mock 假数据：失败就空列表。顶栏徽标会同步显示「后端未连接」。
-    console.warn('[home] 帖子加载失败', error)
-    posts.value = []
+    // 不垫假数据：失败就 0。顶栏徽标会同步显示「后端未连接」。
+    console.warn('[home] 帖子计数加载失败', error)
     postsTotal.value = 0
   } finally {
     postsLoading.value = false
@@ -359,15 +335,35 @@ const highRiskEvents = computed(() =>
 
 const mediumRiskEvents = computed(() => publishedEvents.value.filter((e) => e.riskLevel === 'medium'))
 
-// 预警快览：高风险优先，其次中风险，按热度排序
-const watchEvents = computed(() =>
+// —— 风险结构：已发布事件按风险分层（全部现算，不做没有历史快照的假环比） ——
+const RISK_ROWS = [
+  { key: 'high', label: '高风险' },
+  { key: 'medium', label: '中风险' },
+  { key: 'low', label: '低风险' },
+]
+
+const riskStructure = computed(() => {
+  const total = publishedEvents.value.length || 1
+  return RISK_ROWS.map((row) => {
+    const count = publishedEvents.value.filter((e) => e.riskLevel === row.key).length
+    return { ...row, count, pct: Math.round((count / total) * 100) }
+  })
+})
+
+// —— 需要关注：按**四轴优先级**取前 5（与舆情关注页同口径）——
+// 不按热度排：热度是"多少人在看"，不是"该先动哪个"（那页已实测论证：
+// 热度第一的事件是已了结的，悬而未决的反而沉在第二）。
+const focusEvents = computed(() =>
   publishedEvents.value
     .filter((e) => ['high', 'medium'].includes(e.riskLevel))
-    .sort((a, b) => {
-      if (a.riskLevel !== b.riskLevel) return a.riskLevel === 'high' ? -1 : 1
-      return (b.heatScore || 0) - (a.heatScore || 0)
-    })
+    .slice()
+    .sort((a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0))
+    .slice(0, 5),
 )
+
+function eventKey(event) {
+  return event.raw_id ?? event.id
+}
 
 function parseTime(value) {
   // 与事件列表页同口径：后端时间是 "2026-05-24 12:00" 带空格格式，
@@ -437,6 +433,30 @@ const trendData = computed(() =>
 const maxTrend = computed(() => Math.max(...trendData.value.map((d) => d.value), 0))
 const maxTrendIndex = computed(() => trendData.value.findIndex((d) => d.value === maxTrend.value))
 
+// —— 折线图坐标（0-100 归一化，SVG viewBox 同尺度）——
+// 上下各留 8% 呼吸空间：峰值数字不顶天、零值线不贴底
+const chartPoints = computed(() => {
+  const rows = trendData.value
+  const max = maxTrend.value
+  return rows.map((row, index) => ({
+    ...row,
+    x: rows.length > 1 ? (index / (rows.length - 1)) * 100 : 50,
+    y: max ? 92 - (row.value / max) * 84 : 92,
+  }))
+})
+
+const trendLinePoints = computed(() => chartPoints.value.map((p) => `${p.x},${p.y}`).join(' '))
+
+const trendAreaPath = computed(() => {
+  const points = chartPoints.value
+  if (!points.length) return ''
+  const line = points.map((p) => `L ${p.x} ${p.y}`).join(' ')
+  return `M ${points[0].x} 100 ${line} L ${points[points.length - 1].x} 100 Z`
+})
+
+const peakPoint = computed(() => chartPoints.value[maxTrendIndex.value] || { x: 0, y: 0, value: 0 })
+const lastPoint = computed(() => chartPoints.value[chartPoints.value.length - 1] || peakPoint.value)
+
 // 趋势图的收尾日（= 最近数据日，服务端锚定的）
 const trendEnd = computed(() => {
   const last = postTrend.value[postTrend.value.length - 1]
@@ -454,18 +474,6 @@ const TREND_TOOLTIP =
   '每日新采集的帖子数（按帖子的发布时间聚合）。用帖子而不是事件做趋势：' +
   '已发布事件只有十几个、跨度大半年，任何一个短窗口里都最多一两个，画不出趋势。'
 
-// ——— 工具函数 ———
-function formatTime(ts) {
-  if (!ts) return '未知'
-  const d = new Date(ts)
-  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
-}
-
-const PLATFORM_LABELS = { xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎', ks: '快手', web: '网页证据', campus: '校园投稿' }
-function platformLabel(platform) {
-  return PLATFORM_LABELS[platform] || platform || '未知'
-}
-
 </script>
 
 <style scoped>
@@ -475,28 +483,14 @@ function platformLabel(platform) {
   gap: 16px;
 }
 
-/* 平台品牌标签：小红书红 / 快手金 / 微博橙 …，与事件详情、数据管理全站统一 */
-.plat-pill {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  background: var(--color-surface-2, #f5f7fa);
-  border: 1px solid var(--color-border);
-}
-.plat-xhs { color: #be123c; background: #fff1f2; border-color: #fecdd3; }
-.plat-weibo { color: #c2410c; background: #fff7ed; border-color: #fed7aa; }
-.plat-ks { color: #a16207; background: #fefce8; border-color: #fde68a; }
-.plat-tieba { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
-.plat-zhihu { color: #0369a1; background: #f0f9ff; border-color: #bae6fd; }
-.plat-web { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+/* 平台品牌标签已随「最新校园帖子」一起移除——帖子层是舆情分析页的职责 */
 
 /* 欢迎横幅 */
 .welcome-banner {
+  /* 双光晕（右上品牌靛 + 左下极淡雾绿）：登录页极光的白天低配版——静态、极淡 */
   background:
-    radial-gradient(circle at 90% 0%, rgba(59, 91, 219, 0.08), transparent 42%),
+    radial-gradient(circle at 90% 0%, rgba(59, 91, 219, 0.1), transparent 46%),
+    radial-gradient(circle at 4% 120%, rgba(76, 143, 116, 0.07), transparent 40%),
     linear-gradient(135deg, var(--brand-50) 0%, #fff 55%);
   border: 1px solid var(--brand-100);
   border-radius: var(--radius-lg);
@@ -529,6 +523,13 @@ function platformLabel(platform) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* 数据口径角标：语料不是实时的，"截至哪天"必须看得见 */
+.asof-tag {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-family: var(--font-numeric);
 }
 
 .risk-flag {
@@ -577,36 +578,26 @@ function platformLabel(platform) {
   color: var(--color-text-muted);
 }
 
-/* 统计卡片网格 */
+/* 统计卡片网格：4 张（中风险并入风险结构，后端状态归顶栏徽标） */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
 
-@media (max-width: 1500px) {
-  .stat-grid { grid-template-columns: repeat(3, 1fr); }
-}
-
-@media (max-width: 768px) {
+@media (max-width: 1100px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
-/* 内容区 */
+/* 内容区：左折线图（宽）+ 右风险结构，第二行「需要关注」通栏 */
 .content-grid {
   display: grid;
-  grid-template-columns: 1fr 2fr 1fr;
+  grid-template-columns: 1.45fr 1fr;
   gap: 14px;
 }
 
-@media (max-width: 1300px) {
-  .content-grid { grid-template-columns: 1fr 1fr; }
-  .span-2 { grid-column: span 2; }
-}
-
-@media (max-width: 768px) {
+@media (max-width: 1100px) {
   .content-grid { grid-template-columns: 1fr; }
-  .span-2 { grid-column: span 1; }
 }
 
 .section-card {
@@ -616,8 +607,6 @@ function platformLabel(platform) {
   box-shadow: var(--shadow-xs);
   overflow: hidden;
 }
-
-.span-2 { grid-column: span 2; }
 
 .section-header {
   display: flex;
@@ -650,123 +639,146 @@ function platformLabel(platform) {
   padding: 14px 18px 16px;
 }
 
-/* 趋势卡按内容高度收缩、顶部对齐——不被右侧「最新帖子」强行撑高，
-   这样卡片内部没有多余空白，柱子直接锚在固定高度图表的底部 */
-.chart-card {
-  align-self: start;
-}
+/* 趋势卡与风险结构卡同行拉伸等高（网格默认 stretch），边框线齐平 */
 
-/* 迷你柱状图：固定高度，柱子锚在底部；30 根柱子放不下时横向滚动 */
-.mini-chart {
-  height: 210px;
-  display: flex;
-  align-items: flex-end;
-  gap: 5px;
-  padding-top: 20px;
-  /* 底部留出一条独立空隙给横向滚动条，避免它压在日期标签上 */
-  padding-bottom: 14px;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-/* 仅趋势图的横向滚动条稍作弱化，避免抢镜 */
-.mini-chart::-webkit-scrollbar {
-  height: 6px;
-}
-.mini-chart::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-.mini-chart::-webkit-scrollbar-thumb:hover {
-  background: #cbd5e1;
-}
-
-.chart-bar-wrap {
-  /* 可增长填满宽屏，但不缩小到 16px 以下——窄屏/放大时溢出触发横向滚动 */
-  flex: 1 0 16px;
-  min-width: 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 100%;
-  justify-content: flex-end;
-}
-
-/* 柱子的定位容器：数字标签以它为基准，锚在柱顶上方 */
-.chart-bar-area {
+/* —— 折线趋势图：SVG 归一化到 0-100，容器控制真实尺寸 —— */
+.trend-chart {
   position: relative;
-  flex: 1;
+  height: 210px;
+  margin-bottom: 22px; /* 给绝对定位的日期标签行留出空间 */
+}
+
+.trend-svg {
   width: 100%;
-  max-width: 30px;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
+  height: 100%;
+  display: block;
+  overflow: visible;
 }
 
-.chart-bar {
-  width: 100%;
-  height: var(--bar-h, 0%);
-  /* 顶浅底深的纵向渐变：柱体有了"受光面"，比平涂多一层材质 */
-  background: linear-gradient(180deg, var(--brand-300), var(--brand-500));
-  border-radius: 4px 4px 0 0;
-  min-height: 3px;
-  transition: background var(--dur-fast) var(--ease-out), height var(--dur-slow) var(--ease-out);
+.trend-line {
+  fill: none;
+  stroke: var(--brand-500);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* preserveAspectRatio=none 会拉伸坐标系，这条让描边不跟着变形 */
+  vector-effect: non-scaling-stroke;
+  /* 描线入场：pathLength=1 归一化后 dashoffset 从 1 收到 0 */
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: trend-draw 1s var(--ease-out) 0.15s forwards;
 }
 
-.chart-bar-wrap:hover .chart-bar {
-  background: var(--brand-600);
+@keyframes trend-draw {
+  to { stroke-dashoffset: 0; }
 }
 
-.chart-bar--peak {
-  background: linear-gradient(180deg, #f2a950, var(--color-data-accent));
+/* 面积渐变等折线画完再淡入，避免"地基先于轮廓"的怪相 */
+.trend-area {
+  opacity: 0;
+  animation: trend-fade 0.5s ease 0.9s forwards;
 }
 
-.chart-bar-wrap:hover .chart-bar--peak {
-  background: var(--color-data-accent-text);
+@keyframes trend-fade {
+  to { opacity: 1; }
 }
 
-.chart-value {
-  font-family: var(--font-numeric);
+@media (prefers-reduced-motion: reduce) {
+  .trend-line { animation: none; stroke-dashoffset: 0; }
+  .trend-area { animation: none; opacity: 1; }
+}
+
+/* 逐日悬停命中区：纯 CSS 提示（悬停出点 + 顶部气泡），无 JS 状态 */
+.trend-hit {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+}
+
+.trend-hit::before {
+  content: '';
   position: absolute;
   left: 50%;
-  bottom: calc(var(--bar-h, 0%) + 5px);
-  transform: translateX(-50%);
+  top: var(--dot-y, 50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--brand-600);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--brand-200, #b9c6f2);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.trend-hit::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  top: calc(var(--dot-y, 50%) - 14px);
+  transform: translate(-50%, -100%);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--color-text);
+  color: #fff;
   font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  color: var(--color-text-secondary);
+  font-family: var(--font-numeric);
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out), bottom var(--dur-slow) var(--ease-out);
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
-.chart-value--pinned,
-.chart-bar-wrap:hover .chart-value {
+.trend-hit:hover::before,
+.trend-hit:hover::after {
   opacity: 1;
 }
 
-/* 峰值标签等柱子生长完再浮现，避免动画期间数字悬空；颜色与峰值柱同为琥珀 */
-.chart-value--pinned {
-  color: var(--color-data-accent-text);
+/* 常显标注：峰值（琥珀）与末点（品牌蓝），点 + 数字一体 */
+.trend-mark {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 10px));
+  font-family: var(--font-numeric);
+  font-size: 11px;
   font-weight: 700;
-  animation: value-in 0.3s var(--ease-out) 0.55s backwards;
+  line-height: 1;
+  pointer-events: none;
+  animation: trend-fade 0.3s var(--ease-out) 1s backwards;
 }
 
-@keyframes value-in {
-  from { opacity: 0; }
+.trend-mark::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  transform: translateX(-50%);
 }
 
-/* 日期标签：单行不换行，居中；只在每 5 天显示一个，稀疏所以横向溢出到相邻空标签格无碰撞。
-   它在柱子基线下方 8px，与柱子分属两层，不会再和柱子混叠。 */
-.chart-label {
-  height: 14px;
-  line-height: 14px;
-  margin-top: 8px;
+.trend-mark--peak { color: var(--color-data-accent-text); }
+.trend-mark--peak::after { background: var(--color-data-accent); box-shadow: 0 0 0 1px #f2a950; }
+.trend-mark--last { color: var(--brand-700); }
+.trend-mark--last::after { background: var(--brand-600); box-shadow: 0 0 0 1px var(--brand-200, #b9c6f2); }
+
+/* 日期标签行：与折线同一横向坐标系（等分格），贴在图下方 */
+.trend-labels {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -22px;
+  display: flex;
+}
+
+.trend-labels span {
+  flex: 1;
+  text-align: center;
   font-size: 11px;
   color: var(--color-text-faint);
   white-space: nowrap;
-  pointer-events: none;
 }
 
 .chart-skeleton {
@@ -823,106 +835,126 @@ function platformLabel(platform) {
   background: var(--color-surface-2);
 }
 
-.post-title {
-  max-width: 320px;
-  font-weight: 500;
-  display: flex;
+.text-muted { color: var(--color-text-muted); }
+.text-num { font-family: var(--font-numeric); }
+
+/* —— 风险结构：点 + 名称 + 生长条 + 计数/占比 —— */
+.risk-structure { gap: 0; }
+
+.risk-row {
+  display: grid;
+  grid-template-columns: 8px 52px 1fr 34px 42px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 11px 0;
+  font-size: 13px;
 }
 
-.post-title-text {
+.risk-row + .risk-row { border-top: 1px dashed var(--color-border-light); }
+
+.risk-dot { width: 8px; height: 8px; border-radius: 50%; }
+.risk-dot--high { background: var(--color-danger); }
+.risk-dot--medium { background: var(--color-warning); }
+.risk-dot--low { background: var(--color-success); }
+
+.risk-name { color: var(--color-text-secondary); }
+
+.risk-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-surface-2, #f0f2f5);
+  overflow: hidden;
+}
+
+.risk-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transform-origin: left;
+  animation: risk-grow 0.6s var(--ease-out) backwards;
+}
+
+.risk-row:nth-child(2) .risk-fill { animation-delay: 100ms; }
+.risk-row:nth-child(3) .risk-fill { animation-delay: 200ms; }
+
+@keyframes risk-grow {
+  from { transform: scaleX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .risk-fill { animation: none; }
+}
+
+.risk-fill--high { background: linear-gradient(90deg, #e5484d, var(--color-danger)); }
+.risk-fill--medium { background: linear-gradient(90deg, #edb95e, var(--color-warning)); }
+.risk-fill--low { background: linear-gradient(90deg, #58b77d, var(--color-success)); }
+
+.risk-num {
+  text-align: right;
+  font-weight: 700;
+  font-family: var(--font-numeric);
+}
+
+.risk-pct {
+  text-align: right;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-family: var(--font-numeric);
+}
+
+.risk-total {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
+.risk-total b { color: var(--color-text-secondary); font-family: var(--font-numeric); }
+
+/* —— 需要关注表格 —— */
+.span-3 {
+  grid-column: 1 / -1;
+}
+
+.focus-row { cursor: pointer; }
+
+.focus-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  font-weight: 600;
+}
+
+.focus-title-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.text-muted { color: var(--color-text-muted); }
-
-/* 表格骨架屏 */
-.table-skeleton {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 6px 0;
-}
-
-.skeleton-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.sk {
-  height: 14px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #eef1f7 25%, #f6f8fb 50%, #eef1f7 75%);
-  background-size: 200% 100%;
-  animation: stat-shimmer 1.4s ease-in-out infinite;
-}
-
-.sk-tag { width: 48px; }
-.sk-title { flex: 1; }
-.sk-meta { width: 90px; }
-
-/* 预警卡片：横排网格 */
-.span-3 {
-  grid-column: 1 / -1;
-}
-
-.alert-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 10px;
-}
-
-.alert-card {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
-}
-
-.alert-card:hover {
-  border-color: #f4c2c4;
-  box-shadow: var(--shadow-card);
-  transform: translateY(-1px);
-}
-
-.alert-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.alert-heat {
+.risk-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
   font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.alert-title {
-  font-size: 13px;
   font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: 4px;
 }
 
-.alert-desc {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.risk-tag--high { background: var(--color-danger-bg); color: var(--color-danger-text); }
+.risk-tag--medium { background: var(--color-warning-bg); color: var(--color-warning-text); }
+
+.lifecycle-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
 }
+
+.lifecycle-tag--escalating { background: var(--color-danger-bg); color: var(--color-danger-text); }
+.lifecycle-tag--ongoing { background: var(--color-warning-bg); color: var(--color-warning-text); }
+.lifecycle-tag--resolved { background: var(--color-success-bg); color: var(--color-success-text); }
+.lifecycle-tag--not_applicable { background: var(--color-surface-2); color: var(--color-text-muted); }
 
 /* 空态 */
 .empty-state {
@@ -976,8 +1008,6 @@ function platformLabel(platform) {
 .stat-grid > .stat-card:nth-child(2) { animation-delay: 40ms; }
 .stat-grid > .stat-card:nth-child(3) { animation-delay: 80ms; }
 .stat-grid > .stat-card:nth-child(4) { animation-delay: 120ms; }
-.stat-grid > .stat-card:nth-child(5) { animation-delay: 160ms; }
-.stat-grid > .stat-card:nth-child(6) { animation-delay: 200ms; }
 
 .content-grid > .section-card {
   animation: rise-in 0.4s var(--ease-out) backwards;
@@ -985,41 +1015,14 @@ function platformLabel(platform) {
 
 .content-grid > .section-card:nth-child(2) { animation-delay: 60ms; }
 .content-grid > .section-card:nth-child(3) { animation-delay: 120ms; }
-.content-grid > .section-card:nth-child(4) { animation-delay: 180ms; }
 
-/* 趋势条从基线生长，逐条推进 */
-@keyframes bar-grow {
-  from {
-    transform: scaleY(0);
-  }
-}
-
-.chart-bar {
-  transform-origin: bottom;
-  animation: bar-grow 0.5s var(--ease-out) backwards;
-}
-
-.chart-bar-wrap:nth-child(2) .chart-bar { animation-delay: 45ms; }
-.chart-bar-wrap:nth-child(3) .chart-bar { animation-delay: 90ms; }
-.chart-bar-wrap:nth-child(4) .chart-bar { animation-delay: 135ms; }
-.chart-bar-wrap:nth-child(5) .chart-bar { animation-delay: 180ms; }
-.chart-bar-wrap:nth-child(6) .chart-bar { animation-delay: 225ms; }
-.chart-bar-wrap:nth-child(7) .chart-bar { animation-delay: 270ms; }
-
-/* 列表内容加载后级联浮现 */
-.data-table tbody tr,
-.alert-card {
+/* 表格行加载后级联浮现 */
+.data-table tbody tr {
   animation: rise-in 0.3s var(--ease-out) backwards;
 }
 
-.data-table tbody tr:nth-child(2),
-.alert-card:nth-child(2) { animation-delay: 50ms; }
-
-.data-table tbody tr:nth-child(3),
-.alert-card:nth-child(3) { animation-delay: 100ms; }
-
+.data-table tbody tr:nth-child(2) { animation-delay: 50ms; }
+.data-table tbody tr:nth-child(3) { animation-delay: 100ms; }
 .data-table tbody tr:nth-child(4) { animation-delay: 150ms; }
-
 .data-table tbody tr:nth-child(5) { animation-delay: 200ms; }
-.data-table tbody tr:nth-child(6) { animation-delay: 250ms; }
 </style>
