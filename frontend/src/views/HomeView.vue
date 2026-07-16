@@ -101,39 +101,47 @@
           <div v-if="trendLoading" class="chart-skeleton">
             <span v-for="i in 7" :key="i" :style="{ height: 18 + ((i * 37) % 60) + '%' }" />
           </div>
-          <!-- 手绘 SVG 折线（维持全站零图表库路线）：面积渐变 + 描线入场 +
-               峰值琥珀常显 + 末点常显；逐日数值走纯 CSS 悬停提示 -->
-          <div v-else class="trend-chart" role="img" :aria-label="`近${trendDays}天每日发帖数量折线图`">
-            <svg class="trend-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-              <defs>
-                <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#5a74dd" stop-opacity="0.22" />
-                  <stop offset="1" stop-color="#5a74dd" stop-opacity="0.02" />
-                </linearGradient>
-              </defs>
-              <path class="trend-area" :d="trendAreaPath" fill="url(#trendFill)" />
-              <polyline class="trend-line" :points="trendLinePoints" pathLength="1" />
-            </svg>
+          <!-- 手绘 SVG 折线（维持全站零图表库路线）：面积渐变 + clip-path 左→右
+               揭开入场 + 峰值琥珀/末点常显；逐日数值走纯 CSS 悬停提示。
+               窄屏时图表保持最小宽度、容器横向滚动（与旧柱状图同策略）。 -->
+          <div v-else class="trend-scroll">
             <div
-              v-for="(point, index) in chartPoints"
-              :key="point.name"
-              class="trend-hit"
-              :style="{ left: `${point.x - 50 / chartPoints.length}%`, width: `${100 / chartPoints.length}%`, '--dot-y': `${point.y}%` }"
-              :data-tip="`${point.name} · ${point.value} 条`"
-            />
-            <span
-              class="trend-mark trend-mark--peak"
-              :style="{ left: `${peakPoint.x}%`, top: `${peakPoint.y}%` }"
-            >{{ peakPoint.value }}</span>
-            <span
-              v-if="peakPoint !== lastPoint"
-              class="trend-mark trend-mark--last"
-              :style="{ left: `${lastPoint.x}%`, top: `${lastPoint.y}%` }"
-            >{{ lastPoint.value }}</span>
-            <div class="trend-labels">
-              <span v-for="(point, index) in chartPoints" :key="`l-${point.name}`">
-                {{ showLabel(index) ? point.name : '' }}
-              </span>
+              class="trend-chart"
+              role="img"
+              :aria-label="`近${trendDays}天每日发帖数量折线图`"
+              :style="{ minWidth: `${chartPoints.length * 22}px` }"
+            >
+              <svg class="trend-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#5a74dd" stop-opacity="0.22" />
+                    <stop offset="1" stop-color="#5a74dd" stop-opacity="0.02" />
+                  </linearGradient>
+                </defs>
+                <path class="trend-area" :d="trendAreaPath" fill="url(#trendFill)" />
+                <polyline class="trend-line" :points="trendLinePoints" />
+              </svg>
+              <div
+                v-for="point in chartPoints"
+                :key="point.name"
+                class="trend-hit"
+                :style="{ left: `${point.x - 50 / chartPoints.length}%`, width: `${100 / chartPoints.length}%`, '--dot-y': `${point.y}%` }"
+                :data-tip="`${point.name} · ${point.value} 条`"
+              />
+              <span
+                class="trend-mark trend-mark--peak"
+                :style="{ left: markX(peakPoint), top: `${peakPoint.y}%` }"
+              >{{ peakPoint.value }}</span>
+              <span
+                v-if="peakPoint !== lastPoint"
+                class="trend-mark trend-mark--last"
+                :style="{ left: markX(lastPoint), top: `${lastPoint.y}%` }"
+              >{{ lastPoint.value }}</span>
+              <div class="trend-labels">
+                <span v-for="(point, index) in chartPoints" :key="`l-${point.name}`">
+                  {{ showLabel(index) ? point.name : '' }}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -457,6 +465,12 @@ const trendAreaPath = computed(() => {
 const peakPoint = computed(() => chartPoints.value[maxTrendIndex.value] || { x: 0, y: 0, value: 0 })
 const lastPoint = computed(() => chartPoints.value[chartPoints.value.length - 1] || peakPoint.value)
 
+// 常显标注的横坐标钳制在 [3%, 96.5%]：末点/首点的数字标签是居中定位的，
+// 贴边时会有一半伸出卡外被 section-card 的 overflow:hidden 截掉（用户实测截图）
+function markX(point) {
+  return `${Math.min(Math.max(point.x, 3), 96.5)}%`
+}
+
 // 趋势图的收尾日（= 最近数据日，服务端锚定的）
 const trendEnd = computed(() => {
   const last = postTrend.value[postTrend.value.length - 1]
@@ -642,17 +656,37 @@ const TREND_TOOLTIP =
 /* 趋势卡与风险结构卡同行拉伸等高（网格默认 stretch），边框线齐平 */
 
 /* —— 折线趋势图：SVG 归一化到 0-100，容器控制真实尺寸 —— */
+/* 横向滚动容器：窄屏时图表保持最小宽度（30 点 × 22px），滚动代替挤压 */
+.trend-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* 底部给滚动条和日期标签留位，右侧给贴边的常显数字留半个字宽 */
+  padding: 0 8px 26px 0;
+}
+
+.trend-scroll::-webkit-scrollbar { height: 6px; }
+.trend-scroll::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+.trend-scroll::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+
 .trend-chart {
   position: relative;
   height: 210px;
-  margin-bottom: 22px; /* 给绝对定位的日期标签行留出空间 */
 }
 
+/* 入场：clip-path 从左到右揭开（折线+面积一起"画"出来）。
+   不用 dasharray 描线——pathLength 归一 + non-scaling-stroke + 非等比缩放
+   三者组合在 Chrome 里 dash 计算错乱，部分斜率的线段直接消失（实测截图） */
 .trend-svg {
   width: 100%;
   height: 100%;
   display: block;
   overflow: visible;
+  animation: trend-reveal 0.9s var(--ease-out) 0.15s backwards;
+}
+
+@keyframes trend-reveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(-20% 0 0 0); } /* 顶部放开，别把峰值附近的线切了 */
 }
 
 .trend-line {
@@ -663,29 +697,16 @@ const TREND_TOOLTIP =
   stroke-linecap: round;
   /* preserveAspectRatio=none 会拉伸坐标系，这条让描边不跟着变形 */
   vector-effect: non-scaling-stroke;
-  /* 描线入场：pathLength=1 归一化后 dashoffset 从 1 收到 0 */
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: trend-draw 1s var(--ease-out) 0.15s forwards;
-}
-
-@keyframes trend-draw {
-  to { stroke-dashoffset: 0; }
-}
-
-/* 面积渐变等折线画完再淡入，避免"地基先于轮廓"的怪相 */
-.trend-area {
-  opacity: 0;
-  animation: trend-fade 0.5s ease 0.9s forwards;
 }
 
 @keyframes trend-fade {
+  from { opacity: 0; }
   to { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .trend-line { animation: none; stroke-dashoffset: 0; }
-  .trend-area { animation: none; opacity: 1; }
+  .trend-svg,
+  .trend-mark { animation: none; }
 }
 
 /* 逐日悬停命中区：纯 CSS 提示（悬停出点 + 顶部气泡），无 JS 状态 */
