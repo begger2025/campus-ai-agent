@@ -332,8 +332,12 @@ class TieBaCrawler(AbstractCrawler):
                         utils.logger.error(
                             f"[BaiduTieBaCrawler.search] Search keywords error, current page: {page}, current keyword: {keyword}, err: {ex}"
                         )
-                        run_state.mark_stop(STOP_EXCEPTION)
-                        break
+                        # 页级异常不再静默吞掉（审计修复 2026-07-17）：原来 break 后 search()
+                        # 正常返回，队列把任务标 done——瞬时网络错误也不重试，数据静默少采。
+                        # 贴吧 client 只抛裸 Exception 无类型可辨（对比 ks/zhihu 的
+                        # DataFetchError），无法区分瞬时/致命——宁可失败可重试，不可静默
+                        # 少采：对齐微博语义上抛，外层 except 记 STOP_EXCEPTION 并落历史行。
+                        raise
 
                 # 循环自然退出：入库配额达成归结 quota_reached（页保护上限触发则落 completed）
                 if run_state.items_stored >= config.CRAWLER_MAX_NOTES_COUNT:

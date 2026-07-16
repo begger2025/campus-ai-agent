@@ -1,8 +1,11 @@
+from typing import Dict, List
+
 import pytest
 
 import config
 from media_platform.tieba.core import TieBaCrawler
 from model.m_baidu_tieba import TiebaNote
+from store import run_history as run_history_store
 from store import tieba as tieba_store
 
 
@@ -68,6 +71,44 @@ async def test_handle_search_notes_returns_stored_count_when_comments_disabled(m
     # 非评论路径：全部直接入库，返回值 = 实际 update_tieba_note 条数
     assert stored_count == 2
     assert len(saved_notes) == 2
+
+
+# ---------- search() 异常语义 ----------
+#
+# 审计发现（2026-07-17）：贴吧原本把**一切**页级异常吞掉后 break，search() 正常返回——
+# 队列模式下瞬时网络错误也被标 done，不重试、数据静默少采；而微博同款错误会上抛标 failed。
+# 贴吧 client 只抛裸 Exception 无类型可辨（对比 ks/zhihu 的 DataFetchError），无法区分
+# 瞬时/致命——宁可失败可重试，不可静默少采：对齐微博语义，页级异常一律上抛。
+
+
+@pytest.mark.asyncio
+async def test_search_page_exception_propagates_and_still_writes_history(monkeypatch):
+    rows: List[Dict] = []
+
+    async def fake_save_history(row):
+        rows.append(row)
+
+    monkeypatch.setattr(run_history_store, "save_crawler_run_history", fake_save_history)
+    monkeypatch.setattr(config, "KEYWORDS", "宿舍")
+    monkeypatch.setattr(config, "START_PAGE", 1)
+    monkeypatch.setattr(config, "CRAWLER_MAX_NOTES_COUNT", 10)
+    monkeypatch.setattr(config, "CRAWL_PUBLISH_TIME_START", "", raising=False)
+    monkeypatch.setattr(config, "CRAWL_PUBLISH_TIME_END", "", raising=False)
+    monkeypatch.setattr(config, "SEARCH_START_PAGE_JITTER_PROB", 0.0, raising=False)
+
+    class ExplodingClient:
+        async def get_notes_by_keyword(self, **kwargs):
+            raise RuntimeError("transient network error")
+
+    crawler = TieBaCrawler()
+    crawler.tieba_client = ExplodingClient()
+
+    with pytest.raises(RuntimeError):
+        await crawler.search()
+
+    assert len(rows) == 1, "异常路径也必须落一行运行历史"
+    assert rows[0]["platform"] == "tieba"
+    assert rows[0]["stop_reason"] == "exception"
 
 
 @pytest.mark.asyncio
