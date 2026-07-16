@@ -209,9 +209,9 @@ cd <项目根目录>\MediaCrawler
 # 验证通过后播其余 11 词
 .\.venv\Scripts\python.exe scripts\seed_crawl_queue.py --platform ks `
   --keywords "宿舍空调,宿舍热水,宿舍卫生,宿舍维修,宿舍限电,宿舍分配,四人间,洗衣机,澡堂,门禁,快递" --dry-run
-# 爬完入库四步（--limit 0 必须写！）
-.\.venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --limit 0
-.\.venv\Scripts\python.exe scripts\process_raw_posts.py --limit 0
+# 爬完入库四步（--limit 0 必须写！--refresh 传导复播时顺路刷新的互动量）
+.\.venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --limit 0 --refresh
+.\.venv\Scripts\python.exe scripts\process_raw_posts.py --limit 0 --refresh
 .\.venv\Scripts\python.exe scripts\build_post_vectors.py
 .\.venv\Scripts\python.exe scripts\generate_public_events.py --preview   # 确认后去掉 --preview
 ```

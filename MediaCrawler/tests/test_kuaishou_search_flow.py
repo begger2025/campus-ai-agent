@@ -115,12 +115,47 @@ async def test_window_filter_drops_old_but_contributes_page_ts(stored_ids):
 
 
 @pytest.mark.asyncio
-async def test_skip_existing_not_stored_but_contributes_page_ts(stored_ids, monkeypatch):
+async def test_skip_existing_refreshes_engagement_without_quota(stored_ids, monkeypatch):
+    """已入库视频的「跳过」≠「扔掉」：搜索卡片自带最新点赞/评论数，顺路写回库刷新
+    （store 层是 upsert），但**不烧配额、不进返回**（评论抓取跟着返回值走）。
+
+    这是互动量随时间更新的方案 A：复播关键词时旧帖计数自动刷新，零额外请求。
+    """
+
     async def fake_batch_get_existing_note_ids(note_ids):
         return {"a1"}
 
     monkeypatch.setattr(kuaishou_store, "batch_get_existing_note_ids", fake_batch_get_existing_note_ids)
     monkeypatch.setattr(config, "KS_SKIP_EXISTING_NOTES", True, raising=False)
+    monkeypatch.setattr(config, "KS_REFRESH_EXISTING_ENGAGEMENT", True, raising=False)
+
+    crawler = KuaishouCrawler()
+    run_state = make_run_state()
+    feeds = [
+        make_feed("a1", "中山大学宿舍条件怎么样", ts_ms=TS_MS),
+        make_feed("a2", "中山大学食堂测评", ts_ms=TS_MS + 100),
+    ]
+
+    kept_ids, page_resolved_ts = await crawler._filter_and_store_page(
+        feeds, None, None, False, run_state
+    )
+
+    assert kept_ids == ["a2"], "已入库的不进返回——评论抓取/配额语义不变"
+    assert run_state.items_stored == 1, "配额只算真新增，刷新不烧配额"
+    assert "a1" in stored_ids, "已入库的计数要顺路刷新（store upsert）"
+    assert TS_MS in page_resolved_ts
+
+
+@pytest.mark.asyncio
+async def test_skip_existing_pure_skip_when_refresh_disabled(stored_ids, monkeypatch):
+    """关掉刷新开关 = 老行为：已入库的完全跳过，一次 store 都不碰。"""
+
+    async def fake_batch_get_existing_note_ids(note_ids):
+        return {"a1"}
+
+    monkeypatch.setattr(kuaishou_store, "batch_get_existing_note_ids", fake_batch_get_existing_note_ids)
+    monkeypatch.setattr(config, "KS_SKIP_EXISTING_NOTES", True, raising=False)
+    monkeypatch.setattr(config, "KS_REFRESH_EXISTING_ENGAGEMENT", False, raising=False)
 
     crawler = KuaishouCrawler()
     run_state = make_run_state()
@@ -135,7 +170,39 @@ async def test_skip_existing_not_stored_but_contributes_page_ts(stored_ids, monk
 
     assert kept_ids == ["a2"]
     assert run_state.items_stored == 1
+    assert stored_ids == ["a2"], "刷新关闭时已入库的不碰 store"
     assert TS_MS in page_resolved_ts
+
+
+@pytest.mark.asyncio
+async def test_refresh_store_failure_does_not_break_page(stored_ids, monkeypatch):
+    """刷新是顺路的便车：它失败不许影响新帖入库（新帖才是本职）。"""
+
+    async def fake_batch_get_existing_note_ids(note_ids):
+        return {"a1"}
+
+    async def flaky_update(video_item):
+        if video_item["photo"]["id"] == "a1":
+            raise RuntimeError("db hiccup")
+        stored_ids.append(video_item["photo"]["id"])
+
+    monkeypatch.setattr(kuaishou_store, "batch_get_existing_note_ids", fake_batch_get_existing_note_ids)
+    monkeypatch.setattr(kuaishou_store, "update_kuaishou_video", flaky_update)
+    monkeypatch.setattr(config, "KS_SKIP_EXISTING_NOTES", True, raising=False)
+    monkeypatch.setattr(config, "KS_REFRESH_EXISTING_ENGAGEMENT", True, raising=False)
+
+    crawler = KuaishouCrawler()
+    run_state = make_run_state()
+    feeds = [
+        make_feed("a1", "中山大学宿舍条件怎么样", ts_ms=TS_MS),
+        make_feed("a2", "中山大学食堂测评", ts_ms=TS_MS + 100),
+    ]
+
+    kept_ids, _ = await crawler._filter_and_store_page(feeds, None, None, False, run_state)
+
+    assert kept_ids == ["a2"]
+    assert run_state.items_stored == 1
+    assert stored_ids == ["a2"]
 
 
 @pytest.mark.asyncio

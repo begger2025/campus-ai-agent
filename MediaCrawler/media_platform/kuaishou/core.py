@@ -192,19 +192,41 @@ class KuaishouCrawler(AbstractCrawler):
         if marketing_filtered:
             utils.logger.info(f"[KuaishouCrawler.search] 营销内容过滤：跳过 {marketing_filtered} 条")
 
-        # 爬取阶段跳过已入库视频（省请求额度）：必须在过滤后、入库与评论抓取之前
+        # 爬取阶段跳过已入库视频（省请求额度）：必须在过滤后、入库与评论抓取之前。
+        # 「跳过」≠「扔掉」：搜索卡片自带最新点赞/评论数，已入库的顺路写回刷新计数
+        # （store 层是 upsert）——不烧配额、不进返回（评论抓取跟着返回值走）。
+        # 这是互动量随时间更新的机制：复播关键词时旧帖计数自动刷新，零额外请求。
+        refresh_feeds: List[Dict] = []
         if kept and bool(getattr(config, "KS_SKIP_EXISTING_NOTES", True)):
             existing = await kuaishou_store.batch_get_existing_note_ids(
                 [str((feed.get("photo") or {}).get("id") or "").strip() for feed in kept]
             )
             if existing:
                 before = len(kept)
+                if bool(getattr(config, "KS_REFRESH_EXISTING_ENGAGEMENT", True)):
+                    refresh_feeds = [
+                        feed for feed in kept
+                        if str((feed.get("photo") or {}).get("id") or "").strip() in existing
+                    ]
                 kept = [
                     feed for feed in kept
                     if str((feed.get("photo") or {}).get("id") or "").strip() not in existing
                 ]
                 if before - len(kept):
-                    utils.logger.info(f"[KuaishouCrawler.search] 跳过已入库 {before - len(kept)} 条")
+                    utils.logger.info(
+                        f"[KuaishouCrawler.search] 跳过已入库 {before - len(kept)} 条"
+                        f"（其中顺路刷新计数 {len(refresh_feeds)} 条）"
+                    )
+
+        # 顺路刷新是便车：失败只记警告，绝不影响新帖入库（新帖才是本职）
+        for feed in refresh_feeds:
+            refresh_video_id = str((feed.get("photo") or {}).get("id"))
+            try:
+                await kuaishou_store.update_kuaishou_video(video_item=feed)
+            except Exception as ex:
+                utils.logger.warning(
+                    f"[KuaishouCrawler.search] refresh engagement failed video_id={refresh_video_id}: {ex}"
+                )
 
         stored_ids: List[str] = []
         for feed in kept:

@@ -159,10 +159,12 @@
   └─ 快手（任一台）：--platform ks，其余参数同上但 **去掉 --start_date**
       （快手无服务端时间排序，带窗口实测会全灭空窗，见 §四）
 入库（机器 A，参见 xhs-parallel-crawl-guide.md §入库四步）
-  ├─ scripts\sync_media_to_raw_posts.py --limit 0     ← --limit 0 必须写！默认 100 会静默丢
-  ├─ scripts\process_raw_posts.py --limit 0
+  ├─ scripts\sync_media_to_raw_posts.py --limit 0 --refresh   ← --limit 0 必须写！--refresh 把
+  │                                                              复播时顺路刷新的互动量传进 raw_posts
+  ├─ scripts\process_raw_posts.py --limit 0 --refresh          ← 重算这些帖子的 heat_score + 热度百分位
   ├─ scripts\build_post_vectors.py                     ← 刷新帖子语义向量（聊天的语义检索物料）
   └─ scripts\generate_public_events.py --preview → 确认 → 正式生成
+     （事件热度/heat_delta 随生成自动更新；已发布状态保留，curated 事件不被机器覆盖）
 质量管控（管理员，5 分钟）
   └─ 数据管理页过一遍新帖：台湾国立中山大学 / 蹭校名广告 → 剔除（理由必填，可恢复）
 事件审核（管理员）
