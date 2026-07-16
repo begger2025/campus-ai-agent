@@ -73,8 +73,11 @@ class BaiduTieBaClient(AbstractApiClient):
         Returns:
             Response object
         """
-        # Construct proxy dictionary
-        proxies = None
+        # Construct proxy dictionary.
+        # 无显式代理时按 scheme 置 None（审计修复 2026-07-17）：requests 语义里
+        # proxies=None 是"请读环境变量"，会静默走 Clash/系统代理导致超时；
+        # 显式 {"http": None, "https": None} 才是"禁用环境代理"。
+        proxies = {"http": None, "https": None}
         if proxy:
             proxies = {
                 "http": proxy,
