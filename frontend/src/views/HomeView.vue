@@ -128,14 +128,16 @@
                 :style="{ left: `${point.x - 50 / chartPoints.length}%`, width: `${100 / chartPoints.length}%`, '--dot-y': `${point.y}%` }"
                 :data-tip="`${point.name} · ${point.value} 条`"
               />
+              <!-- 标注锚在数据点的**真实坐标**上（圆点必须钉在折线上），
+                   贴边时只调整数字的对齐方式，绝不挪动圆点 -->
               <span
-                class="trend-mark trend-mark--peak"
-                :style="{ left: markX(peakPoint), top: `${peakPoint.y}%` }"
+                :class="['trend-mark', 'trend-mark--peak', { 'trend-mark--edge': peakPoint.x > 94 }]"
+                :style="{ left: `${peakPoint.x}%`, top: `${peakPoint.y}%` }"
               >{{ peakPoint.value }}</span>
               <span
                 v-if="peakPoint !== lastPoint"
-                class="trend-mark trend-mark--last"
-                :style="{ left: markX(lastPoint), top: `${lastPoint.y}%` }"
+                :class="['trend-mark', 'trend-mark--last', { 'trend-mark--edge': lastPoint.x > 94 }]"
+                :style="{ left: `${lastPoint.x}%`, top: `${lastPoint.y}%` }"
               >{{ lastPoint.value }}</span>
               <div class="trend-labels">
                 <span v-for="(point, index) in chartPoints" :key="`l-${point.name}`">
@@ -465,12 +467,6 @@ const trendAreaPath = computed(() => {
 const peakPoint = computed(() => chartPoints.value[maxTrendIndex.value] || { x: 0, y: 0, value: 0 })
 const lastPoint = computed(() => chartPoints.value[chartPoints.value.length - 1] || peakPoint.value)
 
-// 常显标注的横坐标钳制在 [3%, 96.5%]：末点/首点的数字标签是居中定位的，
-// 贴边时会有一半伸出卡外被 section-card 的 overflow:hidden 截掉（用户实测截图）
-function markX(point) {
-  return `${Math.min(Math.max(point.x, 3), 96.5)}%`
-}
-
 // 趋势图的收尾日（= 最近数据日，服务端锚定的）
 const trendEnd = computed(() => {
   const last = postTrend.value[postTrend.value.length - 1]
@@ -656,12 +652,13 @@ const TREND_TOOLTIP =
 /* 趋势卡与风险结构卡同行拉伸等高（网格默认 stretch），边框线齐平 */
 
 /* —— 折线趋势图：SVG 归一化到 0-100，容器控制真实尺寸 —— */
-/* 横向滚动容器：窄屏时图表保持最小宽度（30 点 × 22px），滚动代替挤压 */
+/* 横向滚动容器：窄屏时图表保持最小宽度（30 点 × 22px），滚动代替挤压。
+   注意 overflow-x:auto 会强制纵向也进入裁剪（规范如此，无法 visible）——
+   顶部 28px 内衬是峰值标注和悬停气泡的头寸，少了就会被切（用户实测截图） */
 .trend-scroll {
   overflow-x: auto;
   overflow-y: hidden;
-  /* 底部给滚动条和日期标签留位，右侧给贴边的常显数字留半个字宽 */
-  padding: 0 8px 26px 0;
+  padding: 28px 8px 26px 0;
 }
 
 .trend-scroll::-webkit-scrollbar { height: 6px; }
@@ -784,6 +781,11 @@ const TREND_TOOLTIP =
 .trend-mark--peak::after { background: var(--color-data-accent); box-shadow: 0 0 0 1px #f2a950; }
 .trend-mark--last { color: var(--brand-700); }
 .trend-mark--last::after { background: var(--brand-600); box-shadow: 0 0 0 1px var(--brand-200, #b9c6f2); }
+
+/* 贴右边缘的标注：数字改为右对齐外扩，圆点跟着补偿回到真实数据点上
+   （数字和圆点整体钳制会把圆点从折线上拽下来——就是那个"突兀的点"） */
+.trend-mark--edge { transform: translate(-88%, calc(-100% - 10px)); }
+.trend-mark--edge::after { left: 88%; }
 
 /* 日期标签行：与折线同一横向坐标系（等分格），贴在图下方 */
 .trend-labels {
