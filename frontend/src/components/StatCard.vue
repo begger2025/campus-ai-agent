@@ -1,5 +1,5 @@
 <template>
-  <div class="stat-card" :class="`stat-card--${color}`">
+  <div v-spotlight class="stat-card" :class="`stat-card--${color}`">
     <span class="stat-chip">
       <el-icon v-if="isComponentIcon" :size="18"><component :is="icon" /></el-icon>
       <span v-else class="stat-emoji">{{ icon }}</span>

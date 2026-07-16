@@ -3,7 +3,7 @@
     <!-- 待办队列：管理员进后台的第一个问题是「今天要处理什么」。
          每张卡可点，直达带筛选的目标页；0 待办的卡淡化。 -->
     <div class="todo-row">
-      <button v-for="card in todoCards" :key="card.label" type="button"
+      <button v-for="card in todoCards" :key="card.label" type="button" v-spotlight
               :class="['todo-card', { 'todo-card--idle': !card.count }]" @click="router.push(card.to)">
         <strong>{{ card.count }}</strong>
         <span>{{ card.label }}</span>

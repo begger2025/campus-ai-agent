@@ -8,7 +8,9 @@
       </el-tabs>
       <div v-loading="loading">
         <div v-if="!items.length && !loading" class="empty-hint">没有需要处理的评论</div>
-        <article v-for="c in items" :key="c.id" class="c-item">
+        <!-- v-reveal 挂在列表容器上：子元素（每条评论）进入视口时级联浮现 -->
+        <div v-reveal>
+          <article v-for="c in items" :key="c.id" class="c-item">
           <div class="c-head">
             <b>{{ c.username }}</b>
             <span class="c-meta">事件 #{{ c.event_id }} · {{ (c.created_at || '').slice(0, 16).replace('T', ' ') }}</span>
@@ -22,7 +24,8 @@
             <el-button v-else size="small" type="success" plain @click="moderate(c, 'visible')">恢复</el-button>
             <el-button size="small" link @click="$router.push(`/events/${c.event_id}`)">查看事件 →</el-button>
           </div>
-        </article>
+          </article>
+        </div>
       </div>
     </div>
   </section>

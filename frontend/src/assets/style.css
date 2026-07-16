@@ -302,3 +302,48 @@ a {
 .heat-chip--high { background: var(--brand-500); color: #fff; }
 .heat-chip--mid { background: var(--brand-100); color: var(--brand-700); }
 .heat-chip--normal { background: #eef1f7; color: var(--color-text-muted); }
+
+/* ===========================
+   动效指令的视觉层（v-spotlight / v-reveal，见 src/directives/）
+   =========================== */
+
+/* 鼠标跟随光效：浅色主题用品牌色极淡的径向高光，hover 才浮现 */
+.spotlight-surface {
+  position: relative;
+  --mouse-x: 50%;
+  --mouse-y: 50%;
+  --spotlight-color: rgba(59, 91, 219, 0.08);
+}
+
+.spotlight-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    300px circle at var(--mouse-x) var(--mouse-y),
+    var(--spotlight-color),
+    transparent 72%
+  );
+  opacity: 0;
+  transition: opacity 0.35s var(--ease-out);
+  pointer-events: none;
+}
+
+.spotlight-surface:hover::before {
+  opacity: 1;
+}
+
+/* 列表级联浮现：只动 transform/opacity；reduced-motion 由全局降级兜底 */
+.reveal-item {
+  opacity: 0;
+  transform: translateY(10px);
+  transition:
+    opacity 0.4s var(--ease-out),
+    transform 0.4s var(--ease-out);
+}
+
+.reveal-item--in {
+  opacity: 1;
+  transform: none;
+}

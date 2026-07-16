@@ -4,10 +4,14 @@ import 'element-plus/dist/index.css'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import App from './App.vue'
 import router from './router'
+import spotlight from './directives/spotlight'
+import reveal from './directives/reveal'
 import './assets/style.css'
 import './assets/admin.css'
 
 const app = createApp(App)
 app.use(ElementPlus, { locale: zhCn })
 app.use(router)
+app.directive('spotlight', spotlight)
+app.directive('reveal', reveal)
 app.mount('#app')

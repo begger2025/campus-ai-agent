@@ -193,6 +193,7 @@
             <button
               v-for="event in watchEvents.slice(0, 3)"
               :key="event.id"
+              v-spotlight
               class="alert-card"
               type="button"
               @click="$router.push(`/events/${event.id}`)"
