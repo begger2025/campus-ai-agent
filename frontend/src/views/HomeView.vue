@@ -203,7 +203,6 @@
                 @click="$router.push(`/events/${eventKey(event)}`)"
               >
                 <td class="focus-title">
-                  <CoverThumb :seed="event.title" :size="28" />
                   <span class="focus-title-text">{{ event.title }}</span>
                 </td>
                 <td>
@@ -251,7 +250,6 @@ import { formatHeat } from '@/utils/heat'
 import { formatAge } from '@/utils/age'
 import { hasLifecycle, lifecycleLabel } from '@/utils/lifecycle'
 import StatCard from '@/components/StatCard.vue'
-import CoverThumb from '@/components/effects/CoverThumb.vue'
 import { fetchPosts, fetchSentimentStats } from '@/api/posts'
 import { fetchPublishedEvents } from '@/api/events'
 import { getCurrentUser, getCurrentRole } from '@/auth/session'
@@ -942,14 +940,12 @@ const TREND_TOOLTIP =
 .focus-row { cursor: pointer; }
 
 .focus-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   max-width: 420px;
   font-weight: 600;
 }
 
 .focus-title-text {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

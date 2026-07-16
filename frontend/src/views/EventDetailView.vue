@@ -86,10 +86,6 @@
           <em class="count-hint">{{ representativePosts.length }} 条 · 原帖直链的访问凭证会随时间失效，打不开时请用"站内搜索"</em>
         </h3>
         <article v-for="post in representativePosts" :key="post.processed_post_id ?? post.rank" class="rep-post">
-          <!-- 生成式封面：原帖图片链接带小时级签名早已失效（实测 403），
-               用标题种子的确定性渐变封面替代，同一帖子永远同一张脸 -->
-          <CoverThumb :seed="post.title || post.content || ''" :size="44" class="rep-cover" />
-          <div class="rep-main">
           <div class="rep-head">
             <span :class="['source-chip', `source-${post.platform}`]">{{ sourceLabel(post.platform) }}</span>
             <strong class="rep-title">{{ post.title || '（无标题）' }}</strong>
@@ -112,7 +108,6 @@
             <span>赞 {{ post.like_count ?? 0 }}</span>
             <span>评论 {{ post.comment_count ?? 0 }}</span>
             <span>收藏 {{ post.collect_count ?? 0 }}</span>
-          </div>
           </div>
         </article>
       </div>
@@ -258,7 +253,6 @@ import { LINK_EXPIRY_TIP, platformSearchUrl } from '@/utils/postLink'
 import { fetchEventDetail } from '@/api/events'
 import { fetchEventComments, postEventComment, reportComment } from '@/api/comments'
 import { isAuthenticated } from '@/auth/session'
-import CoverThumb from '@/components/effects/CoverThumb.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -690,21 +684,10 @@ function postSearchUrl(post) {
 }
 
 .rep-post {
-  display: flex;
-  gap: 12px;
   padding: 12px 14px;
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-sm);
   background: var(--color-surface-2);
-}
-
-.rep-cover {
-  margin-top: 2px;
-}
-
-.rep-main {
-  flex: 1;
-  min-width: 0;
 }
 
 .rep-post + .rep-post {
