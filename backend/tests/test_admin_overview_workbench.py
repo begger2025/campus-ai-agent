@@ -42,6 +42,8 @@ class WorkbenchOverviewTests(unittest.TestCase):
                           excluded=True, publish_time=datetime.utcnow() - timedelta(days=3)),
             AgentRunLog(agent_type="public_opinion", input_count=800, output_count=119,
                         status="success", duration_ms=120000,
+                        started_at=datetime(2026, 7, 16, 10, 0, 0),
+                        finished_at=datetime(2026, 7, 16, 10, 2, 0),
                         output_summary=json.dumps({"warnings": ["a", "b"]})),
         ])
         self.db.commit()
@@ -68,6 +70,10 @@ class WorkbenchOverviewTests(unittest.TestCase):
         self.assertEqual(run["input_count"], 800)
         self.assertEqual(run["warnings_count"], 2, "警告数从 output_summary 的 JSON 里解析")
         self.assertEqual(run["status"], "success")
+        self.assertIn(
+            "10:02", run["finished_at"],
+            "完成时间必须取真的 finished_at——取 created_at 会把启动时刻当完成时刻（审计修复）",
+        )
 
     def test_empty_pipeline_yields_none_not_crash(self) -> None:
         self.db.query(AgentRunLog).delete()

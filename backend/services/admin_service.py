@@ -114,7 +114,10 @@ def _last_agent_run(db: Session) -> dict[str, Any] | None:
         "event_count": int(row.output_count or 0),
         "input_count": int(row.input_count or 0),
         "duration_ms": int(row.duration_ms or 0),
-        "finished_at": _format_datetime(getattr(row, "created_at", None)),
+        # 完成时间用真的 finished_at（insert_agent_run_log 一直在写它）；
+        # 旧行/失败行可能为空，退回 created_at（审计修复：原先一律取 created_at，
+        # 长耗时 run 的"完成时间"显示的其实是启动时刻）
+        "finished_at": _format_datetime(row.finished_at or getattr(row, "created_at", None)),
         "warnings_count": warnings_count,
     }
 
@@ -538,39 +541,6 @@ def update_user_status_data(
     return row
 
 
-def record_admin_operation(
-    db: Session,
-    *,
-    admin_user: User | None,
-    admin_user_id: str,
-    action: str,
-    target_type: str,
-    target_id: str,
-    before: dict[str, Any] | None = None,
-    after: dict[str, Any] | None = None,
-    ip_address: str = "",
-    user_agent: str = "",
-) -> AdminOperationLog:
-    actor = str(admin_user.id) if admin_user is not None else admin_user_id
-    detail = json.dumps(
-        {
-            "before_json": before or {},
-            "after_json": after or {},
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    row = AdminOperationLog(
-        admin_user_id=actor,
-        user_id=actor,
-        action=action,
-        target_type=target_type,
-        target_id=target_id,
-        detail=detail,
-        ip_address=ip_address,
-        ip=ip_address,
-        user_agent=user_agent,
-    )
-    db.add(row)
-    db.flush()
-    return row
+# record_admin_operation 已删（审计清扫）：与 log_service.write_admin_operation
+# 同职责的旧实现，被后者取代后遗留、全仓零调用——留着会让读者误以为审计日志
+# 有两条写路径。
