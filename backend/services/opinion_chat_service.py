@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -79,6 +80,25 @@ REPORT_INSTRUCTION = (
 )
 
 _RISK_RANK = {"high": 3, "medium": 2, "low": 1}
+
+
+def note_age_days(note: OpinionNote, now: datetime | None = None) -> float | None:
+    """帖子年龄（天）。基准必须是 UTC——库里 publish_time 是 naive UTC。
+
+    审计修复（2026-07-17）：原实现用 datetime.now()（本地 UTC+8）相减，
+    每条帖子的年龄被系统性多算 8 小时，run_trend 的窗口分半统计随之偏移。
+    now 可注入以便测试。
+    """
+
+    raw = (note.publish_time or note.publish_date or "").strip()
+    if not raw:
+        return None
+    try:
+        published = datetime.fromisoformat(raw[:19])
+    except ValueError:
+        return None
+    reference = now if now is not None else datetime.utcnow()
+    return max((reference - published).total_seconds() / 86400.0, 0.0)
 
 
 def _link_event_citations(cite_map: dict[str, dict[str, Any]], events: list[OpinionEvent]) -> None:
@@ -797,18 +817,6 @@ class OpinionChatService:
                 },
             }
 
-        def _note_age_days(note: OpinionNote) -> float | None:
-            raw = (note.publish_time or note.publish_date or "").strip()
-            if not raw:
-                return None
-            try:
-                from datetime import datetime
-
-                published = datetime.fromisoformat(raw[:19])
-            except ValueError:
-                return None
-            return max((datetime.now() - published).total_seconds() / 86400.0, 0.0)
-
         def run_trend(action_input: dict[str, Any]) -> dict[str, Any]:
             """发帖趋势：窗口内前后两半的发帖量对比（纯算术，不编造增长）。"""
 
@@ -818,7 +826,7 @@ class OpinionChatService:
             except (TypeError, ValueError):
                 window = 14
             window = max(window, 2)
-            ages = [age for age in (_note_age_days(note) for note in self._notes(keyword)) if age is not None]
+            ages = [age for age in (note_age_days(note) for note in self._notes(keyword)) if age is not None]
             in_window = [age for age in ages if age <= window]
             recent = sum(1 for age in in_window if age <= window / 2)
             earlier = len(in_window) - recent
@@ -829,7 +837,7 @@ class OpinionChatService:
                 "recent_half": recent,
                 "earlier_half": earlier,
                 "growing": recent > earlier and recent > 0,
-                "no_timestamp_notes": sum(1 for note in self._notes(keyword) if _note_age_days(note) is None),
+                "no_timestamp_notes": sum(1 for note in self._notes(keyword) if note_age_days(note) is None),
             }
 
         def run_sentiment_breakdown(action_input: dict[str, Any]) -> dict[str, Any]:

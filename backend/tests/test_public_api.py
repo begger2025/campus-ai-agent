@@ -89,13 +89,34 @@ class PublicEventsApiTest(PublicApiTestBase):
 
 
 class FeedbackApiTest(PublicApiTestBase):
+    """反馈是写接口：必须登录，身份取自登录态——客户端报什么名字都不算数。
+
+    审计发现（2026-07-17）：/api/feedback 曾是全站唯一无鉴权写端点，且 user_id
+    由请求体直接提供——任何人可匿名批量写入并冒充任意用户。
+    """
+
+    def _login_as(self, username: str = "tester") -> None:
+        from backend.admin_models import User
+        from backend.services.auth_service import get_current_user
+
+        app.dependency_overrides[get_current_user] = lambda: User(
+            id=7, username=username, role="user", status="active"
+        )
+
+    def test_submit_feedback_requires_login(self) -> None:
+        response = self.client.post("/api/feedback", json={"content": "匿名写入"})
+
+        self.assertEqual(response.status_code, 401)
+
     def test_submit_feedback_persists_pending_row(self) -> None:
+        self._login_as("tester")
         response = self.client.post(
             "/api/feedback",
             json={
                 "feedback_type": "correction",
                 "content": "事件描述有误",
-                "user_id": "tester",
+                # 客户端伪造的 user_id 必须被忽略——身份只认登录态
+                "user_id": "somebody_else",
                 "target_type": "public_event",
                 "target_id": str(self.published_id),
             },
@@ -108,8 +129,10 @@ class FeedbackApiTest(PublicApiTestBase):
         self.assertEqual(row.status, "pending")
         self.assertEqual(row.content, "事件描述有误")
         self.assertEqual(row.target_type, "public_event")
+        self.assertEqual(row.user_id, "tester", "身份必须来自登录态，客户端伪造的名字不落库")
 
     def test_empty_content_is_422(self) -> None:
+        self._login_as()
         response = self.client.post("/api/feedback", json={"content": ""})
 
         self.assertEqual(response.status_code, 422)

@@ -207,6 +207,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { ChatDotRound, CircleCheckFilled, InfoFilled } from '@element-plus/icons-vue'
 import DataSourceBadge from '@/components/DataSourceBadge.vue'
 import { fetchPublishedEvents } from '@/api/events'
@@ -357,6 +358,11 @@ onMounted(async () => {
   eventsLoading.value = true
   try {
     events.value = await fetchPublishedEvents()
+  } catch (error) {
+    // 无 catch 时加载失败是未处理的 Promise 拒绝，用户只看到永远空白（审计修复）
+    console.warn('[watch] 事件加载失败', error)
+    events.value = []
+    ElMessage.error(error.message || '事件加载失败，请刷新重试')
   } finally {
     eventsLoading.value = false
   }

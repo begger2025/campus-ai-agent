@@ -376,7 +376,9 @@ function resetFilters() {
   filters.keyword = ''
   filters.risk = 'all'
   filters.source = 'all'
-  filters.timeRange = '7d'
+  // 与初始值一致用 'all'：写 '7d' 会让"重置"几乎筛空列表——语料最新事件也在
+  // 50 天前，顶部注释论证过"默认 7 天是把数据问题伪装成产品问题"（审计修复）
+  filters.timeRange = 'all'
   filters.sortBy = 'heat'
   filters.quick = 'all'
   pagination.page = 1

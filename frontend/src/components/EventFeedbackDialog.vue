@@ -43,7 +43,6 @@
 import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/http'
-import { getCurrentUser } from '@/auth/session'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -76,17 +75,21 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
+    // 身份由后端从登录态取（审计修复：客户端报 user_id 可冒充任何人）
     await http.post('/feedback', {
       feedback_type: form.type,
       content: form.content.trim(),
-      user_id: getCurrentUser()?.username || 'anonymous',
       target_type: 'public_event',
       target_id: String(props.event?.raw_id ?? props.event?.id ?? ''),
     })
     ElMessage.success('反馈已提交，管理员会在运维中心处理')
     emit('update:modelValue', false)
   } catch (error) {
-    ElMessage.error(error.message || '反馈提交失败，请稍后重试')
+    if (error.response?.status === 401) {
+      ElMessage.warning('请先登录后再提交反馈')
+    } else {
+      ElMessage.error(error.message || '反馈提交失败，请稍后重试')
+    }
   } finally {
     submitting.value = false
   }
