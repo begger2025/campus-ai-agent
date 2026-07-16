@@ -195,7 +195,11 @@
           </el-button>
         </div>
 
-        <div v-if="!comments.items.length" class="comment-empty">还没有讨论，来说第一句</div>
+        <div v-if="commentsError" class="comment-empty comment-empty--error">
+          评论加载失败
+          <el-button size="small" link type="primary" @click="loadComments">重试</el-button>
+        </div>
+        <div v-else-if="!comments.items.length" class="comment-empty">还没有讨论，来说第一句</div>
         <article v-for="c in comments.items" :key="c.id" class="comment">
           <div class="comment-head">
             <b>{{ c.username }}</b>
@@ -313,6 +317,7 @@ const trendLine = computed(() => trendDots.value.map(p => `${p.x},${p.y}`).join(
 // —— 站内讨论 ——
 const loggedIn = ref(isAuthenticated())
 const comments = ref({ items: [], total: 0, voice: { total: 0, distribution: {} } })
+const commentsError = ref(false)
 const commentDraft = ref('')
 const replyDraft = ref('')
 const replyTo = ref(null)
@@ -324,10 +329,14 @@ function voiceLabel(key) {
 }
 
 async function loadComments() {
+  commentsError.value = false
   try {
     comments.value = await fetchEventComments(eventId.value)
-  } catch {
-    /* 评论加载失败不影响事件详情本身 */
+  } catch (error) {
+    // 加载失败不拦事件详情本身，但**必须和"没有评论"长得不一样**——
+    // 此前这里静默吞错，422 的评论区显示"还没有讨论，来说第一句"
+    console.warn('[event-detail] 评论加载失败', error)
+    commentsError.value = true
   }
 }
 
