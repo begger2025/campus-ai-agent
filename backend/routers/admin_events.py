@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import case
 from sqlalchemy.orm import Session, selectinload
 
+from backend.services.search_filters import LIKE_ESCAPE_CHAR, like_contains
 from backend.admin_models import User
 from backend.database import get_db
 from backend.models import EventPostLink, ProcessedPost, PublicEvent
@@ -93,12 +94,12 @@ def list_admin_events(
     if clean_status != "all":
         query = query.filter(PublicEvent.status == clean_status)
     if keyword:
-        like = f"%{keyword}%"
+        like = like_contains(keyword)
         query = query.filter(
-            (PublicEvent.title.like(like))
-            | (PublicEvent.summary.like(like))
-            | (PublicEvent.topic.like(like))
-            | (PublicEvent.source_keywords_json.like(like))
+            (PublicEvent.title.like(like, escape=LIKE_ESCAPE_CHAR))
+            | (PublicEvent.summary.like(like, escape=LIKE_ESCAPE_CHAR))
+            | (PublicEvent.topic.like(like, escape=LIKE_ESCAPE_CHAR))
+            | (PublicEvent.source_keywords_json.like(like, escape=LIKE_ESCAPE_CHAR))
         )
     if risk_level:
         query = query.filter(PublicEvent.risk_level == risk_level)

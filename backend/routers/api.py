@@ -11,6 +11,7 @@ from backend.database import DATABASE_URL, get_db
 from backend.models import EventPostLink, ProcessedPost, PublicEvent, RawPost
 from backend.schemas import PingData, PostItem, PostListData, ok
 from backend.services.auth_service import get_current_user
+from backend.services.search_filters import LIKE_ESCAPE_CHAR, like_contains
 
 # 「一行 public_events 此刻是什么状态」的唯一口径——事件看板和舆情助手共用。
 # 各写一份必然漂移成两个世界，而那正是这次改造要消灭的东西：改造前事件页展示
@@ -386,16 +387,16 @@ def list_sentiment_posts(
 
     keyword = (keyword or "").strip()
     if keyword:
-        like = f"%{keyword}%"
+        like = like_contains(keyword)
         # 匹配范围和搜索框的 placeholder 一字不差：标题、平台、作者。
         # 刻意**不**匹配 source_keyword（那是"爬虫搜索时用的词"，不是"帖子在讲什么"——
         # 拿它做匹配会把一堆凑数的泛化帖子捞进来，见 public_opinion_adapter 的注释）。
         query = query.filter(
             or_(
-                ProcessedPost.title.like(like),
-                ProcessedPost.platform.like(like),
-                ProcessedPost.author_name.like(like),
-                ProcessedPost.author.like(like),
+                ProcessedPost.title.like(like, escape=LIKE_ESCAPE_CHAR),
+                ProcessedPost.platform.like(like, escape=LIKE_ESCAPE_CHAR),
+                ProcessedPost.author_name.like(like, escape=LIKE_ESCAPE_CHAR),
+                ProcessedPost.author.like(like, escape=LIKE_ESCAPE_CHAR),
             )
         )
 

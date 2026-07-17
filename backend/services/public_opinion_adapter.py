@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from backend.services.search_filters import LIKE_ESCAPE_CHAR, like_contains
 from backend.admin_models import AgentRunLog
 from backend.agent.public_opinion_core import (
     AnalyzeRequest,
@@ -149,7 +150,7 @@ def _filtered_post_query(
     query = db.query(ProcessedPost).filter(ProcessedPost.excluded.is_(False))
     keyword = (keyword or "").strip()
     if keyword:
-        like = f"%{keyword}%"
+        like = like_contains(keyword)
         # 只匹配**帖子在讲什么**：标题、正文、用户打的话题标签。
         #
         # 曾经这里还 OR 上了 source_keyword 和 author_name，那是个严重的检索污染源：
@@ -168,9 +169,9 @@ def _filtered_post_query(
         # source_keyword 仍然照常入库，它有溯源价值——只是不能拿来做**内容**检索。
         query = query.filter(
             or_(
-                ProcessedPost.title.like(like),
-                ProcessedPost.content.like(like),
-                ProcessedPost.tags_json.like(like),
+                ProcessedPost.title.like(like, escape=LIKE_ESCAPE_CHAR),
+                ProcessedPost.content.like(like, escape=LIKE_ESCAPE_CHAR),
+                ProcessedPost.tags_json.like(like, escape=LIKE_ESCAPE_CHAR),
             )
         )
 

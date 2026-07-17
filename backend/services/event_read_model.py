@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from backend.services.search_filters import LIKE_ESCAPE_CHAR, like_contains
 from backend.agent.public_opinion_core.recency import (
     age_in_days,
     effective_lifecycle,
@@ -217,7 +218,7 @@ def query_published_events(
 
     keyword = (keyword or "").strip()
     if keyword:
-        like = f"%{keyword}%"
+        like = like_contains(keyword)
         # 代表帖命中 → 该事件命中（"上浮"）。子查询而非 join：join 会因为一个事件有多条
         # 代表帖命中而返回重复行。
         events_with_matching_note = (
@@ -225,16 +226,16 @@ def query_published_events(
             .join(ProcessedPost, ProcessedPost.id == EventPostLink.processed_post_id)
             .where(
                 or_(
-                    ProcessedPost.title.like(like),
-                    ProcessedPost.content.like(like),
-                    ProcessedPost.tags_json.like(like),
+                    ProcessedPost.title.like(like, escape=LIKE_ESCAPE_CHAR),
+                    ProcessedPost.content.like(like, escape=LIKE_ESCAPE_CHAR),
+                    ProcessedPost.tags_json.like(like, escape=LIKE_ESCAPE_CHAR),
                 )
             )
         )
         query = query.filter(
             or_(
-                PublicEvent.title.like(like),
-                PublicEvent.summary.like(like),
+                PublicEvent.title.like(like, escape=LIKE_ESCAPE_CHAR),
+                PublicEvent.summary.like(like, escape=LIKE_ESCAPE_CHAR),
                 PublicEvent.id.in_(events_with_matching_note),
             )
         )

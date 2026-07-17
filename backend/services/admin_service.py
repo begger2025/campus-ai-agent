@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from backend.services.search_filters import LIKE_ESCAPE_CHAR, like_contains
 from backend.admin_models import (
     AdminOperationLog,
     CrawlTask,
@@ -202,13 +203,13 @@ def list_raw_posts_data(
     if platform:
         query = query.filter(RawPost.platform == platform)
     if keyword:
-        like = f"%{keyword}%"
+        like = like_contains(keyword)
         query = query.filter(
             or_(
-                RawPost.title.like(like),
-                RawPost.content.like(like),
-                RawPost.source_keyword.like(like),
-                RawPost.author.like(like),
+                RawPost.title.like(like, escape=LIKE_ESCAPE_CHAR),
+                RawPost.content.like(like, escape=LIKE_ESCAPE_CHAR),
+                RawPost.source_keyword.like(like, escape=LIKE_ESCAPE_CHAR),
+                RawPost.author.like(like, escape=LIKE_ESCAPE_CHAR),
             )
         )
     if start_date:
@@ -497,8 +498,8 @@ def list_users_data(
 ) -> dict[str, Any]:
     query = db.query(User)
     if keyword:
-        like = f"%{keyword}%"
-        query = query.filter(or_(User.username.like(like), User.display_name.like(like)))
+        like = like_contains(keyword)
+        query = query.filter(or_(User.username.like(like, escape=LIKE_ESCAPE_CHAR), User.display_name.like(like, escape=LIKE_ESCAPE_CHAR)))
     if role:
         query = query.filter(User.role == role)
     if status:
