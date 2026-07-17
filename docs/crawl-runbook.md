@@ -46,7 +46,7 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 
 `--from-queue` 直接读 `crawl_task_queue` 里 `pending` 任务的关键词，与本轮爬取**天然同题**。
 脚本只采集 + 核验，**不写 `raw_posts`**：交付要人工在「后台管理 → 证据采集」审批。
-详见 [evidence-collector.md §7.1](evidence-collector.md)。
+详见 [evidence-collector.md §7.1](design/evidence-collector.md)。
 
 ---
 

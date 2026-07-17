@@ -1,6 +1,6 @@
 # 事件聚类的 LLM 精修（拆开误合并的大桶 + 具体化事件标题）
 
-> 消融实验结果（真实数据、可复现）：[event-clustering-llm-refine-ablation.md](./event-clustering-llm-refine-ablation.md)
+> 消融实验结果（真实数据、可复现）：[event-clustering-llm-refine-ablation.md](../experiments/event-clustering-llm-refine-ablation.md)
 > 由 `python scripts/ablation_event_refine.py` 生成。
 
 ## 1. 这是在修什么缺陷

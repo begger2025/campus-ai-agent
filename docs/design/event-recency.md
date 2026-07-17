@@ -1,6 +1,6 @@
 # 事件时效性衰减（近期舆情优先，严重性不随时间打折）
 
-> 消融实验结果（真实语料、可复现、不连数据库）：[event-recency-ablation.md](./event-recency-ablation.md)
+> 消融实验结果（真实语料、可复现、不连数据库）：[event-recency-ablation.md](../experiments/event-recency-ablation.md)
 > 由 `python scripts/ablation_event_recency.py` 生成。
 
 ## 1. 这是在修什么缺陷
@@ -154,7 +154,7 @@ priority = severity_weight(risk_level) × recency_weight
 
 ## 8. 效果（消融，真实语料 297 条，不连数据库）
 
-`python scripts/ablation_event_recency.py`（完整报告：[event-recency-ablation.md](./event-recency-ablation.md)）
+`python scripts/ablation_event_recency.py`（完整报告：[event-recency-ablation.md](../experiments/event-recency-ablation.md)）
 
 | 事件 | 代表时间 | 年龄 | 时效权重 | A 臂（时间盲）排名 | B 臂（时效）排名 |
 | --- | --- | ---: | ---: | ---: | ---: |

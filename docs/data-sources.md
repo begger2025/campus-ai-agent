@@ -28,7 +28,7 @@
 
 ## 已知异常（需记录）
 
-详细记录见 **[crawl-issues.md](crawl-issues.md)**（任务 5）。
+详细记录见 **[crawl-issues.md](archive/crawl/crawl-issues.md)**（任务 5）。
 
 | 现象 | 处理 |
 |------|------|
@@ -45,7 +45,7 @@
 
 输出：`data/samples/posts_YYYYMMDD_HHMMSS.json`
 
-导入后端（任务 4 对接说明见 **[crawl-handoff.md](crawl-handoff.md)**）：
+导入后端（任务 4 对接说明见 **[crawl-handoff.md](archive/crawl/crawl-handoff.md)**）：
 
 ```bash
 .venv\Scripts\python.exe scripts\import_posts.py data\samples\posts_week1_sample.json

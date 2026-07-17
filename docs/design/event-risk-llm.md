@@ -1,6 +1,6 @@
 # 事件级 LLM 风险研判（把严重性从关键词表和互动量里解放出来）
 
-> 消融实验结果（真实语料、可复现、不连数据库）：[event-risk-llm-ablation.md](./event-risk-llm-ablation.md)
+> 消融实验结果（真实语料、可复现、不连数据库）：[event-risk-llm-ablation.md](../experiments/event-risk-llm-ablation.md)
 > 由 `python scripts/ablation_event_risk.py` 生成。
 
 ## 1. 这是在修什么缺陷
@@ -113,7 +113,7 @@ RiskAssessor = Callable[[str, list[str]], Mapping[str, Any] | None]
 
 ## 4. 消融实验结果（真实语料 297 条，两臂共用同一批事件）
 
-完整表格见 [event-risk-llm-ablation.md](./event-risk-llm-ablation.md)。要点：
+完整表格见 [event-risk-llm-ablation.md](../experiments/event-risk-llm-ablation.md)。要点：
 
 | 事件 | 规则：排名 / 等级 / 分 | LLM：排名 / 等级 / 分 |
 | --- | --- | --- |

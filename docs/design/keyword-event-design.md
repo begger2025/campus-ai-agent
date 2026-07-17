@@ -1,6 +1,6 @@
 # 智能选题接入事件流水线：一半是算术，一半是 LLM
 
-> 消融实测报告：[`keyword-event-ablation.md`](keyword-event-ablation.md)（真实事件集，可复现）
+> 消融实测报告：[`keyword-event-ablation.md`](../experiments/keyword-event-ablation.md)（真实事件集，可复现）
 > 核心算法：`backend/agent/public_opinion_core/keyword_planner.py`、`llm_keywords.py`
 > 部署接线：`backend/services/keyword_suggestion_adapter.py`、`event_keywords.py`
 
