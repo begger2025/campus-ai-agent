@@ -78,6 +78,15 @@ LLM_CACHE_PATH = Path(os.getenv("LLM_CACHE_PATH") or (DATA_DIR / "llm_cache.json
 # sysu.edu.cn 判成 ConnectTimeout，真证据被当成"编造的链接"）。
 LLM_HTTP_TRUST_ENV = _read_bool("LLM_HTTP_TRUST_ENV", False)
 
+# ---- LLM 备胎端点（主通道失败自动切换，优先顺序 = OPENAI_* → LLM_FALLBACK_*） ----
+# 三项配齐才启用（model + base_url + key）；与主通道配置完全相同则视为未配置。
+# 切换发生在 llm_client.call_llm 内部：中转站（gpt-5.4）拥堵/欠费/超时耗尽重试后，
+# 自动改打备胎（如智谱 GLM 直连 https://open.bigmodel.cn/api/paas/v4）。
+# API key 缺省复用 EVIDENCE_GLM_API_KEY——项目里 GLM 只有一把 key，不重复粘贴。
+LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "")
+LLM_FALLBACK_BASE_URL = os.getenv("LLM_FALLBACK_BASE_URL", "")
+LLM_FALLBACK_API_KEY = os.getenv("LLM_FALLBACK_API_KEY") or os.getenv("EVIDENCE_GLM_API_KEY", "")
+
 REACT_MAX_STEPS = _read_int("REACT_MAX_STEPS", 5)
 
 EMBEDDING_ENABLED = _read_bool("EMBEDDING_ENABLED", True)

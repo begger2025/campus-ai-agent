@@ -120,6 +120,29 @@ class LlmEndpoint:
         )
 
 
+def _endpoint_chain(primary: LlmEndpoint) -> list[LlmEndpoint]:
+    """主通道在前、备胎在后的端点链。
+
+    备胎（LLM_FALLBACK_*，如智谱 GLM 直连）三项配齐才加入；与主通道配置完全相同
+    时不重复尝试。动态读 llm_config 模块属性而非顶部常量：测试要能 patch。
+    """
+
+    from backend.services import llm_config
+
+    chain = [primary]
+    fb = LlmEndpoint(
+        model=(getattr(llm_config, "LLM_FALLBACK_MODEL", "") or "").strip(),
+        api_key=(getattr(llm_config, "LLM_FALLBACK_API_KEY", "") or "").strip(),
+        base_url=(getattr(llm_config, "LLM_FALLBACK_BASE_URL", "") or "").strip(),
+    )
+    if fb.model and fb.api_key and fb.base_url and (
+        (fb.model, fb.api_key, fb.base_url)
+        != (primary.model, primary.api_key, primary.base_url)
+    ):
+        chain.append(fb)
+    return chain
+
+
 @dataclass(slots=True)
 class LlmCallResult:
     """Outcome of one logical LLM call (possibly multiple attempts).
@@ -282,62 +305,68 @@ def call_llm(
     if cache is _UNSET:
         cache = _default_cache()
     retries = LLM_MAX_RETRIES if max_retries is None else max_retries
-    endpoint = LlmEndpoint.resolve(model, api_key, base_url)
-    key = build_cache_key(endpoint.model, messages, temperature)
+    endpoints = _endpoint_chain(LlmEndpoint.resolve(model, api_key, base_url))
 
     _record_usage(calls=1)
     if cache is not None:
-        cached = cache.get(key)
-        if cached is not None:
-            _record_usage(cache_hits=1)
-            return LlmCallResult(content=cached.get("content"), cache_hit=True)
+        # 先查完**整条链**的缓存再碰网络：主通道挂掉期间，备胎答过的问题必须秒回，
+        # 而不是每次都先陪主通道空转完全部重试。
+        for endpoint in endpoints:
+            cached = cache.get(build_cache_key(endpoint.model, messages, temperature))
+            if cached is not None:
+                _record_usage(cache_hits=1)
+                return LlmCallResult(content=cached.get("content"), cache_hit=True)
 
     started = time.perf_counter()
     attempts = 0
     error = ""
-    for attempt in range(retries + 1):
-        attempts += 1
-        try:
-            content, token_usage = _send_chat_completion(messages, temperature, endpoint)
-        except Exception as exc:
-            error = type(exc).__name__
-            if error in NON_RETRYABLE_ERRORS or attempt == retries:
-                break
-            _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
-            continue
-
-        # 推理模型偶发只返回思考过程、content 为空——视为可重试故障。
-        if not (content or "").strip():
-            error = "EmptyResponse"
-            if attempt == retries:
-                break
-            _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
-            continue
-
-        duration_ms = _elapsed_ms(started)
-        result = LlmCallResult(
-            content=content,
-            attempts=attempts,
-            duration_ms=duration_ms,
-            prompt_tokens=int(token_usage.get("prompt_tokens") or 0),
-            completion_tokens=int(token_usage.get("completion_tokens") or 0),
-            total_tokens=int(token_usage.get("total_tokens") or 0),
-        )
-        _record_usage(
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            total_tokens=result.total_tokens,
-            duration_ms=duration_ms,
-        )
-        if cache is not None and content:
-            # 缓存是优化，不是事实来源：token 已经花掉、回答已经拿到，绝不能因为
-            # 一次写盘失败（磁盘满 / Windows 文件锁 / 权限）把它整个丢掉。
-            # 条目已在 JsonLlmCache 的内存字典里，下一次 set() 会把它一并写出去。
+    for endpoint in endpoints:
+        for attempt in range(retries + 1):
+            attempts += 1
             try:
-                cache.set(key, {"content": content})
-            except Exception:
-                pass
-        return result
+                content, token_usage = _send_chat_completion(messages, temperature, endpoint)
+            except Exception as exc:
+                error = type(exc).__name__
+                if error in NON_RETRYABLE_ERRORS or attempt == retries:
+                    break  # 本端点放弃 → 外层换下一个端点（备胎）
+                _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
+                continue
+
+            # 推理模型偶发只返回思考过程、content 为空——视为可重试故障。
+            if not (content or "").strip():
+                error = "EmptyResponse"
+                if attempt == retries:
+                    break
+                _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
+                continue
+
+            duration_ms = _elapsed_ms(started)
+            result = LlmCallResult(
+                content=content,
+                attempts=attempts,
+                duration_ms=duration_ms,
+                prompt_tokens=int(token_usage.get("prompt_tokens") or 0),
+                completion_tokens=int(token_usage.get("completion_tokens") or 0),
+                total_tokens=int(token_usage.get("total_tokens") or 0),
+            )
+            _record_usage(
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                total_tokens=result.total_tokens,
+                duration_ms=duration_ms,
+            )
+            if cache is not None and content:
+                # 缓存是优化，不是事实来源：token 已经花掉、回答已经拿到，绝不能因为
+                # 一次写盘失败（磁盘满 / Windows 文件锁 / 权限）把它整个丢掉。
+                # 键用**实际答题的端点**：备胎的答案存备胎的键，换模型必须换 key。
+                try:
+                    cache.set(
+                        build_cache_key(endpoint.model, messages, temperature),
+                        {"content": content},
+                    )
+                except Exception:
+                    pass
+            return result
 
     duration_ms = _elapsed_ms(started)
     _record_usage(errors=1, duration_ms=duration_ms)
@@ -374,79 +403,84 @@ def call_llm_stream(
     if cache is _UNSET:
         cache = _default_cache()
     retries = LLM_MAX_RETRIES if max_retries is None else max_retries
-    endpoint = LlmEndpoint.resolve(model, api_key, base_url)
-    key = build_cache_key(endpoint.model, messages, temperature)
+    endpoints = _endpoint_chain(LlmEndpoint.resolve(model, api_key, base_url))
     outcome = outcome if outcome is not None else LlmCallResult()
 
     _record_usage(calls=1)
     if cache is not None:
-        cached = cache.get(key)
-        if cached is not None:
-            _record_usage(cache_hits=1)
-            content = cached.get("content") or ""
-            outcome.content = content
-            outcome.cache_hit = True
-            if content:
-                yield content  # 缓存命中：一次性给出，无需假装逐字
-            return
+        # 与阻塞版一致：整条链的缓存都查一遍再碰网络（备胎答过的直接秒回）。
+        for endpoint in endpoints:
+            cached = cache.get(build_cache_key(endpoint.model, messages, temperature))
+            if cached is not None:
+                _record_usage(cache_hits=1)
+                content = cached.get("content") or ""
+                outcome.content = content
+                outcome.cache_hit = True
+                if content:
+                    yield content  # 缓存命中：一次性给出，无需假装逐字
+                return
 
     started = time.perf_counter()
     error = ""
-    for attempt in range(retries + 1):
-        outcome.attempts = attempt + 1
-        pieces: list[str] = []
-        token_usage: dict[str, int] = {}
-        try:
-            for delta, usage in _send_chat_completion_stream(messages, temperature, endpoint):
-                if usage:
-                    token_usage = usage
-                if not delta:
-                    continue
-                pieces.append(delta)
-                yield delta
-        except Exception as exc:
-            error = type(exc).__name__
-            if pieces:
-                # 已经吐给用户了：不能重试，也不能装作没事。
-                outcome.content = "".join(pieces)
-                outcome.error = error
-                outcome.truncated = True
-                outcome.duration_ms = _elapsed_ms(started)
-                _record_usage(errors=1, duration_ms=outcome.duration_ms)
-                return
-            if error in NON_RETRYABLE_ERRORS or attempt == retries:
-                break
-            _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
-            continue
-
-        content = "".join(pieces)
-        # 推理模型偶发只返回思考过程、一个字都不吐——与非流式路径一致，视为可重试故障。
-        if not content.strip():
-            error = "EmptyResponse"
-            if attempt == retries:
-                break
-            _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
-            continue
-
-        outcome.content = content
-        outcome.duration_ms = _elapsed_ms(started)
-        outcome.prompt_tokens = int(token_usage.get("prompt_tokens") or 0)
-        outcome.completion_tokens = int(token_usage.get("completion_tokens") or 0)
-        outcome.total_tokens = int(token_usage.get("total_tokens") or 0)
-        _record_usage(
-            prompt_tokens=outcome.prompt_tokens,
-            completion_tokens=outcome.completion_tokens,
-            total_tokens=outcome.total_tokens,
-            duration_ms=outcome.duration_ms,
-        )
-        if cache is not None:
-            # 与 call_llm 同一个 key：消融脚本（非流式）写的缓存，聊天（流式）能直接命中。
-            # 缓存写盘失败绝不能弄丢已经付过钱的回答。
+    for endpoint in endpoints:
+        for attempt in range(retries + 1):
+            outcome.attempts += 1
+            pieces: list[str] = []
+            token_usage: dict[str, int] = {}
             try:
-                cache.set(key, {"content": content})
-            except Exception:
-                pass
-        return
+                for delta, usage in _send_chat_completion_stream(messages, temperature, endpoint):
+                    if usage:
+                        token_usage = usage
+                    if not delta:
+                        continue
+                    pieces.append(delta)
+                    yield delta
+            except Exception as exc:
+                error = type(exc).__name__
+                if pieces:
+                    # 已经吐给用户了：不能重试也不能换端点（会从头重写），只能如实标记截断。
+                    outcome.content = "".join(pieces)
+                    outcome.error = error
+                    outcome.truncated = True
+                    outcome.duration_ms = _elapsed_ms(started)
+                    _record_usage(errors=1, duration_ms=outcome.duration_ms)
+                    return
+                if error in NON_RETRYABLE_ERRORS or attempt == retries:
+                    break  # 本端点放弃 → 外层换备胎（重试窗口仍在第一个字之前）
+                _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
+                continue
+
+            content = "".join(pieces)
+            # 推理模型偶发只返回思考过程、一个字都不吐——与非流式路径一致，视为可重试故障。
+            if not content.strip():
+                error = "EmptyResponse"
+                if attempt == retries:
+                    break
+                _sleep(LLM_RETRY_BASE_SECONDS * (2**attempt))
+                continue
+
+            outcome.content = content
+            outcome.duration_ms = _elapsed_ms(started)
+            outcome.prompt_tokens = int(token_usage.get("prompt_tokens") or 0)
+            outcome.completion_tokens = int(token_usage.get("completion_tokens") or 0)
+            outcome.total_tokens = int(token_usage.get("total_tokens") or 0)
+            _record_usage(
+                prompt_tokens=outcome.prompt_tokens,
+                completion_tokens=outcome.completion_tokens,
+                total_tokens=outcome.total_tokens,
+                duration_ms=outcome.duration_ms,
+            )
+            if cache is not None:
+                # 与 call_llm 同一套端点键：消融脚本（非流式）写的缓存，聊天（流式）能命中。
+                # 缓存写盘失败绝不能弄丢已经付过钱的回答。
+                try:
+                    cache.set(
+                        build_cache_key(endpoint.model, messages, temperature),
+                        {"content": content},
+                    )
+                except Exception:
+                    pass
+            return
 
     outcome.error = error
     outcome.duration_ms = _elapsed_ms(started)
