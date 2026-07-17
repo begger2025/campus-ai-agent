@@ -36,3 +36,14 @@ uploads/
 
 # 清理脚本的删除回滚备份（运行产物，purge_offtopic_posts.py 生成）
 data/backup_offtopic_posts.json
+
+# ── AI 开发工具 / IDE 配置（非项目文件，不入交付库）──
+.claude/
+.cursor/
+.gemini/
+.agents/
+.impeccable/
+.superpowers/
+.vscode/
+.qoder/
+.idea/
