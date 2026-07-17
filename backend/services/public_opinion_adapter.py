@@ -246,17 +246,8 @@ def query_agent_rows(
     return agent_rows
 
 
-def load_opinion_notes_from_db(
-    db: Session,
-    *,
-    keyword: str = "",
-    platforms: list[str] | None = None,
-    limit: int = 50,
-) -> list[OpinionNote]:
-    """Load processed_posts and convert them to portable OpinionNote objects."""
-
-    rows = query_agent_rows(db, keyword=keyword, platforms=platforms, limit=limit)
-    return processed_posts_to_notes(rows)
+# load_opinion_notes_from_db 已删（审计清扫）：生产/测试零调用，早被
+# query_agent_rows（带剔除过滤 + 评论装配）取代——留着让人以为存在第二条取数路径。
 
 
 def exclude_curated_member_rows(

@@ -237,12 +237,11 @@ def processed_post_to_note(row: Mapping[str, Any] | Any, warnings: list[str] | N
 
 def processed_posts_to_notes(rows: Iterable[Mapping[str, Any] | Any], warnings: list[str] | None = None) -> list[OpinionNote]:
     notes: list[OpinionNote] = []
-    for index, row in enumerate(rows, start=1):
+    for row in rows:
         note = processed_post_to_note(row, warnings=warnings)
+        # note is None 时具体原因已由 processed_post_to_note 记进 warnings（审计清扫：
+        # 原来这里有一段 if...pass 的 no-op 残留，什么都不做，已删）
         if note is None:
-            if warnings is not None and (not warnings or f"row #{index}" not in warnings[-1]):
-                # The concrete reason is usually recorded by processed_post_to_note.
-                pass
             continue
         notes.append(note)
     return notes
