@@ -18,11 +18,12 @@ HTTP 客户端一律由调用方注入，与本包"没有注入客户端 = 不�
 from __future__ import annotations
 
 import html as html_module
+import ipaddress
 import json
 import re
 import socket
 import ssl
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -57,6 +58,62 @@ _WHITESPACE = re.compile(r"\s+")
 # 页面明确不存在，这是死链/编造链接的硬证据（410 Gone 同理）。其余非 2xx（401/403/429/5xx）
 # 多半是反爬保护或服务端故障，真实页面天天返回 403——据此驳回等于销毁真证据。
 _DEAD_PAGE_STATUSES = frozenset({404, 410})
+
+# 主机名直接拦截（无需解析）：localhost 及其常见别名。
+_BLOCKED_HOSTNAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
+
+
+def private_network_reason(
+    url: str, *, resolver: Callable[[str, Any], list] | None = None
+) -> str | None:
+    """URL 主机解析到内网/环回/链路本地/保留地址时返回拒绝理由；公网返回 None。
+
+    SSRF 防护（审计修复）：核验会对 provider 返回的任意 URL 发起服务端 GET，
+    provider 可能编造或恶意返回 http://127.0.0.1 / 169.254.169.254（云元数据）等
+    内网地址。抓取前先解析主机、逐个 IP 判定，命中内网即拒绝、绝不发请求。
+
+    已知残余：本函数只检初始 URL 的主机；client 仍 follow_redirects，理论上公网
+    URL 可 302 跳内网。但 provider 的链接要先过 scope 门（要求 sysu 域名），且直连
+    内网这一现实主向量已被封住。彻底防护需逐跳复检（改动面大，留待后续）。
+    """
+
+    host = (urlsplit(url).hostname or "").strip().lower()
+    if not host:
+        return "证据链接缺少可解析的主机名"
+    if host in _BLOCKED_HOSTNAMES:
+        return f"证据链接指向本机（{host}），出于安全不予抓取"
+
+    resolve = resolver or socket.getaddrinfo
+    # 主机可能就是 IP 字面量，也可能是域名——两者都要解析成具体 IP 判定。
+    try:
+        literal = ipaddress.ip_address(host)
+        candidates: list[ipaddress._BaseAddress] = [literal]
+    except ValueError:
+        try:
+            infos = resolve(host, None)
+        except Exception:
+            # 解析不出来：交给正常抓取路径（DNS 错误 → 域名不存在 → rejected），本函数不拦
+            return None
+        candidates = []
+        for info in infos:
+            sockaddr = info[4] if len(info) > 4 else None
+            addr = sockaddr[0] if sockaddr else None
+            if not addr:
+                continue
+            try:
+                candidates.append(ipaddress.ip_address(addr))
+            except ValueError:
+                return f"证据链接解析出无法识别的地址（{addr}）"
+        if not candidates:
+            return "证据链接的主机无法解析到任何地址"
+
+    for ip in candidates:
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+        ):
+            return f"证据链接指向内网/保留地址（{ip}），出于安全不予抓取；需人工核对"
+    return None
 
 # 审核员会一字不差地读到这句话，所以必须写清楚"这不是对链接真伪的判断"。
 _NOT_A_FABRICATION_VERDICT = "不能据此认定该链接是编造的，请人工打开链接确认"
@@ -172,10 +229,12 @@ class UrlFetchVerifier:
         *,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         user_agent: str = DEFAULT_USER_AGENT,
+        resolver: Callable[[str, Any], list] | None = None,
     ) -> None:
         self._client = client
         self._timeout = timeout
         self._user_agent = user_agent
+        self._resolver = resolver  # 仅测试注入；生产用 socket.getaddrinfo
 
     @property
     def available(self) -> bool:
@@ -196,6 +255,12 @@ class UrlFetchVerifier:
                 status="rejected",
                 reasons=[f"证据链接不是可访问的 HTTP(S) 地址：{candidate[:200] or '<空>'}"],
             )
+
+        # SSRF 防护：抓取前拦内网/环回/保留地址（needs_review 而非 rejected——
+        # 内网链接不是"编造"，只是不该由服务器去抓，交人工核对）
+        ssrf_reason = private_network_reason(candidate, resolver=self._resolver)
+        if ssrf_reason is not None:
+            return FetchVerificationResult(status="needs_review", reasons=[ssrf_reason])
 
         try:
             response = await self._client.get(

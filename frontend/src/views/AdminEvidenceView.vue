@@ -205,7 +205,7 @@
             <tr v-for="item in items.rows" :key="item.id">
               <td>{{ item.id }}</td>
               <td>
-                <el-link :href="item.source_url" target="_blank" type="primary">
+                <el-link :href="safeHref(item.source_url)" target="_blank" rel="noopener noreferrer" type="primary">
                   {{ item.source_domain || '未知来源' }} ↗
                 </el-link>
               </td>
@@ -364,11 +364,12 @@
           审核备注（{{ detail.item.reviewed_by || '—' }}）：{{ detail.item.review_note }}
         </p>
         <div class="detail-links">
-          <el-link :href="detail.item.source_url" target="_blank" type="primary">原始链接 ↗</el-link>
+          <el-link :href="safeHref(detail.item.source_url)" target="_blank" rel="noopener noreferrer" type="primary">原始链接 ↗</el-link>
           <el-link
             v-if="detail.item.canonical_url && detail.item.canonical_url !== detail.item.source_url"
-            :href="detail.item.canonical_url"
+            :href="safeHref(detail.item.canonical_url)"
             target="_blank"
+            rel="noopener noreferrer"
             type="info"
           >规范化链接 ↗</el-link>
         </div>
@@ -380,6 +381,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { isSafeUrl } from '@/utils/citations'
 import {
   createEvidenceRun,
   deliverEvidenceRun,
@@ -390,6 +392,12 @@ import {
   reviewEvidenceItem,
   verifyEvidenceItem,
 } from '@/api/evidence'
+
+// 证据链接是联网大模型吐出的，可能是幻觉编造甚至 javascript: 伪协议——
+// 只放行 http(s)，其余渲染成不可点（与全站其它外链同一道闸，审计修复）
+function safeHref(url) {
+  return isSafeUrl(url) ? url : undefined
+}
 
 const RUN_PAGE_SIZE = 10
 const ITEM_PAGE_SIZE = 10
