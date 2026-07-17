@@ -124,10 +124,18 @@ def _endpoint_chain(primary: LlmEndpoint) -> list[LlmEndpoint]:
     """主通道在前、备胎在后的端点链。
 
     备胎（LLM_FALLBACK_*，如智谱 GLM 直连）三项配齐才加入；与主通道配置完全相同
-    时不重复尝试。动态读 llm_config 模块属性而非顶部常量：测试要能 patch。
+    时不重复尝试。动态读配置模块属性而非顶部常量：测试要能 patch。
+
+    双仓兼容：本文件在 sync 白名单里，同步脚本只改写
+    `from backend.services.llm_config import ...` 这类**带成员名**的导入；
+    这里要拿模块对象本身，所以显式二选一——主仓是 backend.services.llm_config，
+    子仓（同步后）没有 backend 包，配置在 app.config。
     """
 
-    from backend.services import llm_config
+    try:
+        from backend.services import llm_config
+    except ModuleNotFoundError:  # 子仓：配置模块是 app.config
+        from app import config as llm_config
 
     chain = [primary]
     fb = LlmEndpoint(
