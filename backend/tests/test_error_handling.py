@@ -65,8 +65,17 @@ class GlobalExceptionHandlerTest(unittest.TestCase):
         self.assertIn("RuntimeError", rows[0].message)
 
     def test_http_exceptions_are_not_swallowed(self) -> None:
-        # 业务 HTTPException（如 404）不应被全局兜底改写成 500
-        app.dependency_overrides.clear()
+        # 业务 HTTPException（如 401）不应被全局兜底改写成 500。
+        # 用内存库替换 get_db：本测试验证的是"异常处理器不吞 HTTPException"，
+        # 不应依赖真实数据库可达（曾因共享 RDS 抖动假红，违反零网络纪律）。
+        def good_db():
+            db = self.session_factory()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = good_db
         response = self.client.post("/api/auth/login", json={"username": "x", "password": "y"})
 
         self.assertEqual(response.status_code, 401)

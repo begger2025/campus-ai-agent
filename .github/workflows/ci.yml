@@ -1,0 +1,69 @@
+# 持续集成：与本地 check.ps1 同口径的三步回归（后端 / 爬虫 / 前端构建）。
+# 仓库推送到 GitHub 远端后自动生效；在此之前，本地等价命令是 .\check.ps1。
+# 说明：
+# - 全部测试零网络依赖（项目纪律），CI 无需任何密钥/外部服务；
+# - sentence-transformers 是可选重依赖（约 500MB），CI 不安装，
+#   embedding 相关测试用 find_spec 守卫 + 假模块，无 torch 也全绿；
+# - Agent 评测子项目是独立仓库，由其自身测试流程覆盖，不在本工作流内。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: 后端 unittest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+      - name: 运行测试
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -s backend/tests -t . -q
+
+  crawler-tests:
+    name: 爬虫 pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: 安装依赖
+        working-directory: MediaCrawler
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: 运行测试
+        working-directory: MediaCrawler
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m pytest tests -q
+
+  frontend-build:
+    name: 前端构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+      - name: 构建
+        working-directory: frontend
+        run: npm run build
