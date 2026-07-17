@@ -1,103 +1,52 @@
 # frontend — Campus AI Agent 前端
 
-基于 **Vue 3 + Element Plus + Vite** 构建的校园智能助手前端界面。
+基于 **Vue 3 (Composition API) + Element Plus + Vite** 的校园舆情分析平台前端，
+共 19 个页面，覆盖公共门户、舆情业务与管理后台三块。
 
 ## 技术栈
 
 | 技术 | 用途 |
 |------|------|
 | Vue 3 (Composition API) | 核心框架 |
-| Vue Router 4 | 前端路由 |
-| Element Plus | UI 组件库（中文） |
-| Axios | HTTP 请求 |
+| Vue Router 4 | 前端路由 + 登录/角色守卫 |
+| Element Plus（含 icons-vue） | UI 组件库 |
+| Axios | HTTP 请求（相对路径 `/api`，开发经 Vite 代理） |
+| GSAP | 首页/登录页动效 |
 | Vite 5 | 构建工具 / 开发服务器 |
 
 ## 目录结构
 
 ```text
-frontend/
-├── index.html            # 入口 HTML
-├── package.json          # 依赖配置
-├── vite.config.js        # Vite 配置（含后端代理）
-└── src/
-    ├── main.js           # 应用入口，注册 Element Plus
-    ├── App.vue           # 根组件（侧边导航 + 布局）
-    ├── router/
-    │   └── index.js      # 路由配置（3 个页面）
-    ├── views/
-    │   ├── HomeView.vue       # 首页仪表盘
-    │   ├── SentimentView.vue  # 舆情分析页
-    │   └── PersonalView.vue   # 个人事项页
-    ├── components/
-    │   └── StatCard.vue  # 统计卡片通用组件
-    ├── api/
-    │   └── posts.js      # 后端接口封装（/posts、/health）
-    ├── mock/
-    │   └── data.js       # 演示用 mock 数据（后端未启动时降级）
-    └── assets/
-        └── style.css     # 全局样式 / CSS 变量
+frontend/src/
+├── main.js / App.vue     # 应用入口
+├── router/               # 路由 + 鉴权守卫（登录态、管理员角色）
+├── layouts/              # MainLayout：侧边导航 + 顶栏
+├── views/                # 19 个页面
+│   ├── HomeView / LoginView / NotFoundView / ForbiddenView
+│   ├── SentimentView / OpinionView / EventListView / EventDetailView
+│   ├── AgentChatView（舆情助手对话，流式）
+│   ├── PersonalView / SubmissionView
+│   └── Admin*（8 个管理后台页：总览/事件/证据/评论/投稿/关键词/原始帖/运维）
+├── api/                  # 9 个接口模块（http.js 统一封装拦截器）
+├── components/           # 通用组件
+├── utils/                # citations（引用编号解析）等
+├── auth/ config/ constants/ directives/
+└── assets/
 ```
 
-## 页面说明
+## 数据原则
 
-### 首页（`/`）
-- 欢迎横幅 + 在线状态提示
-- 6 张统计卡片（总帖数、高风险、新增线索、课程、DDL、后端状态）
-- 近 7 天舆情趋势迷你柱状图
-- 最新帖子列表（对接后端 `/posts` 接口，后端不在线时自动切换 mock）
-- 高风险预警快览 + 今日事务摘要
+前端**不含任何 mock 数据**：后端不可用时如实报错，不用假数据顶替
+（见 `api/events.js` 的 no-fake-fallback 注释）。图表、列表、报告全部来自 `/api` 真实响应。
 
-### 舆情分析页（`/sentiment`）
-- 风险统计卡片（高/中/低风险数量）
-- 搜索 + 风险等级 + 状态多维筛选
-- 帖子列表（分页，点击高亮）
-- 右侧热点事件卡片（点击展开 AI 摘要、风险原因、处理建议）
-
-### 个人事项页（`/personal`）
-- 5 张统计卡片（课程/作业/DDL/提醒/活动）
-- 今日日程时间轴
-- AI 每日建议（支持一键刷新）
-- 本周课表缩略视图（7 天网格）
-- 作业与 DDL 列表（优先级标签 + 状态）
-- 活动推荐卡片（加入日程功能）
-- 提醒中心
-
-## 本地启动
-
-> 确保已安装 Node.js 18+
+## 运行
 
 ```bash
-# 1. 进入前端目录
-cd campus-ai-agent/frontend
+# 开发（推荐在项目根直接跑 dev.bat：前端 5173 + 后端 9000 一起起）
+npm run dev        # 仅前端，Vite 代理 /api → 127.0.0.1:9000
 
-# 2. 安装依赖
-npm install
-
-# 3. 启动开发服务器（默认 http://localhost:5173）
-npm run dev
+# 生产构建（产物 dist/，由后端静态挂载或 Nginx 服务）
+npm run build
 ```
 
-如果后端服务（FastAPI，端口 9000）已启动，前端会自动代理 `/posts`、`/health` 等接口；否则自动降级到 mock 数据展示。
-
-## 构建
-
-```bash
-npm run build    # 产物输出到 dist/
-npm run preview  # 本地预览构建结果
-```
-
-## 接口约定
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 健康检查，返回 `{ status: "ok" }` |
-| GET | `/posts?page=1&page_size=20` | 获取帖子列表 |
-
-## 第一周交付物清单
-
-- [x] 页面草图（见 `docs/` 目录）
-- [x] 前端项目骨架（Vue 3 + Vite + Element Plus）
-- [x] 路由（3 个核心页面）
-- [x] Mock 数据展示（首页 + 舆情 + 个人事项）
-- [x] 后端接口对接（/posts，含降级）
-- [x] 本 README
+项目根的 `check.ps1` 全量回归包含本目录的生产构建（构建通过 = 模板/脚本静态检查通过）。

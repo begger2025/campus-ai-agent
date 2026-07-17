@@ -2,7 +2,7 @@
 保存百度贴吧登录态（只需做一次）。
 
 用法:
-  save_tieba_login.bat
+  scripts\bat\save_tieba_login.bat
 
 登录后会在目标贴吧版块停留，再按回车保存。
 """
@@ -94,7 +94,7 @@ def main():
         browser.close()
 
     print("已保存:", TIEBA_STATE_FILE)
-    print("然后运行 crawl.bat 采集数据")
+    print("然后运行 scripts\\bat\\crawl.bat 采集数据")
 
 
 if __name__ == "__main__":

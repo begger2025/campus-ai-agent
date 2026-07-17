@@ -23,7 +23,8 @@ echo "==> [3/5] 安装后端依赖（轻量档：requirements.txt 不含 torch�
 echo "==> [4/5] 数据库结构校验（幂等，仅建缺失的表；不动存量数据）"
 # 共享 RDS 已建表并有数据时此步为空操作；新库/新表才生效。
 # 若不想让部署脚本碰库，注释掉下面一行，改为人工执行迁移。
-./.venv/bin/python scripts/init_db.py || echo "  (init_db 跳过或已是最新)"
+# 失败必须中止（set -e）：库都没建对还重启服务，只会把故障推迟到用户面前。
+./.venv/bin/python scripts/init_db.py
 
 echo "==> [5/5] 重启后端 + 重载 Nginx"
 sudo systemctl restart campus-backend

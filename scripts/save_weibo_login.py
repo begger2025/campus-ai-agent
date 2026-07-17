@@ -37,7 +37,7 @@ def main():
         browser.close()
 
     print("已保存:", WEIBO_STATE_FILE)
-    print("现在可以运行 crawl.bat 进行真实采集")
+    print("现在可以运行 scripts\\bat\\crawl.bat 进行真实采集")
 
 
 if __name__ == "__main__":

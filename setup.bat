@@ -13,7 +13,7 @@ if errorlevel 1 goto python_missing
 goto install_deps
 
 :python_missing
-echo ERROR: Python not found. Install Python 3.12 or newer.
+echo ERROR: Python not found. Install Python 3.11 or newer.
 pause
 exit /b 1
 
@@ -72,6 +72,6 @@ echo Setup finished.
 echo   setup.bat  - first time only
 echo   run.bat    - open http://127.0.0.1:9000
 echo   dev.bat    - dev mode port 5173 and 9000
-echo   crawl.bat  - run crawler
+echo   scripts\bat\crawl.bat  - run crawler
 echo.
 pause

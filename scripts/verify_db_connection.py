@@ -69,7 +69,7 @@ def main() -> int:
             if t in names:
                 print(f"[OK] admin table present: {t}")
             elif driver == "mysql":
-                print(f"[WARN] missing admin table {t} — run init_db.bat (work package 1)")
+                print(f"[WARN] missing admin table {t} — run scripts\\bat\\init_db.bat")
 
         db = SessionLocal()
         try:
@@ -81,7 +81,7 @@ def main() -> int:
             db.close()
     except Exception as e:
         print(f"[WARN] Connected but raw_posts query failed: {e}")
-        print("       Backend lead may need to run: init_db.bat")
+        print("       Backend lead may need to run: scripts\\bat\\init_db.bat")
 
     print()
     if driver == "mysql" and host not in ("localhost", "127.0.0.1"):

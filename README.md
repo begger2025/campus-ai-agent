@@ -189,7 +189,7 @@ cd .. && .venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --limit 0 -
 
 | 层次 | 技术 |
 |------|------|
-| 后端 | Python 3.12 · FastAPI · SQLAlchemy · MySQL（SQLite 兜底）· JWT（PBKDF2 口令哈希） |
+| 后端 | Python 3.11+（CI 基线 3.11，本地开发 3.12 亦可）· FastAPI · SQLAlchemy · MySQL（SQLite 兜底）· JWT（PBKDF2 口令哈希） |
 | 前端 | Vue 3 · Element Plus · Vue Router · Axios · Vite · GSAP |
 | 爬虫 | Python · Playwright（MediaCrawler，5 平台） |
 | AI | OpenAI 兼容 LLM（含备胎链）· 智谱 GLM 联网检索 · sentence-transformers 语义嵌入（可选）· 规则引擎兜底 |
@@ -246,5 +246,5 @@ cd .. && .venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --limit 0 -
   界面以"站内搜索"为主入口（不依赖凭证、长期有效），直链为次入口并附失效说明；重新采集后恢复。
 - 演示数据为离线快照，首页趋势图等以"最近数据日"为时间锚点，界面有标注。
 - 复杂对比类问题走 ReAct 多步推理，耗时约 15 秒~2 分钟，对话页有进度提示。
-- 会话记忆存于进程内 + 本地 SQLite，服务重启后多轮上下文清空（重新提问即可）。
+- 会话记忆存于进程内并写穿本地 SQLite，服务重启后自动从持久层恢复（"那件事后来呢"接得上话）；仅当持久层损坏时才退回"重启失忆"。
 - 部署实例默认轻量档（不装 torch）：语义补召回降级为字面搜索，其余 AI 功能全在。

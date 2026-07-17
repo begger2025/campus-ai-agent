@@ -36,7 +36,7 @@ USER_AGENT = os.getenv("CRAWLER_USER_AGENT", MOBILE_UA)
 WEIBO_COOKIE = os.getenv("WEIBO_COOKIE", "").strip()
 WEIBO_STATE_FILE = COOKIES_DIR / "weibo_state.json"
 
-# 贴吧：推荐 save_tieba_login.bat；或粘贴浏览器 Cookie（需含 BDUSS）
+# 贴吧：推荐 scripts/bat/save_tieba_login.bat；或粘贴浏览器 Cookie（需含 BDUSS）
 TIEBA_COOKIE = os.getenv("TIEBA_COOKIE", "").strip()
 TIEBA_STATE_FILE = COOKIES_DIR / "tieba_state.json"
 

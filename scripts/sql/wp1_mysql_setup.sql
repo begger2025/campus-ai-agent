@@ -15,5 +15,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES
 
 FLUSH PRIVILEGES;
 
--- Main project tables: created by init_db.bat (Python ORM), not this file.
+-- Main project tables: created by scripts/bat/init_db.bat (Python ORM), not this file.
 -- MediaCrawler tables: imported via mysqldump from media_crawler (crawler lead).

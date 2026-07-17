@@ -286,7 +286,7 @@ def _from_playwright(kw: str, limit: int) -> list[CrawlPost]:
         return []
 
     if not TIEBA_STATE_FILE.is_file() and not TIEBA_COOKIE:
-        logger.info("未找到贴吧登录态，请先运行 save_tieba_login.bat")
+        logger.info("未找到贴吧登录态，请先运行 scripts/bat/save_tieba_login.bat")
         return []
 
     forum_url = f"{BASE}/f?kw={quote(kw)}&ie=utf-8"
@@ -367,7 +367,7 @@ def _from_playwright(kw: str, limit: int) -> list[CrawlPost]:
 
             if _is_security_page(html):
                 logger.warning(
-                    "贴吧仍遇安全验证 (kw=%s)。请 save_tieba_login.bat 在「%s」吧保存登录态，"
+                    "贴吧仍遇安全验证 (kw=%s)。请 scripts/bat/save_tieba_login.bat 在「%s」吧保存登录态，"
                     "并保持 CRAWLER_HEADLESS=false",
                     kw,
                     kw,
@@ -423,7 +423,7 @@ def crawl_tieba(kw: str = TIEBA_KW, limit: int = TIEBA_LIMIT) -> list[CrawlPost]
     posts: list[CrawlPost] = []
 
     if not TIEBA_STATE_FILE.is_file() and not TIEBA_COOKIE:
-        logger.warning("未配置贴吧登录态，请先运行 save_tieba_login.bat")
+        logger.warning("未配置贴吧登录态，请先运行 scripts/bat/save_tieba_login.bat")
 
     keywords = _keyword_candidates()
     if kw and kw not in keywords:
