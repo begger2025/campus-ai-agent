@@ -11,8 +11,8 @@
   │crawler│       │campus.db│       │ REST API │     │(规划中)   │    │Element+ │
   └─────┘         └────────┘        └──────────┘     └──────────┘     └──────────┘
        ↑                                  ↑                                    ↑
-  crawl.bat                         run.bat / dev.bat                    run.bat / dev.bat
-  import_latest.bat                 :9000                                :9000 或 :5173
+  scripts/bat/crawl.bat                         run.bat / dev.bat                    run.bat / dev.bat
+  scripts/bat/import_latest.bat                 :9000                                :9000 或 :5173
 ```
 
 ## 目录职责
@@ -30,9 +30,9 @@
 ## 数据流（最小闭环）
 
 ```text
-1. save_weibo_login.bat  →  data/cookies/weibo_state.json
-2. crawl.bat             →  data/samples/posts_YYYYMMDD_HHMMSS.json
-3. import_latest.bat     →  data/campus.db (raw_posts 表)
+1. scripts/bat/save_weibo_login.bat  →  data/cookies/weibo_state.json
+2. scripts/bat/crawl.bat             →  data/samples/posts_YYYYMMDD_HHMMSS.json
+3. scripts/bat/import_latest.bat     →  data/campus.db (raw_posts 表)
 4. run.bat               →  GET /posts → 前端首页 & 舆情页展示
 ```
 

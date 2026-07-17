@@ -47,3 +47,11 @@ data/backup_offtopic_posts.json
 .vscode/
 .qoder/
 .idea/
+
+# ── 运行时数据 / 大体积产物（不入版本库，可由脚本重建）──
+/data/llm_cache.json
+/data/public_opinion_memory.json
+/data/public_opinion_memory.backup.json
+/data/campus_db_preview.md
+/data/samples/
+/data/*.npz

@@ -176,7 +176,7 @@ priority = severity_weight(risk_level) × recency_weight
 - 调小半衰期只会让所有事件的权重一起变小，**相对顺序几乎不变**（都乘同一个指数），
   但会让"最新的"事件看起来也像陈旧的。
 - 唯一的解法是**重新爬取**：把近 7–30 天的语料补上去（爬虫链路是现成的：
-  `scripts/seed_crawl_queue.py` → `crawl.bat` → `scripts/process_raw_posts.py` →
+  `scripts/seed_crawl_queue.py` → `scripts/bat/crawl.bat` → `scripts/process_raw_posts.py` →
   `scripts/generate_public_events.py`）。
 
 在那之前，看板至少不再**撒谎**：每个事件都明写着「5.1 年前」，陈旧的标黄，五年前的处分不再

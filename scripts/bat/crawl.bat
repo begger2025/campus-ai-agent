@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0..\.."
 
 if exist ".venv\Scripts\python.exe" goto run
 echo ERROR: Run setup.bat first
