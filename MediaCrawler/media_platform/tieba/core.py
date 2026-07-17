@@ -171,6 +171,9 @@ class TieBaCrawler(AbstractCrawler):
         window_lo, window_hi = parse_window(config.CRAWL_PUBLISH_TIME_START, config.CRAWL_PUBLISH_TIME_END)
         window_enabled = window_lo is not None or window_hi is not None
         for keyword in config.KEYWORDS.split(","):
+            keyword = keyword.strip()
+            if not keyword:
+                continue  # 结尾逗号/空段的空串：跳过，不对空关键词跑整轮搜索（对齐小红书）
             # 宽泛词拦截（用原始词判定，需在主题限定组合之前）：裸主题词对过滤零区分力
             if is_broad_keyword(
                 keyword,
@@ -342,8 +345,13 @@ class TieBaCrawler(AbstractCrawler):
                 # 循环自然退出：入库配额达成归结 quota_reached（页保护上限触发则落 completed）
                 if run_state.items_stored >= config.CRAWLER_MAX_NOTES_COUNT:
                     run_state.mark_stop(STOP_QUOTA_REACHED)
+            except asyncio.CancelledError:
+                # CancelledError 是 BaseException，下面的 except Exception 抓不住；不显式拦，
+                # finally 会把被取消的一轮记成 completed（假遥测）。对齐快手。
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
             except Exception:
-                # 页内异常已被上面的 except 吞掉并 break；此处兜底其余异常路径也落一行历史
+                # 页内异常已被上面的 except 上抛；此处兜底其余异常路径也落一行历史
                 run_state.mark_stop(STOP_EXCEPTION)
                 raise
             finally:
@@ -363,7 +371,15 @@ class TieBaCrawler(AbstractCrawler):
 
         stored_count = 0
         for note_detail in notes_list:
-            await tieba_store.update_tieba_note(note_detail)
+            # 单条 store 失败只跳过这一条、不中断整批（对齐知乎/快手/小红书）：
+            # 只对成功入库的计数。原来无隔离，一条抛异常会冒泡中断整个关键词。
+            try:
+                await tieba_store.update_tieba_note(note_detail)
+            except Exception as store_err:
+                utils.logger.error(
+                    f"[TieBaCrawler._handle_search_notes] store failed note_id={note_detail.note_id}: {store_err}"
+                )
+                continue
             stored_count += 1
         return stored_count
 

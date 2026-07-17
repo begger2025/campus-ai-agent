@@ -170,6 +170,9 @@ class WeiboCrawler(AbstractCrawler):
             return
 
         for keyword in config.KEYWORDS.split(","):
+            keyword = keyword.strip()
+            if not keyword:
+                continue  # 结尾逗号/空段的空串：跳过，不对空关键词跑整轮搜索（对齐小红书）
             # 宽泛词拦截（用原始词判定，需在主题限定组合之前）：裸主题词对过滤零区分力
             if is_broad_keyword(
                 keyword,
@@ -286,8 +289,16 @@ class WeiboCrawler(AbstractCrawler):
                         if note_id and note_id in existing_note_ids:
                             skipped_existing_count += 1
                             continue
+                        # 单条 store 失败只跳过这一条、不中断整个关键词（对齐知乎/快手/小红书）：
+                        # 只对成功入库的计数，失败的不虚计。原来无隔离，一条抛异常整词放弃剩余帖。
+                        try:
+                            await weibo_store.update_weibo_note(note_item)
+                        except Exception as store_err:
+                            utils.logger.error(
+                                f"[WeiboCrawler.search] store failed note_id={mblog.get('id')}: {store_err}"
+                            )
+                            continue
                         note_id_list.append(mblog.get("id"))
-                        await weibo_store.update_weibo_note(note_item)
                         run_state.add_stored(1)  # 真正入库条数（过滤/跳过后）
                         await self.get_note_images(mblog)
 
@@ -317,6 +328,12 @@ class WeiboCrawler(AbstractCrawler):
                 # 循环自然退出：入库配额达成归结 quota_reached（页保护上限触发则落 completed）
                 if run_state.items_stored >= config.CRAWLER_MAX_NOTES_COUNT:
                     run_state.mark_stop(STOP_QUOTA_REACHED)
+            except asyncio.CancelledError:
+                # CancelledError 是 BaseException，下面的 except Exception 抓不住；不显式拦，
+                # finally 会把被取消（Ctrl-C / 评论任务取消）的一轮记成 completed（假遥测，
+                # 污染贫瘠词判定）。对齐快手。
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
             except Exception:
                 # 异常路径也落一行历史（stop_reason=exception），异常按原行为继续上抛
                 run_state.mark_stop(STOP_EXCEPTION)

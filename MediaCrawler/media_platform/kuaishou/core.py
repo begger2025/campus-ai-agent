@@ -251,6 +251,9 @@ class KuaishouCrawler(AbstractCrawler):
         window_enabled = window_lo is not None or window_hi is not None
 
         for keyword in config.KEYWORDS.split(","):
+            keyword = keyword.strip()
+            if not keyword:
+                continue  # 结尾逗号/空段的空串：跳过，不对空关键词跑整轮搜索（对齐小红书）
             # 宽泛词拦截（用原始词判定，需在主题限定组合之前）：裸主题词对过滤零区分力
             if is_broad_keyword(
                 keyword,

@@ -251,6 +251,9 @@ class ZhihuCrawler(AbstractCrawler):
         )
 
         for keyword in config.KEYWORDS.split(","):
+            keyword = keyword.strip()
+            if not keyword:
+                continue  # 结尾逗号/空段的空串：跳过，不对空关键词跑整轮搜索（对齐小红书）
             # 宽泛词拦截（用原始词判定，需在主题限定组合之前）：裸主题词对过滤零区分力
             if is_broad_keyword(
                 keyword,
@@ -345,6 +348,11 @@ class ZhihuCrawler(AbstractCrawler):
                 # 原行为是 return 中断全部关键词；现在记 exception 落一行历史后继续下一关键词
                 run_state.mark_stop(STOP_EXCEPTION)
                 utils.logger.error(f"[ZhihuCrawler.search] Search content error, keyword: {keyword}, error: {ex}")
+            except asyncio.CancelledError:
+                # CancelledError 是 BaseException，下面的 except Exception 抓不住；不显式拦，
+                # finally 会把被取消的一轮记成 completed（假遥测）。对齐快手。
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
             except Exception:
                 # 其他异常路径也落一行历史（stop_reason=exception），异常按微博行为继续上抛
                 run_state.mark_stop(STOP_EXCEPTION)

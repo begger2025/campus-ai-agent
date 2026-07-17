@@ -1135,6 +1135,13 @@ class XiaoHongShuCrawler(AbstractCrawler):
                             self.detail_stop_reason = "unknown_error"
                         run_state.mark_stop(STOP_EXCEPTION)
                         break
+            except asyncio.CancelledError:
+                # CancelledError 是 BaseException，下面的 except Exception 抓不住；不显式拦，
+                # finally 的 _finalize 默认 completed，会把被取消的一轮记成正常跑完（假遥测）。
+                # 对齐快手。
+                self.detail_stop_requested = True
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
             except Exception:
                 # 页内异常已被上面的 except 吞掉并 break；此处兜底其余异常路径也落一行历史
                 run_state.mark_stop(STOP_EXCEPTION)
