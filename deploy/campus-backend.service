@@ -1,0 +1,37 @@
+# 校声智枢 后端进程托管（systemd）
+# 放置：/etc/systemd/system/campus-backend.service
+# 启用：sudo systemctl daemon-reload && sudo systemctl enable --now campus-backend
+#
+# 单进程（单 worker）是刻意的：限流计数、对话进程内会话态、LLM 缓存单例都是
+# 进程内状态，多 worker 会各算各的、破坏限流与会话一致性。演示与单校规模下
+# 单进程足够；要扩并发需先把这些状态外置（Redis），属运维路线图后续项。
+#
+# 不用 EnvironmentFile：应用自身用 python-dotenv 读 WorkingDirectory 下的 .env，
+# 避免 systemd 解析含特殊字符的 API key 出错。故 .env 必须放在 WorkingDirectory 根。
+
+[Unit]
+Description=Campus AI Agent Backend (uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 用非 root 部署用户（下面 runbook 会创建 campus 用户）；图省事也可用 root
+User=campus
+Group=campus
+WorkingDirectory=/opt/campus-ai-agent
+ExecStart=/opt/campus-ai-agent/.venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 9000
+Restart=always
+RestartSec=3
+# 崩溃自愈：连续快速重启超过阈值则暂停，避免疯狂重启刷日志
+StartLimitIntervalSec=60
+StartLimitBurst=5
+# 日志进 journald：journalctl -u campus-backend -f 看实时日志
+StandardOutput=journal
+StandardError=journal
+# 轻量安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
