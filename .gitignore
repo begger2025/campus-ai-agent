@@ -31,8 +31,9 @@ data/post_vectors.npz
 # 会话记忆本地库（运行时状态，chat_memory_store 自建）
 data/chat_memory.sqlite3
 
-# 用户投稿图片（本地上传产物）
-uploads/
+# 用户投稿图片（本地上传产物）；目录说明 README 保留在版本库
+uploads/*
+!uploads/README.md
 
 # 清理脚本的删除回滚备份（运行产物，purge_offtopic_posts.py 生成）
 data/backup_offtopic_posts.json
