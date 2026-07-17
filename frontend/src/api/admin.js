@@ -24,6 +24,16 @@ export function updateEventStatus(eventId, { status, review_comment = '' }) {
   return http.patch(`/admin/events/${eventId}/status`, { status, review_comment })
 }
 
+// 批量审核：后端逐条走与单条相同的审计路径，返回逐条结果 {results, succeeded, failed}
+export function batchUpdateEventStatus({ event_ids, status, review_comment = '' }) {
+  return http.post('/admin/events/batch-status', { event_ids, status, review_comment })
+}
+
+// LLM 预审建议：即算即显不落库；未配置模型时返回 {available: false}
+export function prescreenEvents(eventIds) {
+  return http.post('/admin/events/prescreen', { event_ids: eventIds })
+}
+
 export function fetchEventReviewLogs(eventId, params = {}) {
   return http.get(`/admin/events/${eventId}/review-logs`, { params })
 }

@@ -17,6 +17,10 @@
       <el-button type="primary" @click="reload(1)">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
       <el-button type="success" plain @click="openCreate">＋ 手工建事件</el-button>
+      <label class="sort-toggle" title="按 风险等级 > 热度 > 时间 排序：审核时间先花在该管且多人在看的事件上">
+        <el-switch v-model="reviewSort" @change="reload(1)" />
+        <span>审核优先排序</span>
+      </label>
     </div>
 
     <div class="panel-card">
@@ -24,10 +28,25 @@
         <el-tab-pane v-for="tab in statusTabs" :key="tab.value" :label="tab.label" :name="tab.value" />
       </el-tabs>
 
+      <!-- 批量操作条：勾选后出现。AI 预审是建议不是决定——建议标签只是参考，
+           发布/驳回仍要人点确认，驳回仍然必填原因。 -->
+      <div v-if="selection.length" class="batch-bar">
+        <span class="batch-count">已选 {{ selection.length }} 项</span>
+        <el-button size="small" type="success" @click="openBatch('published')">批量通过</el-button>
+        <el-button size="small" type="danger" @click="openBatch('rejected')">批量驳回</el-button>
+        <el-button size="small" type="primary" plain :loading="prescreen.loading" @click="runPrescreen">
+          AI 预审建议
+        </el-button>
+        <el-button size="small" link @click="selection = []">清空选择</el-button>
+      </div>
+
       <div class="table-shell" v-loading="loading">
         <table class="compact-table">
           <thead>
             <tr>
+              <th style="width: 36px" @click.stop>
+                <el-checkbox :model-value="allSelected" @change="toggleSelectAll" />
+              </th>
               <th style="width: 52px">ID</th>
               <th style="min-width: 220px">事件标题</th>
               <th>风险</th>
@@ -49,10 +68,26 @@
               class="clickable-row"
               @click="openDetail(event)"
             >
+              <td class="select-cell" @click.stop>
+                <el-checkbox
+                  :model-value="selection.includes(event.raw_id)"
+                  @change="toggleSelect(event.raw_id)"
+                />
+              </td>
               <td>{{ event.raw_id }}</td>
               <td class="title-cell" :title="event.title">
                 {{ event.title }}
                 <span v-if="event.curated" class="curated-badge" title="管理员已人工修正，机器不再更新">人工修正</span>
+                <span
+                  v-if="suggestionFor(event)"
+                  :class="['suggest-tag', `suggest-${suggestionFor(event).suggestion}`]"
+                  :title="suggestionFor(event).reason"
+                >{{ suggestionLabel(suggestionFor(event).suggestion) }}</span>
+                <!-- AI 研判摘要：风险依据第一条 + 生命周期。原本要点开抽屉才看得到，
+                     审核 72 条 draft 逐个点开是主要疲劳源——搬到列表让人扫一眼定夺。 -->
+                <div v-if="aiSubline(event)" class="ai-subline" :title="(event.risk_reasons || []).join('；')">
+                  {{ aiSubline(event) }}
+                </div>
               </td>
               <td><span :class="['badge', riskClass(event.riskLevel)]">{{ event.riskLabel || '低风险' }}</span></td>
               <td>{{ sentimentLabel(event.sentiment) }}</td>
@@ -82,7 +117,7 @@
               </td>
             </tr>
             <tr v-if="!events.length && !loading">
-              <td colspan="9" class="empty-hint">当前筛选条件下没有事件</td>
+              <td colspan="10" class="empty-hint">当前筛选条件下没有事件</td>
             </tr>
           </tbody>
         </table>
@@ -269,6 +304,32 @@
       </template>
     </el-dialog>
 
+    <!-- 批量审核对话框：一份意见作用于全部所选，驳回仍必填原因 -->
+    <el-dialog
+      v-model="batch.visible"
+      :title="`批量${statusActionLabel(batch.target)} ${selection.length} 个事件`"
+      width="480px"
+    >
+      <el-input
+        v-model="batch.comment"
+        type="textarea"
+        :rows="3"
+        maxlength="200"
+        show-word-limit
+        :placeholder="batch.target === 'rejected' ? '请填写驳回原因（必填，作用于全部所选）' : '审核意见（选填，作用于全部所选）'"
+      />
+      <template #footer>
+        <el-button @click="batch.visible = false">取消</el-button>
+        <el-button
+          :type="batch.target === 'rejected' ? 'danger' : 'success'"
+          :loading="batch.submitting"
+          @click="submitBatch"
+        >
+          确认批量{{ statusActionLabel(batch.target) }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 手工建事件对话框：从帖子搜索结果里勾选证据 -->
     <el-dialog v-model="create.visible" title="手工创建事件" width="560px">
       <el-input v-model="create.title" placeholder="事件标题（必填）" maxlength="200" show-word-limit />
@@ -320,12 +381,14 @@ import { ElMessage } from 'element-plus'
 import { ElMessageBox } from 'element-plus'
 import {
   addEventPost,
+  batchUpdateEventStatus,
   createEvent,
   deleteEvent,
   fetchAdminEventDetail,
   fetchAdminEvents,
   fetchEventReviewLogs,
   mergeEvents,
+  prescreenEvents,
   removeEventPost,
   renameEvent,
   updateEventStatus,
@@ -362,6 +425,108 @@ const ACTION_LABELS = { published: '通过', rejected: '驳回', archived: '归�
 
 const review = reactive({ visible: false, event: null, target: '', comment: '', submitting: false })
 const history = reactive({ visible: false, event: null, items: [], loading: false })
+
+// —— P2 审核工作台增强：排序 / 多选批量 / AI 预审 ——
+// 排序开关：draft 审核动线按"风险 > 热度 > 时间"排（后端 sort=review）
+const reviewSort = ref(false)
+// 勾选的事件 raw_id（翻页/刷新即清空，避免"看不见的已选项"被误批量）
+const selection = ref([])
+const batch = reactive({ visible: false, target: '', comment: '', submitting: false })
+// AI 预审结果：raw_id -> {suggestion, reason}。即算即显不落库，刷新即失效。
+const prescreen = reactive({ loading: false, results: {} })
+
+const allSelected = computed(
+  () => events.value.length > 0 && events.value.every((e) => selection.value.includes(e.raw_id)),
+)
+
+function toggleSelect(rawId) {
+  const at = selection.value.indexOf(rawId)
+  if (at >= 0) selection.value.splice(at, 1)
+  else selection.value.push(rawId)
+}
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    const pageIds = new Set(events.value.map((e) => e.raw_id))
+    selection.value = selection.value.filter((id) => !pageIds.has(id))
+  } else {
+    selection.value = [...new Set([...selection.value, ...events.value.map((e) => e.raw_id)])]
+  }
+}
+
+// 列表行的 AI 研判摘要：风险依据第一条 + 生命周期标签
+function aiSubline(event) {
+  const parts = []
+  const reasons = event.risk_reasons || []
+  if (reasons.length) parts.push(reasons[0])
+  if (hasLifecycle(event.lifecycle)) parts.push(lifecycleLabel(event.lifecycle))
+  return parts.join(' · ')
+}
+
+const SUGGESTION_LABELS = { publish: 'AI 建议发布', reject: 'AI 建议驳回', hold: 'AI 待定' }
+
+function suggestionFor(event) {
+  return prescreen.results[event.raw_id] || null
+}
+
+function suggestionLabel(suggestion) {
+  return SUGGESTION_LABELS[suggestion] || suggestion
+}
+
+function openBatch(target) {
+  if (!selection.value.length) return ElMessage.warning('请先勾选事件')
+  if (selection.value.length > 100) return ElMessage.warning('一次最多批量处理 100 条')
+  batch.target = target
+  batch.comment = ''
+  batch.visible = true
+}
+
+async function submitBatch() {
+  if (batch.target === 'rejected' && !batch.comment.trim()) {
+    ElMessage.warning('批量驳回必须填写原因')
+    return
+  }
+  batch.submitting = true
+  try {
+    const data = await batchUpdateEventStatus({
+      event_ids: selection.value,
+      status: batch.target,
+      review_comment: batch.comment.trim(),
+    })
+    const failedNote = data.failed ? `，失败 ${data.failed} 条` : ''
+    ElMessage.success(`批量${statusActionLabel(batch.target)}完成：成功 ${data.succeeded} 条${failedNote}`)
+    batch.visible = false
+    reload()
+  } catch (error) {
+    ElMessage.error(error.message || '批量审核失败')
+  } finally {
+    batch.submitting = false
+  }
+}
+
+async function runPrescreen() {
+  if (!selection.value.length) return ElMessage.warning('请先勾选要预审的事件')
+  const ids = selection.value.slice(0, 20)
+  if (selection.value.length > 20) {
+    ElMessage.info('一次最多预审 20 条，已取前 20 条')
+  }
+  prescreen.loading = true
+  try {
+    const data = await prescreenEvents(ids)
+    if (!data.available) {
+      ElMessage.info(data.detail || 'AI 预审暂不可用（未配置事件模型）')
+      return
+    }
+    for (const item of data.items || []) {
+      prescreen.results[item.id] = item
+    }
+    ElMessage.success(`已生成 ${(data.items || []).length} 条预审建议（仅供参考，发布仍需人工确认）`)
+  } catch (error) {
+    ElMessage.error(error.message || 'AI 预审失败')
+  } finally {
+    prescreen.loading = false
+  }
+}
 
 // —— 人工修正：改名/合并/成员管理/删除，任何一项都会把事件上 curated 锁 ——
 const curation = reactive({
@@ -645,11 +810,14 @@ async function reload(nextPage) {
       status: filters.status,
       keyword: filters.keyword || undefined,
       risk_level: filters.risk || undefined,
+      sort: reviewSort.value ? 'review' : 'created',
       page: page.value,
       page_size: pageSize,
     })
     events.value = data.items || []
     total.value = data.total || 0
+    // 列表变了就清空勾选：不能让"看不见的已选项"被批量操作误伤
+    selection.value = []
   } catch (error) {
     ElMessage.error(error.message || '加载事件列表失败')
   } finally {
@@ -983,4 +1151,57 @@ onMounted(() => reload(1))
 .detail-footer { display: flex; justify-content: flex-end; gap: 8px; }
 
 .empty-hint { padding: 14px 0; text-align: center; font-size: 12px; color: var(--color-text-muted); }
+
+/* —— P2 审核工作台增强 —— */
+.sort-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: var(--color-bg-soft, rgba(64, 158, 255, 0.06));
+  border: 1px dashed var(--color-border, #dcdfe6);
+}
+
+.batch-count { font-size: 13px; font-weight: 600; }
+
+.select-cell { text-align: center; }
+
+.ai-subline {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 340px;
+}
+
+.suggest-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+  vertical-align: middle;
+  cursor: help;
+}
+
+.suggest-publish { background: rgba(103, 194, 58, 0.14); color: #529b2e; }
+.suggest-reject { background: rgba(245, 108, 108, 0.14); color: #c45656; }
+.suggest-hold { background: rgba(144, 147, 153, 0.16); color: #73767a; }
 </style>

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import case
 from sqlalchemy.orm import Session, selectinload
 
 from backend.admin_models import User
@@ -23,11 +25,13 @@ from backend.services.event_curation import (
     remove_post,
     rename_event,
 )
+from backend.services import event_prescreen
 from backend.services.log_service import write_admin_operation, write_event_review_log
 
 router = APIRouter(tags=["admin-events"])
 
 VALID_EVENT_STATUSES = {"draft", "published", "rejected", "archived"}
+VALID_EVENT_SORTS = {"created", "review"}
 
 
 class EventStatusPatch(BaseModel):
@@ -74,12 +78,16 @@ def list_admin_events(
     status: str = Query("all"),
     keyword: str | None = None,
     risk_level: str | None = None,
+    sort: str = Query("created"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
     clean_status = (status or "all").strip()
     if clean_status != "all" and clean_status not in VALID_EVENT_STATUSES:
         raise HTTPException(status_code=400, detail="invalid event status")
+    clean_sort = (sort or "created").strip()
+    if clean_sort not in VALID_EVENT_SORTS:
+        raise HTTPException(status_code=400, detail="invalid sort")
 
     query = db.query(PublicEvent)
     if clean_status != "all":
@@ -94,7 +102,23 @@ def list_admin_events(
         )
     if risk_level:
         query = query.filter(PublicEvent.risk_level == risk_level)
-    query = query.order_by(PublicEvent.created_at.desc(), PublicEvent.id.desc())
+    if clean_sort == "review":
+        # 审核优先动线：先看高风险，再看热的，最后才轮到新旧。
+        # 风险是研判结论（该不该管），热度是事实测量（多少人在看）——审核的
+        # 时间应该花在"该管且很多人在看"的事件上，而不是按生成顺序机械过一遍。
+        risk_rank = case(
+            (PublicEvent.risk_level == "high", 2),
+            (PublicEvent.risk_level == "medium", 1),
+            else_=0,
+        )
+        query = query.order_by(
+            risk_rank.desc(),
+            PublicEvent.heat_score.desc(),
+            PublicEvent.created_at.desc(),
+            PublicEvent.id.desc(),
+        )
+    else:
+        query = query.order_by(PublicEvent.created_at.desc(), PublicEvent.id.desc())
 
     total = query.count()
     rows = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -129,6 +153,59 @@ def get_admin_event(
     return ok(_event_detail_item(event, links, fallback))
 
 
+def _apply_status_change(
+    db: Session,
+    event: PublicEvent,
+    new_status: str,
+    *,
+    actor: str,
+    admin_user: User | None,
+    review_comment: str,
+) -> str:
+    """单条状态变更的完整审计路径（不 commit，调用方定事务边界）。
+
+    单条 PATCH 与批量接口共用这一份：批量绝不允许有"少留一条日志"的旁路。
+    返回变更前的旧状态。
+    """
+
+    old_status = event.status
+    before = {
+        "id": event.id,
+        "status": old_status,
+        "reviewed_by": event.reviewed_by,
+        "review_comment": event.review_comment,
+    }
+    event.status = new_status
+    event.reviewed_by = actor
+    event.reviewed_at = datetime.utcnow()
+    event.review_comment = review_comment
+    after = {
+        "id": event.id,
+        "status": event.status,
+        "reviewed_by": event.reviewed_by,
+        "review_comment": event.review_comment,
+    }
+
+    write_event_review_log(
+        db,
+        event_id=event.id,
+        admin_user_id=actor,
+        from_status=old_status,
+        to_status=new_status,
+        review_comment=review_comment,
+    )
+    write_admin_operation(
+        db,
+        admin_user_id=str(admin_user.id) if admin_user is not None else actor,
+        action="update_event_status",
+        target_type="public_event",
+        target_id=str(event.id),
+        before=before,
+        after=after,
+    )
+    return old_status
+
+
 @router.patch("/admin/events/{event_id}/status")
 def update_event_status(
     event_id: int,
@@ -143,46 +220,15 @@ def update_event_status(
     if event is None:
         raise HTTPException(status_code=404, detail="event not found")
 
-    old_status = event.status
     actor = (
         current_user.username
         if isinstance(current_user, User)
         else (payload.reviewed_by or "admin")
     )
     admin_user = current_user if isinstance(current_user, User) else None
-    before = {
-        "id": event.id,
-        "status": old_status,
-        "reviewed_by": event.reviewed_by,
-        "review_comment": event.review_comment,
-    }
-    event.status = payload.status
-    event.reviewed_by = actor
-    event.reviewed_at = datetime.utcnow()
-    event.review_comment = payload.review_comment
-    after = {
-        "id": event.id,
-        "status": event.status,
-        "reviewed_by": event.reviewed_by,
-        "review_comment": event.review_comment,
-    }
-
-    write_event_review_log(
-        db,
-        event_id=event.id,
-        admin_user_id=actor,
-        from_status=old_status,
-        to_status=payload.status,
-        review_comment=payload.review_comment,
-    )
-    write_admin_operation(
-        db,
-        admin_user_id=str(admin_user.id) if admin_user is not None else actor,
-        action="update_event_status",
-        target_type="public_event",
-        target_id=str(event.id),
-        before=before,
-        after=after,
+    old_status = _apply_status_change(
+        db, event, payload.status,
+        actor=actor, admin_user=admin_user, review_comment=payload.review_comment,
     )
     db.commit()
     db.refresh(event)
@@ -195,6 +241,135 @@ def update_event_status(
             "review_comment": event.review_comment,
         }
     )
+
+
+class EventBatchStatusBody(BaseModel):
+    event_ids: list[int]
+    status: str
+    review_comment: str = ""
+
+
+@router.post("/admin/events/batch-status")
+def batch_update_event_status(
+    payload: EventBatchStatusBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """批量审核：逐条走与单条 PATCH 完全相同的审计路径。
+
+    单条失败（如事件不存在）只失败该条，不拖垮整批；全部处理完一次 commit，
+    成功的条目一起生效。上限 100 条防误操作。
+    """
+
+    if payload.status not in VALID_EVENT_STATUSES:
+        raise HTTPException(status_code=400, detail="invalid event status")
+    ids: list[int] = []
+    for event_id in payload.event_ids:
+        if event_id not in ids:
+            ids.append(event_id)
+    if not ids:
+        raise HTTPException(status_code=400, detail="event_ids is empty")
+    if len(ids) > 100:
+        raise HTTPException(status_code=400, detail="batch too large (max 100)")
+
+    actor = current_user.username if isinstance(current_user, User) else "admin"
+    admin_user = current_user if isinstance(current_user, User) else None
+
+    results: list[dict] = []
+    succeeded = 0
+    for event_id in ids:
+        event = db.query(PublicEvent).filter(PublicEvent.id == event_id).first()
+        if event is None:
+            results.append({"id": event_id, "ok": False, "error": "event not found"})
+            continue
+        old_status = _apply_status_change(
+            db, event, payload.status,
+            actor=actor, admin_user=admin_user, review_comment=payload.review_comment,
+        )
+        results.append(
+            {"id": event.id, "ok": True, "old_status": old_status, "new_status": payload.status}
+        )
+        succeeded += 1
+    db.commit()
+    return ok(
+        {
+            "results": results,
+            "succeeded": succeeded,
+            "failed": len(results) - succeeded,
+        }
+    )
+
+
+class EventPrescreenBody(BaseModel):
+    event_ids: list[int]
+
+
+@router.post("/admin/events/prescreen")
+def prescreen_admin_events(
+    payload: EventPrescreenBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """LLM 预审建议：即算即显不落库，建议仅供参考，发布决定仍在人。
+
+    详细语义（发布口径 / 失败朝安全侧）见 services/event_prescreen.py。
+    """
+
+    ids: list[int] = []
+    for event_id in payload.event_ids:
+        if event_id not in ids:
+            ids.append(event_id)
+    if not ids:
+        raise HTTPException(status_code=400, detail="event_ids is empty")
+    if len(ids) > 20:
+        raise HTTPException(status_code=400, detail="batch too large (max 20)")
+
+    if not event_prescreen.prescreen_available():
+        return ok({"available": False, "items": [], "detail": "事件 LLM 未配置"})
+
+    events = db.query(PublicEvent).filter(PublicEvent.id.in_(ids)).all()
+    by_id = {event.id: event for event in events}
+    links_by_event = _links_by_event(db, [event.id for event in events])
+
+    items: list[dict] = []
+    for event_id in ids:
+        event = by_id.get(event_id)
+        if event is None:
+            continue
+        try:
+            date_range = json.loads(event.date_range_json or "{}")
+        except (TypeError, ValueError):
+            date_range = {}
+        try:
+            risk_reasons = json.loads(event.risk_reasons_json or "[]")
+        except (TypeError, ValueError):
+            risk_reasons = []
+        sample_titles: list[str] = []
+        for link in links_by_event.get(event.id, [])[:3]:
+            title = ""
+            if link.processed_post is not None:
+                title = link.processed_post.title or ""
+            elif link.raw_post is not None:
+                title = link.raw_post.title or ""
+            if title:
+                sample_titles.append(title)
+        items.append(
+            {
+                "id": event.id,
+                "title": event.title,
+                "summary": event.summary or "",
+                "risk_level": event.risk_level or "low",
+                "risk_reasons": risk_reasons if isinstance(risk_reasons, list) else [],
+                "lifecycle": str(date_range.get("lifecycle_judgement") or ""),
+                "source_count": event.source_count or 0,
+                "sample_titles": sample_titles,
+            }
+        )
+
+    result = event_prescreen.prescreen_events(items)
+    if result is None:
+        return ok({"available": False, "items": [], "detail": "模型暂不可用，请稍后重试"})
+    return ok({"available": True, "items": result})
 
 
 # ---------------------------------------------------------------- 人工事件修正
