@@ -24,14 +24,28 @@ export function updateEventStatus(eventId, { status, review_comment = '' }) {
   return http.patch(`/admin/events/${eventId}/status`, { status, review_comment })
 }
 
+// 预审是同步 LLM 调用（最多 20 事件打包一问），中转站延迟波动大（实测 10~190s），
+// 远超实例默认 8s——与 evidence.js 的 RUN_TIMEOUT_MS 同一处置：请求级放宽超时。
+const PRESCREEN_TIMEOUT_MS = 120_000
+// 批量审核最多 100 条逐条写库+双日志，远程 RDS 下也可能超 8s
+const BATCH_TIMEOUT_MS = 60_000
+
 // 批量审核：后端逐条走与单条相同的审计路径，返回逐条结果 {results, succeeded, failed}
 export function batchUpdateEventStatus({ event_ids, status, review_comment = '' }) {
-  return http.post('/admin/events/batch-status', { event_ids, status, review_comment })
+  return http.post(
+    '/admin/events/batch-status',
+    { event_ids, status, review_comment },
+    { timeout: BATCH_TIMEOUT_MS },
+  )
 }
 
 // LLM 预审建议：即算即显不落库；未配置模型时返回 {available: false}
 export function prescreenEvents(eventIds) {
-  return http.post('/admin/events/prescreen', { event_ids: eventIds })
+  return http.post(
+    '/admin/events/prescreen',
+    { event_ids: eventIds },
+    { timeout: PRESCREEN_TIMEOUT_MS },
+  )
 }
 
 export function fetchEventReviewLogs(eventId, params = {}) {

@@ -63,8 +63,16 @@ http.interceptors.response.use(
     return body
   },
   (error) => {
-    // 有响应体的错误（4xx/5xx）说明后端是通的；完全无响应才是「未连接」
-    backendState.value = error.response ? 'real' : 'down'
+    // 有响应体的错误（4xx/5xx）说明后端是通的；完全无响应才是「未连接」。
+    // 超时（ECONNABORTED）单独对待：慢调用（同步 LLM/大批量）超过请求时限时
+    // 后端多半还活着、还在处理——据此把顶栏打成「后端未连接」是误报
+    // （真宕机是秒失败的 ERR_NETWORK，不是等满时限的超时）。
+    const isTimeout = error.code === 'ECONNABORTED'
+    if (error.response) {
+      backendState.value = 'real'
+    } else if (!isTimeout) {
+      backendState.value = 'down'
+    }
     // 登录请求本身的 401/403 是"账号密码错误/被禁用"，要把错误交还登录页展示，
     // 而不是触发全局登出跳转（否则错误提示被页面刷新吞掉）。
     const isLoginRequest = (error.config?.url || '').includes('/auth/login')
@@ -80,7 +88,9 @@ http.interceptors.response.use(
       const detail = data?.detail || data?.message
       if (typeof detail === 'string' && detail) error.message = detail
     } else if (error.request) {
-      error.message = '无法连接服务器，请确认后端已启动'
+      error.message = isTimeout
+        ? '请求超时：后端可能仍在处理（AI 调用较慢），请稍后重试'
+        : '无法连接服务器，请确认后端已启动'
     }
     return Promise.reject(error)
   },
