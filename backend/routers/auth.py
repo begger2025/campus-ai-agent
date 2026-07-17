@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.admin_models import User
@@ -60,7 +61,13 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
         is_active=True,
     )
     db.add(user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # check-then-insert 竞态：两个并发同名注册都过了 .first() 判重，靠 username
+        # 唯一约束兜底。裸抛会 500；翻成预期的 409。
+        db.rollback()
+        raise HTTPException(status_code=409, detail="用户名已被占用")
     token = create_access_token(user)
     db.commit()
     return ok(

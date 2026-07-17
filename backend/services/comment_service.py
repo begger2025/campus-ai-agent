@@ -105,7 +105,14 @@ def report_comment(db: Session, comment_id: int) -> EventComment:
     comment = db.query(EventComment).filter(EventComment.id == comment_id).first()
     if comment is None:
         raise CommentError("评论不存在", status_code=404)
-    comment.report_count = int(comment.report_count or 0) + 1
+    # 原子自增（审计修复）：原来的 count = count + 1 是读-改-写，并发举报会丢增量、
+    # 阈值被穿透。改成数据库端 SET count = count + 1（行锁串行化），再读回判阈值。
+    db.query(EventComment).filter(EventComment.id == comment_id).update(
+        {EventComment.report_count: EventComment.report_count + 1},
+        synchronize_session=False,
+    )
+    db.refresh(comment)
+    # 阈值处双写幂等：并发下两条请求都可能读到 >= 阈值并置 hidden，重复置同一状态无害
     if comment.status == "visible" and comment.report_count >= AUTO_HIDE_REPORTS:
         comment.status = "hidden"
         comment.hidden_reason = f"举报满 {AUTO_HIDE_REPORTS} 条自动隐藏，待管理员复核"

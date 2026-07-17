@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models import RawPost, UserSubmission
@@ -165,7 +166,12 @@ def review_submission(
             crawl_time=datetime.utcnow(),
         )
         db.add(raw)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            # 并发审批同一投稿：状态守卫在并发下拦不住，靠唯一约束兜底。
+            # 裸抛 IntegrityError 会变 500，翻成 409 交给路由回滚（幂等，数据不重复）。
+            raise SubmissionError("该投稿正在被处理或已审核过", status_code=409) from exc
         submission.raw_post_id = raw.id
 
     submission.status = "approved" if approve else "rejected"

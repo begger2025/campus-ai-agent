@@ -445,7 +445,21 @@ def main() -> int:
     parser.add_argument("--admin-password", default="smoke_admin_password")
     parser.add_argument("--user-username", default="smoke_user")
     parser.add_argument("--user-password", default="smoke_user_password")
+    parser.add_argument(
+        "--allow-mysql",
+        action="store_true",
+        help="强制允许对 MySQL 跑（危险：会写入 fixture 假帖与 smoke 账号）",
+    )
     args = parser.parse_args()
+
+    # 安全闸门（审计修复）：smoke 会写 example.com 假帖 + smoke 账号 + 生成事件。
+    # 对着共享 MySQL 跑会污染生产库——默认拒绝，与 init_db/seed_demo 的闸门看齐。
+    from backend.database import uses_mysql  # noqa: E402
+
+    if uses_mysql() and not args.allow_mysql:
+        print("[smoke] 拒绝：当前 DATABASE_URL 指向 MySQL，smoke 会写入假数据。")
+        print("[smoke] 请用本地 SQLite 跑；确需对 MySQL 跑请显式加 --allow-mysql。")
+        return 1
 
     server_process = None
     try:

@@ -28,6 +28,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from backend.admin_models import EventReviewLog
 from backend.models import EventComment, EventPostLink, ProcessedPost, PublicEvent
 
 
@@ -145,6 +146,9 @@ def delete_event(db: Session, event: PublicEvent) -> dict:
     db.query(EventPostLink).filter(EventPostLink.event_id == event.id).delete()
     # 站内评论随事件一起删（不留孤儿行）：评论的语境就是这个事件，事件没了它无处安放
     db.query(EventComment).filter(EventComment.event_id == event.id).delete()
+    # 审核日志也随事件删：event_id 是指向 public_events 的外键，rejected/archived 事件
+    # 必带审核日志——不删则 MySQL commit 时外键违约 500（SQLite 外键默认关，测不出）
+    db.query(EventReviewLog).filter(EventReviewLog.event_id == event.id).delete()
     db.delete(event)
     return snapshot
 
