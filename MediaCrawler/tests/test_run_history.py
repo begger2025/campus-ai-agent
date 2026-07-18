@@ -20,6 +20,7 @@ from tools.run_history import (
     STOP_COMPLETED,
     STOP_EMPTY_PAGE,
     STOP_EXCEPTION,
+    STOP_PARSER_MISMATCH,
     STOP_QUOTA_REACHED,
     STOP_REASONS,
     STOP_WINDOW_EXHAUSTED,
@@ -85,6 +86,7 @@ class TestStopReasonResolution:
             STOP_WINDOW_EXHAUSTED,
             STOP_EXCEPTION,
             STOP_COMPLETED,
+            STOP_PARSER_MISMATCH,
         )
 
     def test_first_reason_wins(self):

@@ -34,6 +34,44 @@ from tools import utils
 GENDER_MALE = "sex_male"
 GENDER_FEMALE = "sex_female"
 
+# ===== 空搜索页三分类（老排障文档 §9.4 的排查顺序固化成代码） =====
+# 解析为 0 条时，三种病因的处置完全不同：
+#   blocked         风控/Cookie 过期/数据没加载 —— 可重试（换号、过验证码）
+#   no_result       平台真的没有相关内容 —— 正常，记 empty_page
+#   parser_mismatch 页面有帖子卡片但解析不认识 —— DOM 又变了，重试无用，需人工适配
+EMPTY_VERDICT_BLOCKED = "blocked"
+EMPTY_VERDICT_NO_RESULT = "no_result"
+EMPTY_VERDICT_PARSER_MISMATCH = "parser_mismatch"
+
+# 风控/未加载的页面文案特征（§3.5 实测 + §9.4 排查清单）
+_BLOCKED_MARKERS = ("数据加载失败", "安全验证", "验证码", "异常请求", "访问过于频繁")
+# 正常无结果的页面文案特征
+_NO_RESULT_MARKERS = ("木有找到相关内容", "没有找到相关结果")
+# 帖子卡片的**结构性**特征（class 属性里的 s_post / threadcardclass + 帖子链接），
+# 不用裸子串——"s_post" 三个字母出现在脚本/样式里不代表页面真有卡片
+_CARD_CLASS_RE = re.compile(r'class="[^"]*\b(?:s_post|threadcardclass)\b')
+
+
+def classify_empty_search_page(page_content: str, keyword: str) -> str:
+    """搜索页解析出 0 条时，判定属于哪种空。
+
+    判定顺序刻意为：先卡片（有货没认出来 > 一切）、再风控文案、再无结果文案、
+    最后看关键词是否出现在页面里——正文连关键词都没有，说明搜索数据根本没加载
+    （§3.5 实测：被风控时正文只有"大家都在逛的吧"推荐流）。
+    """
+    text = page_content or ""
+    if _CARD_CLASS_RE.search(text) and "/p/" in text:
+        return EMPTY_VERDICT_PARSER_MISMATCH
+    if any(marker in text for marker in _BLOCKED_MARKERS):
+        return EMPTY_VERDICT_BLOCKED
+    if any(marker in text for marker in _NO_RESULT_MARKERS):
+        return EMPTY_VERDICT_NO_RESULT
+    # 组合词（"中山大学 食堂"）任一词元出现即算关键词在场
+    tokens = [t for t in (keyword or "").split() if t]
+    if tokens and not any(t in text for t in tokens):
+        return EMPTY_VERDICT_BLOCKED
+    return EMPTY_VERDICT_NO_RESULT
+
 
 class TieBaExtractor:
     def __init__(self):
@@ -215,8 +253,25 @@ class TieBaExtractor:
         only_view_author_link = content_selector.xpath("//*[@id='lzonly_cntn']/@href").get(default='').strip()
         note_id = only_view_author_link.split("?")[0].split("/")[-1]
         # Post reply count and reply page count
+        # 防御性取值：新版详情页可能缺这两个旧节点（老排障文档 §3.3 实测
+        # list index out of range），缺失时回退空串并留结构变化日志，不再崩整帖
         thread_num_infos = content_selector.xpath(
             "//div[@id='thread_theme_5']//li[@class='l_reply_num']//span[@class='red']")
+        def _reply_stat(index: int) -> int:
+            # TiebaNote 的这两个字段是 int：节点缺失/文本非数字一律回退 0，
+            # 不把空串塞给 pydantic 挨 ValidationError
+            if len(thread_num_infos) <= index:
+                return 0
+            text = thread_num_infos[index].xpath("./text()").get(default='').strip()
+            return int(text) if text.isdigit() else 0
+
+        total_replay_num = _reply_stat(0)
+        total_replay_page = _reply_stat(1)
+        if len(thread_num_infos) < 2:
+            utils.logger.warning(
+                "[TieBaExtractor.extract_note_detail] 详情页回复数节点缺失"
+                f"（找到 {len(thread_num_infos)}/2，DOM 结构可能已变化），缺失字段回退空值"
+            )
         # IP location and publish time
         other_info_content = content_selector.xpath(".//div[@class='post-tail-wrap']").get(default="").strip()
         ip_location, publish_time = self.extract_ip_and_pub_time(other_info_content)
@@ -233,8 +288,8 @@ class TieBaExtractor:
                              default='').strip(), tieba_link=const.TIEBA_URL + content_selector.xpath(
                 "//a[@class='card_title_fname']/@href").get(default=''), ip_location=ip_location,
                          publish_time=publish_time,
-                         total_replay_num=thread_num_infos[0].xpath("./text()").get(default='').strip(),
-                         total_replay_page=thread_num_infos[1].xpath("./text()").get(default='').strip(), )
+                         total_replay_num=total_replay_num,
+                         total_replay_page=total_replay_page, )
         note.title = note.title.replace(f"【{note.tieba_name}】_Baidu Tieba", "")
         return note
 

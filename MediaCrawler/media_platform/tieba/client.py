@@ -34,8 +34,14 @@ from model.m_baidu_tieba import TiebaComment, TiebaCreator, TiebaNote
 from proxy.proxy_ip_pool import ProxyIpPool
 from tools import utils
 
+from .exception import TiebaAccessBlockedError, TiebaSearchParserMismatchError
 from .field import SearchNoteType, SearchSortType
-from .help import TieBaExtractor
+from .help import (
+    EMPTY_VERDICT_BLOCKED,
+    EMPTY_VERDICT_PARSER_MISMATCH,
+    TieBaExtractor,
+    classify_empty_search_page,
+)
 
 
 class BaiduTieBaClient(AbstractApiClient):
@@ -215,7 +221,7 @@ class BaiduTieBaClient(AbstractApiClient):
 
         try:
             # Get cookies from browser and check key login cookies
-            _, cookie_dict = await utils.convert_browser_context_cookies(
+            cookie_str, cookie_dict = await utils.convert_browser_context_cookies(
                 browser_context,
                 urls=self.cookie_urls,
             )
@@ -225,16 +231,85 @@ class BaiduTieBaClient(AbstractApiClient):
             ptoken = cookie_dict.get("PTOKEN")
             bduss = cookie_dict.get("BDUSS")  # Baidu universal login cookie
 
-            if stoken or ptoken or bduss:
-                utils.logger.info(f"[BaiduTieBaClient.pong] Login state verified by cookies (STOKEN: {bool(stoken)}, PTOKEN: {bool(ptoken)}, BDUSS: {bool(bduss)})")
-                return True
-            else:
+            if not (stoken or ptoken or bduss):
                 utils.logger.info("[BaiduTieBaClient.pong] No valid login cookies found, need to login")
                 return False
+
+            utils.logger.info(f"[BaiduTieBaClient.pong] Login cookies present (STOKEN: {bool(stoken)}, PTOKEN: {bool(ptoken)}, BDUSS: {bool(bduss)})")
+
+            # 字段存在 ≠ 会话有效（老排障文档 §3.5：只剩 STOKEN 的过期号照样放行，
+            # 烧完整轮才发现全灭）。追加一次轻量真实校验，明确失效才拦，接口异常放行。
+            verified = self._verify_login_by_userinfo(cookie_str)
+            if verified is False:
+                utils.logger.error(
+                    "[BaiduTieBaClient.pong] Cookie 字段存在但会话已失效（用户信息接口判定未登录），"
+                    "请重新登录贴吧并复制完整 Cookie（优先补 BDUSS/BDUSS_BFESS）"
+                )
+                return False
+            if verified is None:
+                utils.logger.warning(
+                    "[BaiduTieBaClient.pong] 用户信息接口不可判定（网络异常或返回结构变化），"
+                    "回退为 Cookie 字段存在性判定放行"
+                )
+            else:
+                utils.logger.info("[BaiduTieBaClient.pong] Login state verified by userinfo API")
+            return True
 
         except Exception as e:
             utils.logger.error(f"[BaiduTieBaClient.pong] Check login state failed: {e}, assume not logged in")
             return False
+
+    def _verify_login_by_userinfo(self, cookie_str: str) -> Optional[bool]:
+        """轻量真实登录校验：请求贴吧用户信息接口，看会话是否真的有效。
+
+        三态返回，故障语义刻意不对称：
+          True  -> 接口返回了用户身份字段，会话有效；
+          False -> 接口明确表示未登录，该拦；
+          None  -> 网络异常 / 返回结构不认识——**放行**（退回 Cookie 存在性判定）。
+        接口哪天改了返回格式，最坏退化回旧行为，不会把好账号误拦在门外。
+        """
+        url = f"{self._host}/f/user/json_userinfo"
+        # _sync_request 固定用 self.headers 发请求：临时塞入浏览器侧 Cookie，发完复原
+        original_cookie = self.headers.get("Cookie", "")
+        try:
+            self.headers["Cookie"] = cookie_str
+            response = self._sync_request("GET", url)
+        except Exception as ex:
+            utils.logger.warning(f"[BaiduTieBaClient._verify_login_by_userinfo] 请求失败：{ex}")
+            return None
+        finally:
+            self.headers["Cookie"] = original_cookie
+
+        if response.status_code != 200:
+            utils.logger.warning(
+                f"[BaiduTieBaClient._verify_login_by_userinfo] HTTP {response.status_code}，不可判定"
+            )
+            return None
+        # 该接口历史上返回 GBK 编码的 JSON，两种编码都试
+        text = ""
+        for encoding in ("utf-8", "gbk"):
+            try:
+                text = response.content.decode(encoding)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if not text:
+            return None
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        data = payload.get("data") or {}
+        identity_keys = ("user_id_int", "user_id", "user_portrait", "user_name_url", "user_name_weak")
+        if isinstance(data, dict) and any(data.get(key) for key in identity_keys):
+            return True
+        error_text = str(payload.get("error", ""))
+        if "未登录" in error_text or payload.get("no") in (1, 2):
+            return False
+        # 结构不认识：不可判定
+        return None
 
     async def update_cookies(self, browser_context: BrowserContext, urls: Optional[list[str]] = None):
         """
@@ -319,6 +394,22 @@ class BaiduTieBaClient(AbstractApiClient):
                 debug_file.write_text(page_content, encoding="utf-8")
                 utils.logger.info(
                     f"[BaiduTieBaClient.get_notes_by_keyword] Saved debug search HTML to {debug_file}"
+                )
+                # \u7a7a\u7ed3\u679c\u4e09\u5206\u7c7b\uff1a\u98ce\u63a7/DOM \u53d8\u5316\u6309\u7c7b\u578b\u4e0a\u629b\uff08core \u636e\u6b64\u843d\u5bf9\u5e94 stop_reason\uff09\uff0c
+                # \u771f\u65e0\u7ed3\u679c\u624d\u8fd4\u56de\u7a7a\u5217\u8868\u8ba9 core \u8bb0 empty_page
+                verdict = classify_empty_search_page(page_content, keyword)
+                if verdict == EMPTY_VERDICT_BLOCKED:
+                    raise TiebaAccessBlockedError(
+                        f"\u641c\u7d22\u6570\u636e\u672a\u52a0\u8f7d\uff08\u7591\u4f3c\u98ce\u63a7/Cookie \u8fc7\u671f\uff09\uff0c\u5173\u952e\u8bcd\u300c{keyword}\u300d\u7b2c {page} \u9875\uff0c"
+                        f"debug HTML: {debug_file}"
+                    )
+                if verdict == EMPTY_VERDICT_PARSER_MISMATCH:
+                    raise TiebaSearchParserMismatchError(
+                        f"\u9875\u9762\u5b58\u5728\u5e16\u5b50\u5361\u7247\u4f46\u89e3\u6790\u4e3a 0\uff08DOM \u7ed3\u6784\u53ef\u80fd\u5df2\u53d8\u5316\uff09\uff0c\u5173\u952e\u8bcd\u300c{keyword}\u300d\u7b2c {page} \u9875\uff0c"
+                        f"debug HTML: {debug_file}"
+                    )
+                utils.logger.info(
+                    f"[BaiduTieBaClient.get_notes_by_keyword] \u5224\u5b9a\u4e3a\u6b63\u5e38\u65e0\u7ed3\u679c\uff08\u5173\u952e\u8bcd\u300c{keyword}\u300d\uff09"
                 )
             return notes
 

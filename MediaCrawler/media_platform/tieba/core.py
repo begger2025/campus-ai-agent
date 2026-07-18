@@ -42,7 +42,16 @@ from tools import utils
 from tools.cdp_browser import CDPBrowserManager
 from tools.crawl_quota import should_fetch_next_page
 from tools.publish_time_window import is_within_window, parse_tieba_publish_time_ms, parse_window
-from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
+from tools.run_history import (
+    STOP_EMPTY_PAGE,
+    STOP_EXCEPTION,
+    STOP_PARSER_MISMATCH,
+    STOP_QUOTA_REACHED,
+    STOP_WINDOW_EXHAUSTED,
+    RunState,
+)
+
+from .exception import TiebaSearchParserMismatchError
 from tools.topic_scope import compose_topic_keyword, is_broad_keyword, is_marketing_noise, matches_topic
 from var import crawler_type_var, source_keyword_var
 
@@ -331,15 +340,22 @@ class TieBaCrawler(AbstractCrawler):
                         utils.logger.info(f"[TieBaCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page}")
 
                         page += 1
+                    except TiebaSearchParserMismatchError as ex:
+                        # DOM 变化：重试无用，落 parser_mismatch 提示人工适配解析器
+                        # （mark_stop 首个原因生效，外层 except 的 STOP_EXCEPTION 不会覆盖）
+                        run_state.mark_stop(STOP_PARSER_MISMATCH)
+                        utils.logger.error(
+                            f"[BaiduTieBaCrawler.search] 解析器失配（DOM 可能已变化）: {ex}"
+                        )
+                        raise
                     except Exception as ex:
                         utils.logger.error(
                             f"[BaiduTieBaCrawler.search] Search keywords error, current page: {page}, current keyword: {keyword}, err: {ex}"
                         )
                         # 页级异常不再静默吞掉（审计修复 2026-07-17）：原来 break 后 search()
                         # 正常返回，队列把任务标 done——瞬时网络错误也不重试，数据静默少采。
-                        # 贴吧 client 只抛裸 Exception 无类型可辨（对比 ks/zhihu 的
-                        # DataFetchError），无法区分瞬时/致命——宁可失败可重试，不可静默
-                        # 少采：对齐微博语义上抛，外层 except 记 STOP_EXCEPTION 并落历史行。
+                        # 风控/Cookie 失效（TiebaAccessBlockedError）也走这里：可重试故障，
+                        # 上抛让外层记 STOP_EXCEPTION 并落历史行，队列标 failed 可重排。
                         raise
 
                 # 循环自然退出：入库配额达成归结 quota_reached（页保护上限触发则落 completed）

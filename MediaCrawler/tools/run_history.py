@@ -33,6 +33,7 @@ STOP_EMPTY_PAGE = "empty_page"  # 平台返回空页/无更多内容
 STOP_WINDOW_EXHAUSTED = "window_exhausted"  # 整页发布时间早于窗口起点
 STOP_EXCEPTION = "exception"  # 异常中断
 STOP_COMPLETED = "completed"  # 正常跑完（含页保护上限触发）
+STOP_PARSER_MISMATCH = "parser_mismatch"  # 页面有数据但解析器不认识（DOM 变化，重试无用，需人工适配）
 
 STOP_REASONS = (
     STOP_QUOTA_REACHED,
@@ -40,6 +41,7 @@ STOP_REASONS = (
     STOP_WINDOW_EXHAUSTED,
     STOP_EXCEPTION,
     STOP_COMPLETED,
+    STOP_PARSER_MISMATCH,
 )
 
 
