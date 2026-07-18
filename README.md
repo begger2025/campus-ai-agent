@@ -218,9 +218,12 @@ cd .. && .venv\Scripts\python.exe scripts\sync_media_to_raw_posts.py --limit 0 -
 
 ## 部署
 
-公网部署方案：**阿里云轻量服务器 + Nginx 反代 + systemd 托管**，前端 dist 静态服务、
-`/api` 反代本机 uvicorn（仅监听 127.0.0.1）。完整操作手册见
-[docs/deploy-runbook.md](docs/deploy-runbook.md)，配置资产在 [`deploy/`](deploy/)。
+**已上线**：<http://8.134.250.107:9000>（阿里云 ECS · Ubuntu 22.04 · uvicorn 直连 9000 端口
+同时服务前端与 API · systemd 常驻 · 连共享 RDS）。部署实录见
+[docs/deploy-ecs.md](docs/deploy-ecs.md)，后续更新用 `scripts/deploy_to_ecs.ps1` 一键完成。
+
+升级路径（Nginx 反代 + 域名/HTTPS）的资产与手册已备好：
+[docs/deploy-runbook.md](docs/deploy-runbook.md)、[`deploy/`](deploy/)。
 
 ---
 

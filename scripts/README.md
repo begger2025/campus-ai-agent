@@ -63,6 +63,7 @@
 | 脚本 | 作用 |
 |------|------|
 | `collect_evidence.py` | 联网证据采集命令行入口 |
+| `deploy_to_ecs.ps1` | 公网一键更新：zip 上传 ECS → 保留远端 `.env` → 重启 → 健康检查（实录见 [docs/deploy-ecs.md](../docs/deploy-ecs.md)） |
 | `sync_opinion_core.py`（+`.bat`） | 核心/服务层反向移植到舆情评测子仓 |
 | `merge_compare.ps1` | 分支合并对比辅助 |
 

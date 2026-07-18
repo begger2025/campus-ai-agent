@@ -13,7 +13,8 @@
 | `field-spec.md` | 采集字段规范 |
 | `page-responsibilities.md` | 前端页面职责划分 |
 | `dev-guide.md` | 团队开发规范（分支/提交/命名/接口格式） |
-| `deploy-runbook.md` | 公网部署操作手册 |
+| `deploy-ecs.md` | **公网部署实录**（实际上线方案：ECS 直连，含踩坑记录） |
+| `deploy-runbook.md` | 公网部署操作手册（Nginx 反代升级路径） |
 | `crawl-runbook.md` | 多平台采集手册 |
 | `demo-guide.md` | 演示动线指引 |
 

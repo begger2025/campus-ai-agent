@@ -1,6 +1,9 @@
-# deploy — 公网部署资产
+# deploy — 公网部署资产（Nginx 方案）
 
-Aliyun ECS 上的生产部署三件套。完整流程（首次初始化、HTTPS、回滚）见
+本目录是 **Nginx 反代方案**的三件套（升级路径）。**当前实际线上部署走的是更简的
+ECS 直连方案**：uvicorn 直接监听 9000 同时服务前端与 API，无 Nginx——实录见
+[docs/deploy-ecs.md](../docs/deploy-ecs.md)，日常更新用 `scripts/deploy_to_ecs.ps1`。
+两方案的差异对照见交付物 06 §5.4。Nginx 方案完整流程（首次初始化、HTTPS、回滚）见
 [docs/deploy-runbook.md](../docs/deploy-runbook.md)。
 
 | 文件 | 作用 | 放到服务器哪里 |
