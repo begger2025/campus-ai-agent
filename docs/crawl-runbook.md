@@ -1,4 +1,4 @@
-# 四平台爬取操作手册（小红书 / 微博 / 知乎 / 快手）
+# 五平台爬取操作手册（小红书 / 微博 / 知乎 / 快手 / 贴吧）
 
 > 面向答辩与日常采集的手把手操作手册。命令以 **PowerShell**（用户默认终端）为准。
 > 全流程 = **① 爬取（MediaCrawler）→ ② 同步（sync）→ ③ 加工（process）→ ④ 面板查看**。
@@ -14,6 +14,7 @@
 | 微博 | **`wb`** | **`weibo`** |
 | 知乎 | `zhihu` | `zhihu` |
 | 快手 | `ks` | `ks` |
+| 贴吧 | `tieba` | `tieba` |
 
 > ⚠️ **最容易踩的坑**：微博在爬虫命令行里是 `wb`，但在同步/加工脚本里是 `weibo`。其余两个平台前后一致。
 
@@ -244,6 +245,8 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 | 微博采集到无关广告帖 | 蹭校名的 B 端营销 | 已由营销负面词表拦截大部分；纯「提及校名的无关帖」为已知技术权衡 |
 | 队列模式秒退「queue drained」 | 该平台队列没有 pending 任务 | 先 `seed_crawl_queue.py` 播种；或 `crawl_queue_status.py` 看是否都 done |
 | 任务卡在 claimed 不动 | 某成员机器中途崩了 | 等 30 分钟租约自动回收，或 `reset_crawl_queue.py --requeue-claimed` 手动打回 |
+| 贴吧开跑几秒被拦「会话已失效」 | Cookie 过期/不完整（pong 真实校验拦截） | 按 §10.1 重新复制完整 Cookie，优先补 `BDUSS`/`BDUSS_BFESS` |
+| 贴吧某词 0 条 | 三种病因，系统已自动判定 | 查 `crawler_run_history` 的 `stop_reason`：`exception`=风控/掉登录（换号或稍后重试）、`empty_page`=真没内容（正常）、`parser_mismatch`=贴吧改版了（找维护者修解析器，重试无用） |
 
 ---
 
@@ -326,5 +329,45 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 
 ---
 
-> 贴吧（tieba）暂不在本手册：其上游详情页解析器与百度当前 HTML 结构失配，采集能登录/搜索但入库为 0，
-> 已知待适配，答辩以三平台为准。
+## 10. 百度贴吧（tieba）— Cookie 登录 + 队列模式
+
+> 2026-07-19 起贴吧恢复可用：搜索解析已支持新版 `threadcardclass` 卡片，详情页解析加了防御
+> （缺节点不再崩），登录校验和"0 条结果"都会自动说明病因（见 §7 排障表末两行）。
+> 与其他四平台的差别：**登录不扫码，用 Cookie**（贴吧登录页 DOM 多变，二维码选择器实测靠不住）。
+
+### 10.1 获取 Cookie（每次 Cookie 过期后重做）
+
+1. 在 Chrome 中正常登录百度贴吧；
+2. 打开 `https://tieba.baidu.com/`；
+3. 按 `F12` 打开开发者工具；
+4. 进入 `Application` → `Storage` → `Cookies`；
+5. 依次查看 `tieba.baidu.com`、`www.baidu.com`、`passport.baidu.com` 三个域名下的 Cookie，
+   优先凑齐：`BDUSS`、`BDUSS_BFESS`、`STOKEN`、`STOKEN_BFESS`、`BAIDUID`。
+   **只有 `STOKEN` 时稳定性差**——缺 `BDUSS` 的过期号会在开跑时被登录校验直接拦下。
+
+Cookie 只存当前 PowerShell 会话变量，**不进代码、不进 git、不截图**：
+
+```powershell
+$tiebaCookie = "BDUSS=你的值; BDUSS_BFESS=你的值; STOKEN=你的值; STOKEN_BFESS=你的值; BAIDUID=你的值"
+$tiebaCookie.Contains("BDUSS=")   # 只验存在性，别打印完整值
+```
+
+### 10.2 开跑（先做 §1.2 关代理）
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main\MediaCrawler"
+# 队列模式（生产常规，词从队列认领；播种见 §9.1，平台码 tieba）
+.\.venv\Scripts\python.exe main.py --platform tieba --from-queue yes --worker 你的标识 `
+  --lt cookie --cookies $tiebaCookie --get_comment no --fresh yes --start_date 2026-06-27
+
+# 或临时手动关键词（小批验证用）
+.\.venv\Scripts\python.exe main.py --platform tieba --keywords "宿舍搬迁,食堂" `
+  --lt cookie --cookies $tiebaCookie --get_comment no --fresh yes --start_date 2026-06-27
+```
+
+- **`--get_comment no` 是刻意的**：评论要进详情页，详情页 DOM 多变且多跳转多风控；
+  搜索卡片已含标题/摘要/发布时间，够入库分析用；
+- 开跑几秒内如被拦「会话已失效」→ Cookie 过期，回 §10.1 重取（这是校验在替你省一整轮时间）；
+- 同步/加工平台码就是 `tieba`（无 wb/weibo 那种不一致坑），照 §5 跑即可；
+- 首次恢复使用建议先用 3 个词小批验证（同知乎首跑规矩），确认 `crawler_run_history`
+  里 `items_stored > 0` 再上正式轮次。
