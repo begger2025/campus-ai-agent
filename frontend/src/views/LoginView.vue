@@ -164,7 +164,7 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { gsap } from 'gsap'
 import { ElMessage } from 'element-plus'
@@ -192,12 +192,6 @@ const BRAND_FLOW = ['#9db8f0', '#e8f0ff', '#8dbaab', '#e8f0ff', '#9db8f0']
 const router = useRouter()
 const route = useRoute()
 
-// 演示账号仅用于快速填充表单，认证一律走后端 /api/auth/login。
-const DEMO_CREDENTIALS = {
-  user: { username: 'user', password: 'user123456' },
-  admin: { username: 'admin', password: 'admin123456' },
-}
-
 const titleChars = '校园公共舆情分析平台'.split('')
 
 /* ---- 入场编排：一条 master timeline 协调整页节奏 ---- */
@@ -222,8 +216,8 @@ onMounted(() => {
 onUnmounted(() => gsapCtx?.revert())
 
 const role = ref('user')
-const username = ref(DEMO_CREDENTIALS.user.username)
-const password = ref(DEMO_CREDENTIALS.user.password)
+const username = ref('')
+const password = ref('')
 const remember = ref(false)
 const loading = ref(false)
 
@@ -258,12 +252,6 @@ const features = [
     icon: Management,
   },
 ]
-
-watch(role, (nextRole) => {
-  const demo = DEMO_CREDENTIALS[nextRole] || DEMO_CREDENTIALS.user
-  username.value = demo.username
-  password.value = demo.password
-})
 
 async function handleLogin() {
   if (loading.value) return

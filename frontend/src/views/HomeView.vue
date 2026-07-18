@@ -109,7 +109,7 @@
               class="trend-chart"
               role="img"
               :aria-label="`近${trendDays}天每日发帖数量折线图`"
-              :style="{ minWidth: `${chartPoints.length * 22}px` }"
+              :style="{ minWidth: `${chartPoints.length * 16}px` }"
             >
               <svg class="trend-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                 <defs>
@@ -146,17 +146,69 @@
               </div>
             </div>
           </div>
+
+          <!-- 趋势速读：四个数字全部由已加载的 daily_trend 纯算术现算，零新请求。
+               「近7天较前7天」是真环比——发帖序列本身就是逐日历史数据，
+               窗口对比站得住（区别于此前删掉的、没有历史快照的事件风险假环比）。 -->
+          <div v-if="!trendLoading && trendSummary" class="trend-summary">
+            <div class="ts-cell">
+              <span class="ts-label">近{{ trendDays }}天发帖</span>
+              <span class="ts-value">{{ trendSummary.total }}</span>
+            </div>
+            <div class="ts-cell">
+              <span class="ts-label">日均</span>
+              <span class="ts-value">{{ trendSummary.avg }}</span>
+            </div>
+            <div class="ts-cell">
+              <span class="ts-label">峰值单日</span>
+              <span class="ts-value">
+                {{ trendSummary.peak.count }}
+                <em class="ts-sub">{{ trendSummary.peakDay }}</em>
+              </span>
+            </div>
+            <div class="ts-cell">
+              <span class="ts-label">近7天较前7天</span>
+              <span
+                v-if="trendSummary.delta === null"
+                class="ts-value ts-value--na"
+                title="前 7 天没有数据，环比无从谈起"
+              >—</span>
+              <span
+                v-else
+                :class="['ts-value', trendSummary.delta >= 0 ? 'ts-value--up' : 'ts-value--down']"
+              >
+                {{ trendSummary.delta >= 0 ? '+' : '' }}{{ trendSummary.delta }}%
+                <em class="ts-arrow">{{ trendSummary.delta >= 0 ? '↑' : '↓' }}</em>
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- 风险结构：已发布事件按风险分层（全部由已加载的事件现算，无造假环比） -->
+      <!-- 态势结构：事件看风险、帖子看情绪（双轴口径），外加来源平台。
+           三段全部来自真实聚合：风险由已加载事件现算，情绪/平台复用
+           /api/sentiment/stats（本页本来就在请求它，此前只用了趋势字段）。
+           依旧无造假环比——没有历史快照就不画箭头。 -->
       <div class="section-card">
         <div class="section-header">
-          <span class="section-title">风险结构</span>
-          <span class="section-hint">已发布事件按风险分层</span>
+          <span class="section-title">态势结构</span>
+          <span class="section-hint">事件看风险 · 帖子看情绪</span>
         </div>
         <div class="section-body risk-structure" v-loading="eventsLoading">
-          <div v-for="row in riskStructure" :key="row.key" class="risk-row">
+          <div class="struct-subhead struct-subhead--first">
+            <span class="struct-subtitle">风险分层</span>
+            <span class="struct-hint">已发布事件 · LLM 研判 + 人工审核</span>
+          </div>
+          <div
+            v-for="row in riskStructure"
+            :key="row.key"
+            class="risk-row"
+            role="link"
+            tabindex="0"
+            title="查看事件列表"
+            @click="$router.push('/events')"
+            @keydown.enter="$router.push('/events')"
+          >
             <span :class="['risk-dot', `risk-dot--${row.key}`]"></span>
             <span class="risk-name">{{ row.label }}</span>
             <span class="risk-track">
@@ -165,10 +217,52 @@
             <span class="risk-num">{{ row.count }}</span>
             <span class="risk-pct">{{ row.pct }}%</span>
           </div>
-          <p class="risk-total">
-            总计 <b>{{ publishedEvents.length }}</b> 个已发布事件 ·
-            风险等级由 LLM 研判、发布前经人工审核
-          </p>
+
+          <div class="struct-subhead">
+            <span class="struct-subtitle">帖子情绪</span>
+            <button class="struct-link" type="button" @click="$router.push('/sentiment')">
+              舆情分析 →
+            </button>
+          </div>
+          <div v-if="trendLoading" class="struct-skeleton" aria-label="加载中" />
+          <template v-else-if="sentimentRows.length">
+            <div
+              class="senti-bar"
+              role="img"
+              :aria-label="`采集帖子情绪分布：${sentimentRows.map((s) => `${s.label} ${s.count} 条`).join('、')}`"
+            >
+              <span
+                v-for="seg in sentimentRows"
+                :key="seg.key"
+                :class="['senti-seg', `senti-seg--${seg.key}`]"
+                :style="{ width: `${seg.pct}%` }"
+                :title="`${seg.label} ${seg.count} 条 · ${Math.round(seg.pct)}%`"
+              />
+            </div>
+            <div class="senti-legend">
+              <span v-for="seg in sentimentRows" :key="`lg-${seg.key}`" class="senti-item">
+                <i :class="['senti-dot', `senti-dot--${seg.key}`]" />
+                {{ seg.label }}
+                <b>{{ seg.count }}</b>
+                <em>{{ Math.round(seg.pct) }}%</em>
+              </span>
+            </div>
+          </template>
+
+          <div class="struct-subhead">
+            <span class="struct-subtitle">来源平台</span>
+            <span class="struct-hint">共 {{ statsTotal }} 条采集帖子</span>
+          </div>
+          <div v-if="trendLoading" class="struct-skeleton" aria-label="加载中" />
+          <template v-else>
+            <div v-for="row in platformRows" :key="row.key" class="plat-row">
+              <span class="plat-name">{{ row.label }}</span>
+              <span class="plat-track">
+                <span class="plat-fill" :style="{ width: `${row.width}%` }" />
+              </span>
+              <span class="plat-num">{{ row.count }}</span>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -282,22 +376,72 @@ onMounted(() => {
   loadPostTrend()
 })
 
-// ——— 发帖趋势（服务端按天聚合，复用舆情分析页的统计接口） ———
+// ——— 帖子层统计（服务端聚合，复用舆情分析页的统计接口）———
+// 一次请求四份数据：趋势画左卡，情绪/平台/总数填右侧「态势结构」卡——
+// 此前只用了 daily_trend，剩下三个字段白白扔掉，右卡下半截因此空着。
 const postTrend = ref([])
 const trendDays = ref(30)
 const trendLoading = ref(true)
+const statsTotal = ref(0)
+const sentimentCounts = ref(null)
+const platformCounts = ref([])
 
 async function loadPostTrend() {
   try {
     const stats = await fetchSentimentStats()
     postTrend.value = stats.daily_trend || []
     trendDays.value = stats.trend_days || 30
+    statsTotal.value = stats.total ?? 0
+    sentimentCounts.value = stats.sentiment || null
+    platformCounts.value = stats.platforms || []
   } catch {
     postTrend.value = []
   } finally {
     trendLoading.value = false
   }
 }
+
+// —— 帖子情绪：四档一个都不能少（controversial 是核心聚合的第四种取值，
+//    只认三种会把它们显示成空白——舆情分析页修过的同一课）。
+//    顺序即堆叠条的阅读顺序：好消息在前、坏消息在后。 ——
+const SENTIMENT_ROWS = [
+  { key: 'positive', label: '正面' },
+  { key: 'neutral', label: '中性' },
+  { key: 'negative', label: '负面' },
+  { key: 'controversial', label: '争议' },
+]
+
+const sentimentRows = computed(() => {
+  const counts = sentimentCounts.value || {}
+  const total = SENTIMENT_ROWS.reduce((sum, row) => sum + (counts[row.key] || 0), 0)
+  if (!total) return []
+  return SENTIMENT_ROWS.map((row) => ({
+    ...row,
+    count: counts[row.key] || 0,
+    pct: ((counts[row.key] || 0) / total) * 100,
+  }))
+})
+
+// —— 来源平台：前 4 名 + 「其他」归并（7 个平台全铺会把卡撑破）。
+//    条宽相对**榜首**而非总数：这是组内对比条，不是占比条。 ——
+const PLATFORM_LABELS = {
+  xhs: '小红书', weibo: '微博', tieba: '贴吧', zhihu: '知乎',
+  ks: '快手', web: '网页证据', campus: '校园投稿',
+}
+
+const platformRows = computed(() => {
+  const rows = platformCounts.value
+  if (!rows.length) return []
+  const top = rows.slice(0, 4).map((row) => ({
+    key: row.platform,
+    label: PLATFORM_LABELS[row.platform] || row.platform,
+    count: row.count,
+  }))
+  const restCount = rows.slice(4).reduce((sum, row) => sum + row.count, 0)
+  if (restCount) top.push({ key: 'other', label: '其他', count: restCount })
+  const max = Math.max(...top.map((row) => row.count), 1)
+  return top.map((row) => ({ ...row, width: (row.count / max) * 100 }))
+})
 
 // ——— 采集帖子总数（帖子列表已删——帖子层是舆情分析页的职责，这里只要计数） ———
 const postsTotal = ref(0)
@@ -482,6 +626,25 @@ const TREND_TOOLTIP =
   '每日新采集的帖子数（按帖子的发布时间聚合）。用帖子而不是事件做趋势：' +
   '已发布事件只有十几个、跨度大半年，任何一个短窗口里都最多一两个，画不出趋势。'
 
+// —— 趋势速读：总量/日均/峰值/近7天环比，全部从 daily_trend 现算 ——
+const trendSummary = computed(() => {
+  const rows = postTrend.value
+  if (!rows.length) return null
+  const total = rows.reduce((sum, row) => sum + row.count, 0)
+  let peak = rows[0]
+  for (const row of rows) if (row.count > peak.count) peak = row
+  const last7 = rows.slice(-7).reduce((sum, row) => sum + row.count, 0)
+  const prev7 = rows.slice(-14, -7).reduce((sum, row) => sum + row.count, 0)
+  return {
+    total,
+    avg: (total / rows.length).toFixed(1),
+    peak,
+    peakDay: peak.date.slice(5).replace('-', '/'),
+    // 前 7 天为 0 时不算百分比（除零无意义），模板显示 “—” 并说明原因
+    delta: prev7 > 0 ? Math.round(((last7 - prev7) / prev7) * 100) : null,
+  }
+})
+
 </script>
 
 <style scoped>
@@ -647,16 +810,37 @@ const TREND_TOOLTIP =
   padding: 14px 18px 16px;
 }
 
-/* 趋势卡与风险结构卡同行拉伸等高（网格默认 stretch），边框线齐平 */
+/* 趋势卡与风险结构卡同行拉伸等高（网格默认 stretch），边框线齐平。
+   图表高度不再写死：卡内改 flex 纵排，图表撑满剩余高度（min 210px 保底）——
+   右卡以后再长高，左边也不会出现整块空白。SVG 坐标系 0-100 归一化 +
+   preserveAspectRatio=none + non-scaling-stroke，任意拉伸不变形。 */
+.chart-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-card .section-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 /* —— 折线趋势图：SVG 归一化到 0-100，容器控制真实尺寸 —— */
 /* 横向滚动容器：窄屏时图表保持最小宽度（30 点 × 22px），滚动代替挤压。
    注意 overflow-x:auto 会强制纵向也进入裁剪（规范如此，无法 visible）——
    顶部 28px 内衬是峰值标注和悬停气泡的头寸，少了就会被切（用户实测截图） */
 .trend-scroll {
+  flex: 1;
+  min-height: 0;
+  /* 上限必须有：等高拉伸没封顶时，右卡多高图就被拽多高——360px 之后
+     折线的尖峰会被纵向放大成锯齿墙（用户实测截图），比例即信息 */
+  max-height: 414px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 28px 8px 26px 0;
+  /* 右衬 18px：末位日期标签的中心对着最后一个数据点，一半会探出图外，
+     衬不够就被滚动容器裁掉半个字（用户实测截图） */
+  padding: 28px 18px 26px 0;
 }
 
 .trend-scroll::-webkit-scrollbar { height: 6px; }
@@ -665,7 +849,8 @@ const TREND_TOOLTIP =
 
 .trend-chart {
   position: relative;
-  height: 210px;
+  height: 100%;
+  min-height: 210px;
 }
 
 /* 入场：clip-path 从左到右揭开（折线+面积一起"画"出来）。
@@ -826,6 +1011,78 @@ const TREND_TOOLTIP =
   to { background-position: -200% 0; }
 }
 
+/* —— 趋势速读：图下四格小指标（总量/日均/峰值/近7天环比），发丝分隔。
+   margin-top:auto 钉在卡底：图表封顶后卡若还有余量，空隙留在图与速读条
+   之间（呼吸空间），而不是速读条下面吊着一截空白 —— */
+.trend-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: auto;
+  padding-top: 13px;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.ts-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 16px;
+  animation: ts-rise 0.45s var(--ease-out) backwards;
+}
+
+.ts-cell:first-child { padding-left: 2px; }
+.ts-cell + .ts-cell { border-left: 1px solid var(--color-border-light); }
+.ts-cell:nth-child(2) { animation-delay: 70ms; }
+.ts-cell:nth-child(3) { animation-delay: 140ms; }
+.ts-cell:nth-child(4) { animation-delay: 210ms; }
+
+@keyframes ts-rise {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ts-cell { animation: none; }
+}
+
+.ts-label {
+  font-size: 12px;
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+
+.ts-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--color-ink-num);
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ts-sub {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+/* 环比：涨=琥珀（和峰值标注同色系，注意不是红绿——发帖多不是坏事也不是好事），
+   跌=灰；缺前值=灰 em 短横 */
+.ts-value--up { color: var(--color-data-accent-text); }
+.ts-value--down { color: var(--color-text-muted); }
+.ts-value--na { color: var(--color-text-faint); cursor: help; }
+
+.ts-arrow {
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 /* 数据表格 */
 .data-table {
   width: 100%;
@@ -867,11 +1124,20 @@ const TREND_TOOLTIP =
   grid-template-columns: 8px 52px 1fr 34px 42px;
   align-items: center;
   gap: 10px;
-  padding: 11px 0;
+  margin: 0 -8px;
+  padding: 8px;
   font-size: 13px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
-.risk-row + .risk-row { border-top: 1px dashed var(--color-border-light); }
+.risk-row:hover { background: var(--color-surface-2, #f5f7fa); }
+
+.risk-row:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
 
 .risk-dot { width: 8px; height: 8px; border-radius: 50%; }
 .risk-dot--high { background: var(--color-danger); }
@@ -895,8 +1161,9 @@ const TREND_TOOLTIP =
   animation: risk-grow 0.6s var(--ease-out) backwards;
 }
 
-.risk-row:nth-child(2) .risk-fill { animation-delay: 100ms; }
-.risk-row:nth-child(3) .risk-fill { animation-delay: 200ms; }
+/* 错峰入场：小节标题行插在行前后 nth-child 会错位，改用兄弟链定位 */
+.risk-row + .risk-row .risk-fill { animation-delay: 100ms; }
+.risk-row + .risk-row + .risk-row .risk-fill { animation-delay: 200ms; }
 
 @keyframes risk-grow {
   from { transform: scaleX(0); }
@@ -923,14 +1190,174 @@ const TREND_TOOLTIP =
   font-family: var(--font-numeric);
 }
 
-.risk-total {
-  margin: 12px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--color-text-muted);
+/* —— 态势结构：小节标题行（分隔线 + 左标题右注脚/链接）—— */
+.struct-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0 8px;
+  padding-top: 11px;
+  border-top: 1px solid var(--color-border-light);
 }
 
-.risk-total b { color: var(--color-text-secondary); font-family: var(--font-numeric); }
+.struct-subhead--first {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.struct-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-secondary);
+}
+
+.struct-hint {
+  font-size: 12px;
+  color: var(--color-text-faint);
+  white-space: nowrap;
+}
+
+.struct-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--brand-600);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.struct-link:hover { color: var(--brand-700); }
+
+/* —— 帖子情绪：单条分段堆叠条（段间 2px 发丝缝）+ 四档图例 ——
+   入场与左侧趋势图同语言：clip-path 左→右揭开 */
+.senti-bar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  animation: senti-reveal 0.7s var(--ease-out) 0.15s backwards;
+}
+
+@keyframes senti-reveal {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0); }
+}
+
+.senti-seg {
+  height: 100%;
+  min-width: 3px; /* 占比极小的档位也得看得见一丝 */
+}
+
+/* 情绪配色与舆情分析页同源（badge/dist-fill 一套色） */
+.senti-seg--positive, .senti-dot--positive { background: #4caf7d; }
+.senti-seg--neutral, .senti-dot--neutral { background: #9aa2b1; }
+.senti-seg--negative, .senti-dot--negative { background: #e15b64; }
+.senti-seg--controversial, .senti-dot--controversial { background: #e0a63c; }
+
+/* 图例改单行四项（放不下时自动换行）：2×2 网格纵向太费，右卡要收身高 */
+.senti-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 5px 12px;
+  margin-top: 9px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.senti-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.senti-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.senti-item b {
+  font-weight: 600;
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.senti-item em {
+  font-style: normal;
+  font-family: var(--font-numeric);
+  color: var(--color-text-faint);
+}
+
+/* —— 来源平台：名称 + 组内对比条 + 计数（条宽相对榜首）—— */
+.plat-row {
+  display: grid;
+  grid-template-columns: 56px 1fr 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.plat-name {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plat-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-surface-2, #f0f2f5);
+  overflow: hidden;
+}
+
+.plat-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--brand-300, #9db3ee), var(--brand-500));
+  transform-origin: left;
+  animation: risk-grow 0.6s var(--ease-out) backwards;
+}
+
+.plat-row + .plat-row .plat-fill { animation-delay: 80ms; }
+.plat-row + .plat-row + .plat-row .plat-fill { animation-delay: 160ms; }
+.plat-row + .plat-row + .plat-row + .plat-row .plat-fill { animation-delay: 240ms; }
+
+.plat-num {
+  text-align: right;
+  font-weight: 600;
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+/* 情绪/平台段加载骨架（复用本文件的 stat-shimmer 关键帧） */
+.struct-skeleton {
+  height: 34px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eef1f7 25%, #f6f8fb 50%, #eef1f7 75%);
+  background-size: 200% 100%;
+  animation: stat-shimmer 1.4s ease-in-out infinite;
+}
+
+/* reduced-motion 覆盖必须写在被覆盖规则之后（同优先级按源码顺序取胜） */
+@media (prefers-reduced-motion: reduce) {
+  .senti-bar,
+  .plat-fill { animation: none; }
+}
 
 /* —— 需要关注表格 —— */
 .span-3 {
