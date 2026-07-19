@@ -29,11 +29,16 @@ WEIBO_SPECIFIED_ID_LIST = [
     # ........................
 ]
 
-# Specify Weibo user ID list
+# 订阅源清单（P0 订阅式爬取）：`--type creator` 时增量盯梢这些账号
+# （追平停止 + 页上限，见 media_platform/weibo/core.subscribe_creators）。
+# 取 uid 的方法：手机网页版打开账号主页，URL m.weibo.cn/u/<数字> 里那串数字。
+# 中山大学官微的 uid 需实际打开主页确认后填入（占位样例是上游遗留，勿当真）。
 WEIBO_CREATOR_ID_LIST = [
-    "5756404150",
-    # ........................
+    # "中山大学官微的uid填这里",
 ]
+
+# 订阅每源每轮翻页上限（首轮冷启动的刹车；之后每轮靠"整页无新帖=追平"提前停）
+WEIBO_SUB_MAX_PAGES = 10
 
 # Whether to enable the function of crawling the full text of Weibo. It is enabled by default.
 # If turned on, it will increase the probability of being risk controlled, which is equivalent to a keyword search request that will traverse all posts and request the post details again.

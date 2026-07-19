@@ -371,3 +371,41 @@ cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-mai
 - 同步/加工平台码就是 `tieba`（无 wb/weibo 那种不一致坑），照 §5 跑即可；
 - 首次恢复使用建议先用 3 个词小批验证（同知乎首跑规矩），确认 `crawler_run_history`
   里 `items_stored > 0` 再上正式轮次。
+
+---
+
+## 11. 订阅式爬取（P0）— 盯官方账号与贴吧吧的"眼睛"
+
+> 与关键词搜索互补的第三条信息通道：关键词捞**学生在议论什么**，证据采集核验**官网
+> 说了什么**，订阅盯**官方账号在发声什么**。增量语义：每轮只抓"上次之后的新帖"——
+> 整页无新帖即判"追平"停止；首轮冷启动靠页上限兜底（中山大学吧存量 345 万帖，绝不全吞）。
+
+### 11.1 订阅源配置
+
+| 平台 | 配置项（config/ 下） | 已配值 |
+|------|---------------------|--------|
+| 贴吧 | `tieba_config.TIEBA_NAME_LIST` | `["中山大学"]`（中山大学吧） |
+| 微博 | `weibo_config.WEIBO_CREATOR_ID_LIST` | **待填 uid**：手机网页版打开官微主页，URL `m.weibo.cn/u/<数字>` 里那串数字 |
+
+翻页上限 `TIEBA_SUB_MAX_PAGES` / `WEIBO_SUB_MAX_PAGES`（默认 10，日常轮次靠追平早停，通常 1~2 页收工）。
+
+### 11.2 运行命令（先做 §1.2 关代理）
+
+```powershell
+cd "D:\桌面文件\软件工程大作业\campus-ai-agent_v3\campus-ai-agent-main\MediaCrawler"
+# 贴吧吧订阅（Cookie 登录，列表页直存不进详情页）
+.\.venv\Scripts\python.exe main.py --platform tieba --type creator --lt cookie --cookies $tiebaCookie
+# 微博官微订阅（扫码登录；需先配好 uid）
+.\.venv\Scripts\python.exe main.py --platform wb --type creator
+```
+
+跑完照 §5 sync + process 正常入库。`crawler_run_history` 里订阅行的 `source_keyword`
+带 `sub:` 前缀（如 `sub:中山大学吧`），`empty_page`=已追平（正常收工）、`completed`=
+首轮到页上限、`exception`=该源故障（单源失败不拖垮其余源）。
+
+### 11.3 注意
+
+- 订阅**不进关键词队列**（源固定且少，单机一条命令，无需多机分工）；
+- 贴吧订阅保留营销过滤、**不做主题过滤**（吧本身即主题，吧内帖不复读校名）；
+- 微博订阅 P0 不抓评论（官微评论量大且非"官方声音"本体）；
+- 建议节奏：每轮关键词爬取 SOP 顺带跑一次订阅（分钟级）。

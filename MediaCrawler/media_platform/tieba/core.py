@@ -50,6 +50,7 @@ from tools.run_history import (
     STOP_WINDOW_EXHAUSTED,
     RunState,
 )
+from tools.subscription import STOP_CAUGHT_UP, split_new_ids, subscription_should_stop
 
 from .exception import TiebaSearchParserMismatchError
 from tools.topic_scope import compose_topic_keyword, is_broad_keyword, is_marketing_noise, matches_topic
@@ -152,13 +153,19 @@ class TieBaCrawler(AbstractCrawler):
                     await run_keyword_queue(self)
                 else:
                     await self.search()
-                await self.get_specified_tieba_notes()
+                # 上游此处还会调 get_specified_tieba_notes()（按 TIEBA_NAME_LIST 走详情页
+                # 全吧爬取）。该联动已切断：TIEBA_NAME_LIST 现在是订阅源清单（creator 型），
+                # 若保留，配好订阅源后每次关键词搜索都会隐式触发详情页大爬——两条路径必须解耦。
             elif config.CRAWLER_TYPE == "detail":
                 # Get the information and comments of the specified post
                 await self.get_specified_notes()
             elif config.CRAWLER_TYPE == "creator":
-                # Get creator's information and their notes and comments
-                await self.get_creators_and_notes()
+                # 订阅式（生产路径）：TIEBA_NAME_LIST 按吧增量盯梢（列表页直存）。
+                # 上游的个人主页爬取保留在 get_creators_and_notes（TIEBA_CREATOR_URL_LIST）。
+                if config.TIEBA_NAME_LIST:
+                    await self.subscribe_tieba_boards()
+                else:
+                    await self.get_creators_and_notes()
             else:
                 pass
 
@@ -398,6 +405,97 @@ class TieBaCrawler(AbstractCrawler):
                 continue
             stored_count += 1
         return stored_count
+
+    async def subscribe_tieba_boards(self) -> None:
+        """订阅式：按吧增量盯梢（生产路径，P0）。
+
+        与上游 get_specified_tieba_notes 的区别：
+        - **列表页直存，不进详情页**——详情页是贴吧最脆弱的路径（DOM 多变、多跳转
+          多风控），列表卡片的标题/摘要/时间足够入库分析（与搜索路径同一取舍）；
+        - **增量刹车**：逐页对照已入库集合，整页无新帖 = 已追平立即停；首轮冷启动
+          靠 TIEBA_SUB_MAX_PAGES 页上限兜底（中山大学吧存量 345 万帖，绝不全吞）；
+        - **营销过滤保留、主题过滤不做**——吧本身即主题，吧内帖不会都复读校名；
+        - **run_history 遥测**：source_keyword 记 `sub:吧名吧`，单源失败不拖垮其余源。
+        """
+
+        page_size = 50  # 贴吧列表页 pn 步长
+        page_cap = max(int(getattr(config, "TIEBA_SUB_MAX_PAGES", 10)), 1)
+        negative_filter_enabled = getattr(config, "ENABLE_TOPIC_NEGATIVE_FILTER", False)
+        for tieba_name in config.TIEBA_NAME_LIST:
+            source_label = f"sub:{tieba_name}吧"
+            source_keyword_var.set(source_label)
+            run_state = RunState(
+                platform="tieba",
+                source_keyword=source_label,
+                started_at=int(utils.get_current_timestamp()),
+            )
+            try:
+                page_num = 0
+                while True:
+                    note_list: List[TiebaNote] = await self.tieba_client.get_notes_by_tieba_name(
+                        tieba_name=tieba_name, page_num=page_num
+                    )
+                    run_state.add_page()
+                    run_state.add_seen(len(note_list or []))
+                    if not note_list:
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
+                        break
+
+                    kept = [
+                        note for note in note_list
+                        if not (
+                            negative_filter_enabled
+                            and is_marketing_noise(
+                                [note.title, note.desc, note.tieba_name],
+                                getattr(config, "TOPIC_NEGATIVE_TERMS", []),
+                                getattr(config, "TOPIC_NEGATIVE_RESCUE_TERMS", []),
+                            )
+                        )
+                    ]
+                    page_ids = [str(note.note_id or "").strip() for note in kept]
+                    existing = await tieba_store.batch_get_existing_note_ids(page_ids)
+                    new_ids = set(split_new_ids(page_ids, existing))
+                    stored_this_page = 0
+                    for note in kept:
+                        note_id = str(note.note_id or "").strip()
+                        if note_id not in new_ids:
+                            continue
+                        if not note.tieba_name:
+                            note.tieba_name = tieba_name
+                        await tieba_store.update_tieba_note(note)
+                        stored_this_page += 1
+                    run_state.add_stored(stored_this_page)
+                    if stored_this_page:
+                        utils.logger.info(
+                            f"[TieBaCrawler.subscribe_tieba_boards] {source_label} "
+                            f"第 {run_state.pages_fetched} 页新增 {stored_this_page} 条"
+                        )
+
+                    stop, reason = subscription_should_stop(
+                        stored_this_page, run_state.pages_fetched, page_cap
+                    )
+                    if stop:
+                        if reason == STOP_CAUGHT_UP:
+                            run_state.mark_stop(STOP_EMPTY_PAGE)  # 已追平：订阅的正常收工
+                        # page_cap 不标记 → finish 落 completed（首轮冷启动到上限）
+                        utils.logger.info(
+                            f"[TieBaCrawler.subscribe_tieba_boards] {source_label} 停止：{reason}"
+                        )
+                        break
+                    await utils.random_crawl_sleep()
+                    page_num += page_size
+            except asyncio.CancelledError:
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
+            except Exception as ex:
+                # 订阅源相互独立：单源失败记异常行后继续下一个源
+                run_state.mark_stop(STOP_EXCEPTION)
+                utils.logger.error(
+                    f"[TieBaCrawler.subscribe_tieba_boards] {source_label} 失败：{ex}"
+                )
+            finally:
+                run_state.finish(int(utils.get_current_timestamp()))
+                await run_history_store.save_crawler_run_history(run_state.as_row())
 
     async def get_specified_tieba_notes(self):
         """

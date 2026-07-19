@@ -46,6 +46,7 @@ from tools.cdp_browser import CDPBrowserManager
 from tools.crawl_quota import should_fetch_next_page
 from tools.publish_time_window import is_within_window, parse_window
 from tools.run_history import STOP_EMPTY_PAGE, STOP_EXCEPTION, STOP_QUOTA_REACHED, STOP_WINDOW_EXHAUSTED, RunState
+from tools.subscription import STOP_CAUGHT_UP, split_new_ids, subscription_should_stop
 from tools.topic_scope import compose_topic_keyword, is_broad_keyword, is_marketing_noise, matches_topic
 from var import crawler_type_var, source_keyword_var
 
@@ -137,8 +138,9 @@ class WeiboCrawler(AbstractCrawler):
                 # Get the information and comments of the specified post
                 await self.get_specified_notes()
             elif config.CRAWLER_TYPE == "creator":
-                # Get creator's information and their notes and comments
-                await self.get_creators_and_notes()
+                # 订阅式（生产路径）：增量盯梢 WEIBO_CREATOR_ID_LIST 里的官方账号。
+                # 上游的全量拉取版保留在 get_creators_and_notes（无刹车，勿在生产用）。
+                await self.subscribe_creators()
             else:
                 pass
             utils.logger.info("[WeiboCrawler.start] Weibo Crawler finished ...")
@@ -452,6 +454,102 @@ class WeiboCrawler(AbstractCrawler):
             if content != None:
                 extension_file_name = url.split(".")[-1]
                 await weibo_store.update_weibo_note_image(pid, content, extension_file_name)
+
+    async def subscribe_creators(self) -> None:
+        """订阅式：官方账号增量盯梢（生产路径，P0）。
+
+        与上游 get_creators_and_notes（全量拉取、无刹车、无遥测）的区别：
+        - **增量刹车**：逐页对照已入库集合，整页无新帖 = 已追平上次进度立即停；
+          首轮冷启动靠 WEIBO_SUB_MAX_PAGES 页上限兜底（官微历史几千条，不全吞）；
+        - **run_history 遥测**：每个订阅源一轮一行，source_keyword 记 `sub:账号名`，
+          与关键词搜索共用同一张表和同一套"查历史知病因"的运维体验；
+        - **单源隔离**：一个源失败不拖垮其余源（订阅源相互独立）；
+        - 不抓评论（P0 刻意收窄：官微评论量大且非"官方声音"本体）。
+        """
+
+        page_cap = max(int(getattr(config, "WEIBO_SUB_MAX_PAGES", 10)), 1)
+        for user_id in config.WEIBO_CREATOR_ID_LIST:
+            source_label = f"sub:{user_id}"
+            run_state = RunState(
+                platform="wb",
+                source_keyword=source_label,
+                started_at=int(utils.get_current_timestamp()),
+            )
+            try:
+                creator_res: Dict = await self.wb_client.get_creator_info_by_id(creator_id=user_id)
+                creator_info: Dict = (creator_res or {}).get("userInfo", {})
+                if creator_info:
+                    screen_name = str(creator_info.get("screen_name") or "").strip()
+                    if screen_name:
+                        # 历史行按账号名可读检索；uid 仍在日志里可查
+                        run_state.source_keyword = f"sub:{screen_name}"
+                    await weibo_store.save_creator(user_id, user_info=creator_info)
+                source_keyword_var.set(run_state.source_keyword)
+
+                since_id = ""
+                while True:
+                    notes_res = await self.wb_client.get_notes_by_creator(
+                        user_id, f"107603{user_id}", since_id
+                    )
+                    if not notes_res:
+                        utils.logger.warning(
+                            f"[WeiboCrawler.subscribe_creators] empty response for {run_state.source_keyword}"
+                        )
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
+                        break
+                    run_state.add_page()
+                    since_id = str(notes_res.get("cardlistInfo", {}).get("since_id", "") or "")
+                    cards = [
+                        card for card in notes_res.get("cards", [])
+                        if card.get("card_type") == 9 and card.get("mblog", {}).get("id")
+                    ]
+                    run_state.add_seen(len(cards))
+                    if not cards:
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
+                        break
+
+                    page_ids = [str(card["mblog"]["id"]) for card in cards]
+                    existing = await weibo_store.batch_get_existing_note_ids(page_ids)
+                    new_ids = set(split_new_ids(page_ids, existing))
+                    new_cards = [c for c in cards if str(c["mblog"]["id"]) in new_ids]
+                    if new_cards:
+                        # 长微博补全文再入库（与上游 creator 流同款处理）
+                        updated = await self.batch_get_notes_full_text(new_cards)
+                        await weibo_store.batch_update_weibo_notes(updated)
+                        run_state.add_stored(len(new_cards))
+                        utils.logger.info(
+                            f"[WeiboCrawler.subscribe_creators] {run_state.source_keyword} "
+                            f"第 {run_state.pages_fetched} 页新增 {len(new_cards)} 条"
+                        )
+
+                    stop, reason = subscription_should_stop(
+                        len(new_cards), run_state.pages_fetched, page_cap
+                    )
+                    if stop:
+                        if reason == STOP_CAUGHT_UP:
+                            # 已追平上次进度：订阅语义下的正常收工
+                            run_state.mark_stop(STOP_EMPTY_PAGE)
+                        # page_cap 不标记 → finish 落 completed（首轮冷启动到上限）
+                        utils.logger.info(
+                            f"[WeiboCrawler.subscribe_creators] {run_state.source_keyword} 停止：{reason}"
+                        )
+                        break
+                    if not since_id or since_id == "0":
+                        run_state.mark_stop(STOP_EMPTY_PAGE)
+                        break
+                    await utils.random_crawl_sleep()
+            except asyncio.CancelledError:
+                run_state.mark_stop(STOP_EXCEPTION)
+                raise
+            except Exception as ex:
+                # 订阅源相互独立：单源失败记异常行后继续下一个源
+                run_state.mark_stop(STOP_EXCEPTION)
+                utils.logger.error(
+                    f"[WeiboCrawler.subscribe_creators] {run_state.source_keyword} 失败：{ex}"
+                )
+            finally:
+                run_state.finish(int(utils.get_current_timestamp()))
+                await run_history_store.save_crawler_run_history(run_state.as_row())
 
     async def get_creators_and_notes(self) -> None:
         """

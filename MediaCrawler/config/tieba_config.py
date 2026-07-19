@@ -22,10 +22,16 @@
 # Specify Tieba ID list
 TIEBA_SPECIFIED_ID_LIST = []
 
-# Specify a list of Tieba names
+# 订阅源清单（P0 订阅式爬取）：`--type creator` 时按吧增量盯梢这些吧
+# （列表页直存 + 追平停止 + 页上限，见 media_platform/tieba/core.subscribe_tieba_boards）。
+# ⚠️ 关键词搜索（--type search）不再联动此清单（上游的隐式详情页大爬已切断）。
 TIEBA_NAME_LIST = [
-    # "Tomb Robbery Notes"
+    "中山大学",
 ]
+
+# 订阅每源每轮翻页上限（首轮冷启动的刹车——中山大学吧存量 345 万帖，绝不全吞；
+# 之后每轮靠"整页无新帖=追平"提前停，通常 1~2 页收工）
+TIEBA_SUB_MAX_PAGES = 10
 
 # Specify Tieba user URL list
 TIEBA_CREATOR_URL_LIST = [
