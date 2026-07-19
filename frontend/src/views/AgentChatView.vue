@@ -248,10 +248,12 @@ function startNewConversation() {
   pendingReset.value = true
 }
 
+// 示例问题锚定当前已发布的旗舰事件（论文争议 / 取消录取，均实测高质量命中）。
+// 注意：若事件重新生成导致这些事件下线，需同步更新，否则点击会答"无相关数据"。
 const sampleQuestions = [
   { text: '最近有什么热点？', icon: TrendCharts },
-  { text: '食堂有什么风险吗？', icon: Warning },
-  { text: '对比一下食堂和宿舍哪个风险更高？', icon: DataAnalysis },
+  { text: '论文造假有什么风险？', icon: Warning },
+  { text: '对比一下论文造假和录取取消哪个风险更高？', icon: DataAnalysis },
   { text: '给我一份校园舆情简报', icon: Document },
 ]
 
