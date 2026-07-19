@@ -19,8 +19,10 @@
         </div>
       </div>
       <div class="welcome-meta">
-        <!-- 语料不是实时的：明确标注数据口径（最近数据日），首页早该有这个 -->
-        <span v-if="!eventsLoading && !eventsError" class="asof-tag">数据截至 {{ latestDayLabel }}</span>
+        <!-- 语料不是实时的：明确标注数据口径（最近数据日）。写明"事件数据"——
+             事件要过人工审核门，会晚于帖子层（趋势图标注"帖子数据截至"），
+             两个日期并存不是矛盾（用户实测追问过一次） -->
+        <span v-if="!eventsLoading && !eventsError" class="asof-tag">事件数据截至 {{ latestDayLabel }}</span>
         <span v-if="eventsLoading" class="calm-flag calm-flag--pending">
           <el-icon :size="14" class="is-loading"><Loading /></el-icon>
           数据加载中…
@@ -94,7 +96,7 @@
             </el-tooltip>
           </span>
           <span v-if="!trendLoading && trendEnd" class="section-hint">
-            截至 {{ trendEnd }} · 最近数据日
+            帖子数据截至 {{ trendEnd }} · 最近数据日
           </span>
         </div>
         <div class="section-body">
