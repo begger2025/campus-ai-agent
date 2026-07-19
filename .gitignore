@@ -56,3 +56,5 @@ data/backup_offtopic_posts.json
 /data/campus_db_preview.md
 /data/samples/
 /data/*.npz
+.env.bak*
+.env.*.bak

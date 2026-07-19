@@ -102,7 +102,7 @@ apt install -y python3.12 python3.12-venv python3.12-dev
 | Node.js | **20.x** |
 | npm | 随 Node 20 安装 |
 
-**未安装** `sentence-transformers` / `torch`（`requirements.txt` 中为注释项，未额外 pip 安装）——即轻量档部署，语义补召回自动降级为字面搜索。
+**初期未安装** `sentence-transformers` / `torch`（轻量档，语义补召回降级为字面搜索）；**后经服务器扩容装齐**，语义检索已启用并实测通过（"东校"≈"东校区"、"饭堂"≈"食堂"模糊问法均能命中），线上与本地能力一致。
 
 ---
 
