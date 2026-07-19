@@ -37,7 +37,12 @@ import re
 from .clustering import build_event_from_group, note_rank_key, sort_events
 from .concurrency import DEFAULT_LLM_CONCURRENCY
 from .llm_merge import MergePairJudge, merge_adjudicated_clusters
-from .llm_refine import DEFAULT_REFINE_MIN_SIZE, ClusterRefiner, refine_clusters
+from .llm_refine import (
+    DEFAULT_REFINE_MAX_MEMBERS,
+    DEFAULT_REFINE_MIN_SIZE,
+    ClusterRefiner,
+    refine_clusters,
+)
 from .recency import note_time
 from .schemas import MemorySnapshot, OpinionEvent, OpinionNote
 
@@ -127,6 +132,7 @@ def cluster_notes_semantic(
     min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
     refiner: ClusterRefiner | None = None,
     refine_min_size: int = DEFAULT_REFINE_MIN_SIZE,
+    refine_max_members: int = DEFAULT_REFINE_MAX_MEMBERS,
     refine_concurrency: int | None = DEFAULT_LLM_CONCURRENCY,
     max_span_days: float = DEFAULT_MAX_SPAN_DAYS,
     merge_judge: MergePairJudge | None = None,
@@ -152,6 +158,9 @@ def cluster_notes_semantic(
         refiner,
         make_cluster=_make_cluster,
         min_size=refine_min_size,
+        # 上限可由部署侧放宽（EVENT_REFINE_MAX_MEMBERS）：第 6 轮微博 224 条入库后聚出
+        # 182 帖巨簇，默认 150 封顶导致精修被跳过——巨桶病最需要精修的时候恰好被上限挡住。
+        max_members=refine_max_members,
         warnings=refine_warnings,
         concurrency=refine_concurrency,
         # 精修的**跨父簇同名合并**是时间约束的最后一个洞：贪心和质心合并都在父簇层面守住了

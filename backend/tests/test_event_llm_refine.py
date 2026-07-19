@@ -509,6 +509,25 @@ class ServiceWiringTest(unittest.TestCase):
         self.assertEqual(len(result.events), 1)
         self.assertEqual(result.run_log.extra["clustering_mode"], "semantic")
 
+    def test_refine_max_members_threads_through_to_the_core(self) -> None:
+        """上限全链路透传：巨桶最需要精修，不该被写死的默认上限一票否决。
+
+        第 6 轮微博 224 条入库后聚出 182 帖巨簇，默认 max_members=150 让精修被跳过
+        （巨桶病复发）——部署侧必须能经 EVENT_REFINE_MAX_MEMBERS 放宽。
+        """
+
+        # 上限收紧到 5：8 帖的簇不送 LLM，refiner 一次都不该被调用，且大声留痕。
+        recorder = Recorder(response=[])
+        result = self.analyze(cluster_refiner=recorder, refine_max_members=5)
+        self.assertEqual(recorder.calls, [])
+        self.assertEqual(len(result.events), 1)
+        self.assertTrue(any("max_members=5" in w for w in result.warnings))
+
+        # 上限放宽到恰好容纳：同一个簇被正常精修拆开。
+        result = self.analyze(cluster_refiner=topics_by_prefix, refine_max_members=8)
+        self.assertEqual(len(result.events), 3)
+        self.assertEqual(result.run_log.extra["refined_clusters"], 1)
+
     def test_refiner_is_reported_in_the_run_log(self) -> None:
         result = self.analyze(cluster_refiner=topics_by_prefix)
         self.assertEqual(len(result.events), 3)

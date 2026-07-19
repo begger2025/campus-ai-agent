@@ -60,6 +60,9 @@ class PublicOpinionAgentService:
         min_cluster_size: int | None = None,
         cluster_refiner: ClusterRefiner | None = None,
         refine_min_size: int | None = None,
+        # 精修簇大小上限：None = 核心默认 150。部署侧经 EVENT_REFINE_MAX_MEMBERS 放宽
+        # （巨桶最需要精修，却最容易撞上限被跳过——182 帖微博巨簇实测）。
+        refine_max_members: int | None = None,
         # 近重簇合并裁决（llm_merge）：None = 只拆不合的老行为。
         merge_judge: Any | None = None,
         risk_assessor: RiskAssessor | None = None,
@@ -127,6 +130,7 @@ class PublicOpinionAgentService:
                 refine_min_size,
                 llm_concurrency,
                 merge_judge,
+                refine_max_members=refine_max_members,
             )
             if semantic is not None:
                 events, centroids, suppressed_clusters, refined_clusters, ejected_notes = semantic
@@ -332,6 +336,7 @@ class PublicOpinionAgentService:
         refine_min_size: int | None = None,
         llm_concurrency: int | None = None,
         merge_judge: Any | None = None,
+        refine_max_members: int | None = None,
     ) -> tuple[list, dict[str, list[float]], int, int, int] | None:
         """Run semantic clustering if an embedder is supplied; None means fall back to rules."""
 
@@ -363,6 +368,8 @@ class PublicOpinionAgentService:
                 kwargs["max_span_days"] = max_span_days
             if refine_min_size is not None:
                 kwargs["refine_min_size"] = refine_min_size
+            if refine_max_members is not None:
+                kwargs["refine_max_members"] = refine_max_members
             result = cluster_notes_semantic(notes, [list(vector) for vector in vectors], **kwargs)
         except Exception as exc:
             warnings.append(f"semantic clustering unavailable, fell back to rules: {type(exc).__name__}: {exc}")

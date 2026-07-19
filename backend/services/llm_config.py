@@ -17,7 +17,10 @@ from backend.agent.public_opinion_core.llm_keywords import (
     DEFAULT_MAX_KEYWORDS_PER_EVENT,
     DEFAULT_TOP_EVENTS,
 )
-from backend.agent.public_opinion_core.llm_refine import DEFAULT_REFINE_MIN_SIZE
+from backend.agent.public_opinion_core.llm_refine import (
+    DEFAULT_REFINE_MAX_MEMBERS,
+    DEFAULT_REFINE_MIN_SIZE,
+)
 from backend.agent.public_opinion_core.llm_risk import DEFAULT_MAX_TEXTS as DEFAULT_RISK_MAX_TEXTS
 from backend.agent.public_opinion_core.semantic_clustering import (
     DEFAULT_MAX_SPAN_DAYS,
@@ -204,6 +207,14 @@ EVENT_REFINE_ENABLED = _read_bool("EVENT_REFINE_ENABLED", True)
 
 # 多大的簇才值得一次 LLM 调用。默认 8，理由（真实簇大小分布 + 拆分的算术下界）见 llm_refine.py。
 EVENT_REFINE_MIN_SIZE = max(_read_int("EVENT_REFINE_MIN_SIZE", DEFAULT_REFINE_MIN_SIZE), 2)
+
+# 多大的簇就不再送精修（防超长 prompt）。默认 150；巨桶最需要精修却最容易撞上限——
+# 第 6 轮微博入库后 182 帖巨簇被跳过（实测），部署侧按语料规模放宽。下限钳在 MIN_SIZE，
+# 倒挂配置（max < min）没有意义。
+EVENT_REFINE_MAX_MEMBERS = max(
+    _read_int("EVENT_REFINE_MAX_MEMBERS", DEFAULT_REFINE_MAX_MEMBERS),
+    EVENT_REFINE_MIN_SIZE,
+)
 
 # 近重簇合并裁决（灰区相似度的簇对交 LLM 判"是不是同一件事"，见 core/llm_merge.py）。
 # 关掉即回到"只拆不合"的老行为；候选筛选（灰区/时间兼容/对数封顶）与失败方向在核心包。

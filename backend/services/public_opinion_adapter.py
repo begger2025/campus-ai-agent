@@ -37,6 +37,7 @@ from backend.services.llm_config import (
     EVENT_LLM_CONCURRENCY,
     EVENT_MAX_SPAN_DAYS,
     EVENT_MIN_CLUSTER_SIZE,
+    EVENT_REFINE_MAX_MEMBERS,
     EVENT_REFINE_MIN_SIZE,
     EVENT_RISK_MAX_TEXTS,
 )
@@ -595,6 +596,9 @@ def run_public_opinion_analysis(
         # 未配 key / 关闭 / 调用失败时返回 None 或自动降级，事件照出，只是回到纯 embedding 结果。
         cluster_refiner=get_cluster_refiner() if use_llm else None,
         refine_min_size=EVENT_REFINE_MIN_SIZE,
+        # 精修簇上限（默认 150）：巨桶最需要精修却最容易撞上限被跳过（182 帖微博巨簇实测），
+        # 部署侧按语料规模经 EVENT_REFINE_MAX_MEMBERS 放宽。
+        refine_max_members=EVENT_REFINE_MAX_MEMBERS,
         # LLM 近重簇合并裁决：embedding 的合并阈值 0.86 之下有一片灰区（0.85 实测塌方，
         # 调阈值治不了）——「中大招生与报考」和「中大报考与名校宣传」这类真·近重对落在
         # 这里。灰区 + 时间兼容的簇对交 LLM 判「是不是同一件事」，拿不准保持拆分
